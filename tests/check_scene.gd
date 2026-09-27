@@ -100,7 +100,7 @@ func _initial_checks() -> void:
 	if ready_btn != null:
 		ready_btn.pressed.emit()
 		if title_ov != null:
-			check(title_ov.visible, "turn title shown after Готов(-а)")
+			check(not title_ov.visible, "turn title not shown for human after Готов(-а)")
 		ready_time = Time.get_ticks_msec()
 
 func _after_title_checks() -> void:

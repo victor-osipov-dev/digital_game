@@ -1,5 +1,14 @@
 extends Control
 
+const SLOT_HOVER_DELAY_MS := 400
+const SLOT_HOVER_MOVE_PX := 6.0
+const SLOT_HOVER_EDGE := 10.0
+const SLOT_GRACE_MS := 1500
+const HINT_MIN_H := 100.0
+const DRAG_SCROLL_ZONE := 64.0
+const DRAG_SCROLL_OVERSHOOT := 40.0
+const DRAG_SCROLL_SPEED := 480.0
+
 var state: GameState = null
 var row_blocks: Array = []
 var invalid_row_ids: Array = []
@@ -36,6 +45,10 @@ var _row_slots: Array = []
 var _bot_active: bool = false
 var _bot_seq: int = 0
 var _hint_ids: Array = []
+var _slot_hover_pos: int = -1
+var _slot_hover_time: int = 0
+var _slot_hover_last: Vector2 = Vector2.ZERO
+var _slot_grace_until: int = 0
 
 func _ready() -> void:
 	_build_ui()
@@ -45,6 +58,10 @@ func _ready() -> void:
 func _process(_delta: float) -> void:
 	if _drag_view != null and not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
 		_end_drag()
+	if _drag_view != null and is_instance_valid(_drag_view):
+		_update_row_slot_hover()
+		_auto_scroll_drag(_delta)
+	_update_hint_zone_size()
 
 func _build_ui() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -453,7 +470,6 @@ func _show_pass(first: bool = false) -> void:
 
 func _on_pass_ready() -> void:
 	pass_overlay.visible = false
-	_show_turn_title()
 
 func _show_turn_title() -> void:
 	if state == null:
@@ -634,43 +650,137 @@ func _on_resized() -> void:
 func on_drag_started(view: TileView) -> void:
 	_drag_view = view
 	_hint_ids.clear()
-	_show_row_slots()
+	_slot_hover_pos = -1
+	_slot_hover_time = 0
+	_slot_grace_until = 0
 
 func _end_drag() -> void:
 	if _drag_view != null and is_instance_valid(_drag_view):
 		_drag_view.modulate = Color.WHITE
 	_drag_view = null
+	_slot_hover_pos = -1
+	_slot_hover_time = 0
+	_slot_grace_until = 0
 	_clear_row_slots()
 
-func _show_row_slots() -> void:
+func _update_row_slot_hover() -> void:
+	if state == null or state.finished:
+		return
+	var mouse := get_global_mouse_position()
+	var now := Time.get_ticks_msec()
+	if not _row_slots.is_empty():
+		# слот показан: держим его, пока курсор в его зоне;
+		# при уходе прячем с задержкой, чтобы успеть попасть
+		var slot_pos := int(_row_slots[0].get_meta("slot_pos", -1))
+		if _hover_slot_pos(mouse) == slot_pos:
+			_slot_grace_until = 0
+			return
+		if _slot_grace_until == 0:
+			_slot_grace_until = now + SLOT_GRACE_MS
+		elif now >= _slot_grace_until:
+			_slot_grace_until = 0
+			_slot_hover_pos = -1
+			_slot_hover_time = 0
+			_clear_row_slots()
+		return
+	_slot_grace_until = 0
+	var pos := _hover_slot_pos(mouse)
+	if pos < 0:
+		if _slot_hover_pos >= 0:
+			_slot_hover_pos = -1
+			_slot_hover_time = 0
+		return
+	if pos != _slot_hover_pos:
+		_slot_hover_pos = pos
+		_slot_hover_time = now
+		_slot_hover_last = mouse
+		return
+	if mouse.distance_to(_slot_hover_last) > SLOT_HOVER_MOVE_PX:
+		_slot_hover_last = mouse
+		_slot_hover_time = now
+		return
+	if now - _slot_hover_time >= SLOT_HOVER_DELAY_MS:
+		_show_row_slot(pos)
+
+func _auto_scroll_drag(delta: float) -> void:
+	if table_scroll == null:
+		return
+	var rect := table_scroll.get_global_rect()
+	var mouse := get_global_mouse_position()
+	var speed := 0.0
+	var d_bot := rect.end.y - mouse.y
+	var d_top := mouse.y - rect.position.y
+	if d_bot >= -DRAG_SCROLL_OVERSHOOT and d_bot < DRAG_SCROLL_ZONE:
+		speed = DRAG_SCROLL_SPEED * (1.0 - clampf(d_bot / DRAG_SCROLL_ZONE, 0.0, 1.0))
+	elif d_top >= -DRAG_SCROLL_OVERSHOOT and d_top < DRAG_SCROLL_ZONE:
+		speed = -DRAG_SCROLL_SPEED * (1.0 - clampf(d_top / DRAG_SCROLL_ZONE, 0.0, 1.0))
+	if speed != 0.0:
+		table_scroll.scroll_vertical = maxi(0, int(table_scroll.scroll_vertical + speed * delta))
+
+func _hover_slot_pos(global_pos: Vector2) -> int:
+	# позиция ближайшего «междурядья» под курсором, -1 если курсор
+	# глубоко над рядами или вне стола
+	if table_box == null:
+		return -1
+	var box := table_box.get_global_rect()
+	if not box.has_point(global_pos):
+		return -1
+	var y := global_pos.y
+	for block in row_blocks:
+		var rb := block as RowBlock
+		if rb == null:
+			continue
+		var r := rb.get_global_rect()
+		if y >= r.position.y + SLOT_HOVER_EDGE and y <= r.end.y - SLOT_HOVER_EDGE:
+			return -1
+	var n := row_blocks.size()
+	var best := -1
+	var best_d := SLOT_HOVER_EDGE + 1.0
+	for j in range(n + 1):
+		var gs := box.position.y
+		var ge := box.end.y
+		if j > 0:
+			gs = (row_blocks[j - 1] as RowBlock).get_global_rect().end.y
+		if j < n:
+			ge = (row_blocks[j] as RowBlock).get_global_rect().position.y
+		var d := 0.0
+		if y < gs:
+			d = gs - y
+		elif y > ge:
+			d = y - ge
+		if d < best_d:
+			best_d = d
+			best = j
+	return best
+
+func _show_row_slot(pos: int) -> void:
 	_clear_row_slots()
 	if state == null or state.finished:
 		return
 	var h := maxf(Settings.tile_size().y + 16.0, 36.0)
-	for i in range(row_blocks.size(), -1, -1):
-		var slot := DropLayer.new()
-		slot.controller = self
-		slot.custom_minimum_size = Vector2(0, h)
-		slot.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		var sb := StyleBoxFlat.new()
-		sb.bg_color = Color(1, 1, 1, 0.03)
-		sb.border_color = Color(1, 1, 1, 0.25)
-		sb.set_border_width_all(2)
-		sb.set_corner_radius_all(10)
-		slot.add_theme_stylebox_override("panel", sb)
-		var lab := Label.new()
-		lab.text = "+ новый ряд"
-		lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		lab.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		lab.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		lab.add_theme_font_size_override("font_size", Settings.fs(13))
-		lab.add_theme_color_override("font_color", Color(1, 1, 1, 0.5))
-		slot.add_child(lab)
-		slot.set_meta("slot_pos", i)
-		table_box.add_child(slot)
-		table_box.move_child(slot, i)
-		_row_slots.append(slot)
+	var slot := DropLayer.new()
+	slot.controller = self
+	slot.custom_minimum_size = Vector2(0, h)
+	slot.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(1, 1, 1, 0.03)
+	sb.border_color = Color(1, 1, 1, 0.25)
+	sb.set_border_width_all(2)
+	sb.set_corner_radius_all(10)
+	slot.add_theme_stylebox_override("panel", sb)
+	var lab := Label.new()
+	lab.text = "+ новый ряд"
+	lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	lab.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	lab.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	lab.add_theme_font_size_override("font_size", Settings.fs(13))
+	lab.add_theme_color_override("font_color", Color(1, 1, 1, 0.5))
+	slot.add_child(lab)
+	slot.set_meta("slot_pos", pos)
+	table_box.add_child(slot)
+	table_box.move_child(slot, clampi(pos, 0, table_box.get_child_count() - 1))
+	_row_slots.append(slot)
 
 func _clear_row_slots() -> void:
 	for slot in _row_slots:
@@ -681,7 +791,7 @@ func _clear_row_slots() -> void:
 
 func _slot_position(global_pos: Vector2) -> int:
 	for slot in _row_slots:
-		if is_instance_valid(slot) and slot.get_global_rect().has_point(global_pos):
+		if is_instance_valid(slot) and slot.get_global_rect().grow(SLOT_HOVER_EDGE * 2.0).has_point(global_pos):
 			return int(slot.get_meta("slot_pos", -1))
 	return -1
 
@@ -704,16 +814,19 @@ func gui_can_drop(data: Dictionary, global_pos: Vector2) -> bool:
 	var from := String(data.get("from", ""))
 	if from == "hand":
 		if hit["row"] == null:
-			return true
+			return _slot_position(global_pos) >= 0 or _in_hint_zone(global_pos)
 		return state.can_place_into(hit["row"])
 	elif from == "row":
 		var src := state.row_by_id(int(data.get("row_id", -1)))
 		if src == null or not state.can_touch_row(src):
 			return false
 		if hit["row"] == null:
-			return true
+			return _slot_position(global_pos) >= 0 or _in_hint_zone(global_pos)
 		return hit["row"] == src or state.can_touch_row(hit["row"])
 	return false
+
+func _in_hint_zone(global_pos: Vector2) -> bool:
+	return hint_zone != null and hint_zone.get_global_rect().has_point(global_pos)
 
 func gui_do_drop(data: Dictionary, global_pos: Vector2) -> void:
 	if not gui_can_drop(data, global_pos):
@@ -729,6 +842,8 @@ func gui_do_drop(data: Dictionary, global_pos: Vector2) -> void:
 		var index := int(hit["index"])
 		if target == null:
 			var slot_pos := _slot_position(global_pos)
+			if slot_pos < 0 and not _row_slots.is_empty():
+				slot_pos = int(_row_slots[0].get_meta("slot_pos", -1))
 			target = state.add_row()
 			if slot_pos >= 0:
 				state.table.erase(target)
@@ -783,6 +898,9 @@ func refresh() -> void:
 	if state == null:
 		return
 	_drag_view = null
+	_slot_hover_pos = -1
+	_slot_hover_time = 0
+	_slot_grace_until = 0
 	_clear_row_slots()
 	_update_chips()
 	_update_table()
@@ -865,9 +983,18 @@ func _update_buttons() -> void:
 		end_button.disabled = bot or not state.can_skip()
 
 func _update_hint_zone_size() -> void:
-	if hint_zone == null or table_scroll == null:
+	if hint_zone == null or table_scroll == null or table_box == null:
 		return
-	hint_zone.custom_minimum_size.y = maxf(140.0, table_scroll.size.y)
+	var rows_h := 0.0
+	var sep := float(table_box.get_theme_constant("separation"))
+	for block in row_blocks:
+		var b := block as Control
+		if b == null:
+			continue
+		rows_h += maxf(b.size.y, b.get_combined_minimum_size().y) + sep
+	var target := maxf(HINT_MIN_H, table_scroll.size.y - rows_h)
+	if not is_equal_approx(hint_zone.custom_minimum_size.y, target):
+		hint_zone.custom_minimum_size.y = target
 
 func toast(text: String, is_error: bool = false) -> void:
 	toast_label.text = text
