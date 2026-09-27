@@ -9,12 +9,14 @@ var controller: Object = null
 var mark_self: bool = false
 var mark_last: bool = false
 var mark_hint: bool = false
+var face_down: bool = false
 
-static func make(p_tile: Tile, p_draggable: bool, p_controller: Object) -> TileView:
+static func make(p_tile: Tile, p_draggable: bool, p_controller: Object, p_face_down: bool = false) -> TileView:
 	var view := TileView.new()
 	view.tile = p_tile
 	view.draggable = p_draggable
 	view.controller = p_controller
+	view.face_down = p_face_down
 	view._build()
 	return view
 
@@ -24,6 +26,19 @@ func _build() -> void:
 	size = ts
 	mouse_filter = Control.MOUSE_FILTER_STOP
 
+	var bw := clampi(int(ts.x * 0.05), 1, 3)
+	var sb := StyleBoxFlat.new()
+	sb.set_corner_radius_all(clampi(int(ts.x * 0.14), 3, 12))
+
+	if face_down:
+		sb.bg_color = Color("2B3140")
+		sb.border_color = Color(1, 1, 1, 0.3)
+		sb.set_border_width_all(maxi(bw, 2))
+		add_theme_stylebox_override("panel", sb)
+		tooltip_text = ""
+		queue_redraw()
+		return
+
 	var marks := {}
 	if controller != null and controller.has_method("get_tile_marks"):
 		marks = controller.get_tile_marks(tile.id)
@@ -31,15 +46,12 @@ func _build() -> void:
 	mark_last = bool(marks.get("last", false))
 	mark_hint = bool(marks.get("hint", false))
 
-	var bw := clampi(int(ts.x * 0.05), 1, 3)
-	var sb := StyleBoxFlat.new()
 	sb.bg_color = Color(Tile.color_hex(tile.color))
-	sb.set_corner_radius_all(clampi(int(ts.x * 0.14), 3, 12))
 	if mark_hint:
-		sb.border_color = Color("FFD54F")
-		sb.set_border_width_all(maxi(bw + 1, 3))
+		sb.border_color = Color("FFFFFF")
+		sb.set_border_width_all(maxi(bw + 2, 5))
 	elif mark_last:
-		sb.border_color = Color("4FC3F7")
+		sb.border_color = Color("000000")
 		sb.set_border_width_all(maxi(bw + 1, 3))
 	else:
 		sb.border_color = Color(1, 1, 1, 0.35 if tile.is_joker else 0.18)
@@ -67,6 +79,15 @@ func _build() -> void:
 	queue_redraw()
 
 func _draw() -> void:
+	if face_down:
+		var ts := Settings.tile_size()
+		var c := ts * 0.5
+		var r := minf(ts.x, ts.y) * 0.2
+		draw_colored_polygon(PackedVector2Array([
+			c + Vector2(0, -r), c + Vector2(r, 0),
+			c + Vector2(0, r), c + Vector2(-r, 0),
+		]), Color("FFD54F"))
+		return
 	if not mark_self:
 		return
 	var ts := Settings.tile_size()

@@ -12,13 +12,13 @@ var _last_tile_size: Vector2 = Vector2(-1, -1)
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
 
-func set_tiles(tiles: Array, src_kind: String, src_row_id: int, draggable: bool) -> void:
+func set_tiles(tiles: Array, src_kind: String, src_row_id: int, draggable: bool, face_down: bool = false) -> void:
 	for child in get_children():
 		remove_child(child)
 		child.free()
 	tile_views.clear()
 	for t in tiles:
-		var view := TileView.make(t, draggable, controller)
+		var view := TileView.make(t, draggable, controller, face_down)
 		view.src_kind = src_kind
 		view.src_row_id = src_row_id
 		add_child(view)

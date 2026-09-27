@@ -88,3 +88,48 @@ func _row_checks() -> void:
 			"drop allowed on hint zone")
 		check(hover.call("gui_can_drop", data, Vector2(r.get_center().x, r.end.y + 5.0)) == false,
 			"drop in bare gap without slot rejected")
+
+	var state_ref = inst.get("state")
+	hover.call("_rebuild_ui")
+	check(inst.get("state") == state_ref, "rebuild keeps the same state")
+	var rbs2: Array = inst.get("row_blocks")
+	check(rbs2.size() == 1, "table rebuilt with same rows, got %d" % rbs2.size())
+	check((inst.get("_row_slots") as Array).is_empty(), "no row slots after rebuild")
+
+	var dd = inst.get("draw_dialog")
+	check(dd != null, "draw dialog exists")
+	if dd != null:
+		check(String(dd.title) == "Взять карту", "draw dialog title in Russian, got: %s" % dd.title)
+		var dl = dd.get_label()
+		check(dl != null and dl.has_theme_font_size_override("font_size"), "draw dialog label font scaled")
+	var md = inst.get("menu_dialog")
+	check(md != null and String(md.title) == "Выход в меню", "menu dialog title in Russian")
+
+	var settings := root.get_node_or_null("Settings")
+	var hf = inst.get("hand_flow")
+	var views: Array = hf.get("tile_views")
+	check(not views.is_empty(), "human turn: hand shows tiles")
+	if not views.is_empty():
+		check(bool(views[0].get("face_down")) == false, "human hand face up")
+		var has_label := false
+		for c in (views[0] as Control).get_children():
+			if c is Label:
+				has_label = true
+		check(has_label, "human hand tile has value label")
+	settings.call("set_bot", 0, true)
+	inst.call("refresh")
+	views = hf.get("tile_views")
+	check(not views.is_empty(), "bot turn: hand still shows tiles")
+	if not views.is_empty():
+		check(bool(views[0].get("face_down")) == true, "bot hand face down")
+		var has_label2 := false
+		for c in (views[0] as Control).get_children():
+			if c is Label:
+				has_label2 = true
+		check(not has_label2, "bot hand tile has no value label")
+		check(String(views[0].tooltip_text).is_empty(), "bot hand tile tooltip hidden")
+	settings.call("set_bot", 0, false)
+	inst.call("refresh")
+	views = hf.get("tile_views")
+	check(not views.is_empty() and bool(views[0].get("face_down")) == false,
+		"hand face up again after bot turn")

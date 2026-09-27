@@ -32,6 +32,7 @@ var pass_ready_button: Button = null
 var win_overlay: ColorRect = null
 var win_title: Label = null
 var help_overlay: ColorRect = null
+var settings_overlay: ColorRect = null
 var turn_title_overlay: ColorRect = null
 var turn_title_label: Label = null
 var toast_label: Label = null
@@ -134,6 +135,9 @@ func _build_ui() -> void:
 	help_btn.pressed.connect(_open_help)
 	top.add_child(help_btn)
 
+	var settings_btn := _make_top_button("Настр.", "Размер текста и карточек", _open_settings)
+	top.add_child(settings_btn)
+
 	var menu_btn := Button.new()
 	menu_btn.text = "Меню"
 	menu_btn.custom_minimum_size = Vector2(68, 46)
@@ -228,21 +232,37 @@ func _build_ui() -> void:
 	_build_pass_overlay()
 	_build_win_overlay()
 	_build_help_overlay()
+	_build_settings_overlay()
 	_build_turn_title_overlay()
 
 	draw_dialog = ConfirmationDialog.new()
+	draw_dialog.title = "Взять карту"
 	draw_dialog.dialog_text = "Взять число из колоды?\nХод сразу завершится."
 	draw_dialog.ok_button_text = "Взять"
 	draw_dialog.get_cancel_button().text = "Отмена"
 	draw_dialog.confirmed.connect(_on_draw_confirmed)
+	_style_dialog(draw_dialog)
 	add_child(draw_dialog)
 
 	menu_dialog = ConfirmationDialog.new()
+	menu_dialog.title = "Выход в меню"
 	menu_dialog.dialog_text = "Выйти в главное меню?"
 	menu_dialog.ok_button_text = "Выйти"
 	menu_dialog.get_cancel_button().text = "Отмена"
 	menu_dialog.confirmed.connect(func(): get_tree().change_scene_to_file("res://scenes/main_menu.tscn"))
+	_style_dialog(menu_dialog)
 	add_child(menu_dialog)
+
+func _style_dialog(dialog: ConfirmationDialog) -> void:
+	var lab := dialog.get_label()
+	if lab != null:
+		lab.add_theme_font_size_override("font_size", Settings.fs(16))
+	var ok_btn := dialog.get_ok_button()
+	if ok_btn != null:
+		ok_btn.add_theme_font_size_override("font_size", Settings.fs(15))
+	var cancel_btn := dialog.get_cancel_button()
+	if cancel_btn != null:
+		cancel_btn.add_theme_font_size_override("font_size", Settings.fs(15))
 
 func _make_top_button(text_value: String, tip: String, handler: Callable) -> Button:
 	var btn := Button.new()
@@ -440,6 +460,119 @@ func _build_turn_title_overlay() -> void:
 
 func _open_help() -> void:
 	help_overlay.visible = true
+
+func _open_settings() -> void:
+	settings_overlay.visible = true
+
+func _on_settings_text_scale(index: int) -> void:
+	Settings.text_scale = index
+	Settings.save_settings()
+	call_deferred("_rebuild_ui")
+
+func _on_settings_tile_step(index: int) -> void:
+	Settings.tile_step = index
+	Settings.save_settings()
+	refresh()
+
+func _rebuild_ui() -> void:
+	# пересборка UI с сохранением партии (смена text_scale)
+	if title_tween != null and title_tween.is_running():
+		title_tween.kill()
+	if toast_tween != null and toast_tween.is_running():
+		toast_tween.kill()
+	_drag_view = null
+	_slot_hover_pos = -1
+	_slot_hover_time = 0
+	_slot_grace_until = 0
+	_row_slots.clear()
+	row_blocks.clear()
+	var was_pass := pass_overlay != null and pass_overlay.visible
+	var was_win := win_overlay != null and win_overlay.visible
+	var was_help := help_overlay != null and help_overlay.visible
+	var was_settings := settings_overlay != null and settings_overlay.visible
+	var pass_t := pass_title.text if pass_title != null else ""
+	var pass_n := pass_name.text if pass_name != null else ""
+	for child in get_children():
+		remove_child(child)
+		child.free()
+	_build_ui()
+	if state == null:
+		_new_match()
+		return
+	pass_overlay.visible = was_pass
+	win_overlay.visible = was_win
+	help_overlay.visible = was_help
+	settings_overlay.visible = was_settings
+	turn_title_overlay.visible = false
+	pass_title.text = pass_t
+	pass_name.text = pass_n
+	refresh()
+
+func _build_settings_overlay() -> void:
+	settings_overlay = ColorRect.new()
+	settings_overlay.color = Color(0, 0, 0, 0.78)
+	settings_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	settings_overlay.visible = false
+	add_child(settings_overlay)
+
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	settings_overlay.add_child(center)
+
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(460, 0)
+	var psb := StyleBoxFlat.new()
+	psb.bg_color = Color("1B2029")
+	psb.set_corner_radius_all(14)
+	psb.border_color = Color(1, 1, 1, 0.25)
+	psb.set_border_width_all(2)
+	psb.content_margin_left = 16.0
+	psb.content_margin_right = 16.0
+	psb.content_margin_top = 14.0
+	psb.content_margin_bottom = 14.0
+	panel.add_theme_stylebox_override("panel", psb)
+	center.add_child(panel)
+
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 12)
+	panel.add_child(box)
+
+	var title := Label.new()
+	title.text = "Настройки"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", Settings.fs(22))
+	title.add_theme_color_override("font_color", Color("FFD54F"))
+	box.add_child(title)
+
+	box.add_child(_make_settings_row("Текст:", Settings.TEXT_SCALE_NAMES, Settings.text_scale, _on_settings_text_scale))
+	box.add_child(_make_settings_row("Карточки:", Settings.TILE_SIZE_NAMES, Settings.tile_step, _on_settings_tile_step))
+
+	var close_btn := Button.new()
+	close_btn.text = "Закрыть"
+	close_btn.custom_minimum_size = Vector2(200, 52)
+	close_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	close_btn.add_theme_font_size_override("font_size", Settings.fs(17))
+	close_btn.pressed.connect(func(): settings_overlay.visible = false)
+	box.add_child(close_btn)
+
+func _make_settings_row(label_text: String, names: PackedStringArray, current: int, handler: Callable) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	var lab := Label.new()
+	lab.text = label_text
+	lab.add_theme_font_size_override("font_size", Settings.fs(15))
+	lab.add_theme_color_override("font_color", Color(1, 1, 1, 0.9))
+	row.add_child(lab)
+	var option := OptionButton.new()
+	option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	option.custom_minimum_size = Vector2(0, 42)
+	option.add_theme_font_size_override("font_size", Settings.fs(15))
+	for n in names:
+		option.add_item(n)
+	option.select(clampi(current, 0, names.size() - 1))
+	option.item_selected.connect(handler)
+	row.add_child(option)
+	return row
 
 # ---------------------------------------------------------------- match flow
 
@@ -956,7 +1089,8 @@ func _update_table() -> void:
 	table_box.move_child(hint_zone, table_box.get_child_count() - 1)
 
 func _update_hand() -> void:
-	hand_flow.set_tiles(state.hand(), "hand", 0, not state.finished and not _is_bot_turn())
+	var bot_turn := _is_bot_turn()
+	hand_flow.set_tiles(state.hand(), "hand", 0, not state.finished and not bot_turn, bot_turn)
 
 func _update_buttons() -> void:
 	if state == null:
