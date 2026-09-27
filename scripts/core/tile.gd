@@ -1,0 +1,51 @@
+class_name Tile
+extends RefCounted
+
+enum TColor { RED, BLUE, BLACK, ORANGE }
+
+const COLOR_COUNT := 4
+
+var id: int = 0
+var color: int = TColor.RED
+var value: int = 1
+var is_joker: bool = false
+
+func _init(p_id: int = 0, p_color: int = TColor.RED, p_value: int = 1, p_joker: bool = false) -> void:
+	id = p_id
+	color = p_color
+	value = p_value
+	is_joker = p_joker
+
+static func color_hex(c: int) -> String:
+	match c:
+		TColor.RED:
+			return "E53935"
+		TColor.BLUE:
+			return "1E88E5"
+		TColor.BLACK:
+			return "212121"
+		TColor.ORANGE:
+			return "FB8C00"
+	return "9E9E9E"
+
+static func color_name(c: int) -> String:
+	match c:
+		TColor.RED:
+			return "красный"
+		TColor.BLUE:
+			return "синий"
+		TColor.BLACK:
+			return "чёрный"
+		TColor.ORANGE:
+			return "оранжевый"
+	return "?"
+
+static func sort_tiles(tiles: Array) -> void:
+	tiles.sort_custom(_less)
+
+static func _less(a: Tile, b: Tile) -> bool:
+	if a.is_joker != b.is_joker:
+		return not a.is_joker
+	if a.color != b.color:
+		return a.color < b.color
+	return a.value < b.value
