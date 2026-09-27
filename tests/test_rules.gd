@@ -434,18 +434,56 @@ func _init() -> void:
 	check(res.ok and res.get("win", false) == true, "win after pair rebuild")
 	print("  info  impossible plan took %d ms" % plan_ms)
 
-	print("== TurnPlanner: rebuild is impossible-only ==")
+	print("== TurnPlanner: rebuild on hard (single row, simpler) ==")
 	s = GameState.create(2, ["A", "B"], false)
 	var hr := s.add_row()
 	for v in [10, 11, 12]:
 		hr.tiles.append(t(v, T.RED))
 	fresh(s, [t(9, T.RED), t(13, T.RED)])
+	t0 = Time.get_ticks_msec()
 	plan = TurnPlanner.plan(s, TurnPlanner.LEVEL_HARD)
-	var has_move := false
-	for op in plan.ops:
-		if String((op as Dictionary).get("op", "")) == "move":
-			has_move = true
-	check(not has_move, "hard level never emits table moves (action=%s)" % plan.action)
+	plan_ms = Time.get_ticks_msec() - t0
+	check(plan.action == "place", "hard rebuild plan is place (action=%s)" % plan.action)
+	check(plan.tiles.size() == 2, "hard rebuild uses both hand tiles, got %d" % plan.tiles.size())
+	check(s.apply_ops(plan.ops), "hard rebuild apply_ops ok")
+	res = s.end_turn()
+	check(res.ok and res.get("win", false) == true, "win after hard rebuild")
+	print("  info  hard plan took %d ms" % plan_ms)
+
+	print("== TurnPlanner: rebuild on medium (basic single row) ==")
+	s = GameState.create(2, ["A", "B"], false)
+	var mr := s.add_row()
+	for v in [10, 11, 12]:
+		mr.tiles.append(t(v, T.RED))
+	fresh(s, [t(9, T.RED), t(13, T.RED)])
+	t0 = Time.get_ticks_msec()
+	plan = TurnPlanner.plan(s, TurnPlanner.LEVEL_MEDIUM)
+	plan_ms = Time.get_ticks_msec() - t0
+	check(plan.action == "place", "medium rebuild plan is place (action=%s)" % plan.action)
+	check(plan.tiles.size() == 2, "medium rebuild uses both hand tiles, got %d" % plan.tiles.size())
+	check(s.apply_ops(plan.ops), "medium rebuild apply_ops ok")
+	res = s.end_turn()
+	check(res.ok and res.get("win", false) == true, "win after medium rebuild")
+	print("  info  medium plan took %d ms" % plan_ms)
+
+	print("== TurnPlanner: rebuild of two rows on hard ==")
+	s = GameState.create(2, ["A", "B"], false)
+	var hra := s.add_row()
+	for v in [3, 4, 5]:
+		hra.tiles.append(t(v, T.RED))
+	var hrb := s.add_row()
+	for v in [3, 4, 5]:
+		hrb.tiles.append(t(v, T.BLUE))
+	fresh(s, [t(3, T.BLACK), t(6, T.RED), t(6, T.BLUE)])
+	t0 = Time.get_ticks_msec()
+	plan = TurnPlanner.plan(s, TurnPlanner.LEVEL_HARD)
+	plan_ms = Time.get_ticks_msec() - t0
+	check(plan.action == "place", "hard pair rebuild is place (action=%s)" % plan.action)
+	check(s.apply_ops(plan.ops), "hard pair rebuild apply_ops ok")
+	check(s.hand_size(0) == 0, "hard pair rebuild empties hand, left %d" % s.hand_size(0))
+	res = s.end_turn()
+	check(res.ok and res.get("win", false) == true, "win after hard pair rebuild")
+	print("  info  hard pair plan took %d ms" % plan_ms)
 
 	print("== GameState: apply_ops rejects bad input ==")
 	s = GameState.create(2, ["A", "B"], false)

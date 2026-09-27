@@ -17,12 +17,7 @@ const CAP_IMPOSSIBLE := 900
 const BONUS_STEAL := 6
 const BONUS_BRIDGE := 12
 const BONUS_REBUILD := 4
-
-const REBUILD_POOL_MAX := 8
 const REBUILD_GROUP_MAX := 8
-const REBUILD_OPT_MAX := 8
-const REBUILD_CAND_CAP := 150
-const REBUILD_TRY_BUDGET := 6000
 
 static func plan(state: GameState, level: int) -> Dictionary:
 	var p := new()
@@ -50,10 +45,16 @@ var _rb_hand_ids: Dictionary = {}
 var _rb_old_pts: int = 0
 var _rb_groups: Array = []
 var _rb_used_opt: int = 0
+var _rb_pool_max: int = 8
+var _rb_opt_max: int = 8
+var _rb_cand_cap: int = 150
+var _rb_try_budget: int = 6000
+var _rb_pairs: bool = true
 
 func _plan(state: GameState, level: int) -> Dictionary:
 	_state = state
 	_level = clampi(level, 0, 3)
+	_setup_rebuild_params()
 	if state.finished:
 		return _action("end")
 	_base_points = state.opening_points()
@@ -96,6 +97,7 @@ func _build_candidates() -> void:
 	if _level >= LEVEL_IMPOSSIBLE:
 		_steal_candidates(hand)
 		_bridge_candidates(hand)
+	if _level >= LEVEL_MEDIUM:
 		_rebuild_candidates(hand)
 
 func _rank_candidates() -> void:
@@ -476,17 +478,37 @@ func _rebuild_candidates(hand: Array) -> void:
 		if row != null and not row.tiles.is_empty():
 			rows.append(row)
 	for i in rows.size():
-		if _rb_emitted >= REBUILD_CAND_CAP:
+		if _rb_emitted >= _rb_cand_cap:
 			return
 		var ri := rows[i] as GameState.Row
-		if ri.tiles.size() <= REBUILD_POOL_MAX:
+		if ri.tiles.size() <= _rb_pool_max:
 			_rebuild_try([ri], hand)
+		if not _rb_pairs:
+			continue
 		for j in range(i + 1, rows.size()):
-			if _rb_emitted >= REBUILD_CAND_CAP:
+			if _rb_emitted >= _rb_cand_cap:
 				return
 			var rj := rows[j] as GameState.Row
-			if ri.tiles.size() + rj.tiles.size() <= REBUILD_POOL_MAX:
+			if ri.tiles.size() + rj.tiles.size() <= _rb_pool_max:
 				_rebuild_try([ri, rj], hand)
+
+func _setup_rebuild_params() -> void:
+	# параметры перестройки стола по уровням (дефолт — «невозможный»):
+	# средний — только одиночные строки, малый пул и бюджет (базовые вставки);
+	# сложный — одиночки и пары строк, полный перебор по сути тот же, но
+	# глубже обрезан (пул меньше, кандидатов и попыток меньше).
+	if _level == LEVEL_MEDIUM:
+		_rb_pool_max = 6
+		_rb_opt_max = 4
+		_rb_cand_cap = 12
+		_rb_try_budget = 900
+		_rb_pairs = false
+	elif _level == LEVEL_HARD:
+		_rb_pool_max = 7
+		_rb_opt_max = 6
+		_rb_cand_cap = 40
+		_rb_try_budget = 2500
+		_rb_pairs = true
 
 func _rebuild_relevant(hand: Array, pool: Array) -> Array:
 	var out := []
@@ -506,8 +528,8 @@ func _rebuild_relevant(hand: Array, pool: Array) -> Array:
 			if pt.color == ht.color and absi(pt.value - ht.value) <= 6:
 				out.append(ht)
 				break
-	if out.size() > REBUILD_OPT_MAX:
-		out.resize(REBUILD_OPT_MAX)
+	if out.size() > _rb_opt_max:
+		out.resize(_rb_opt_max)
 	return out
 
 func _rebuild_try(src_rows: Array, hand: Array) -> void:
@@ -531,7 +553,7 @@ func _rebuild_try(src_rows: Array, hand: Array) -> void:
 		_rb_hand_ids[(t as Tile).id] = true
 	_rb_groups = []
 	_rb_used_opt = 0
-	_rb_budget = REBUILD_TRY_BUDGET
+	_rb_budget = _rb_try_budget
 	_rb_cover()
 
 func _rb_cover() -> void:
@@ -577,7 +599,7 @@ func _rb_cover() -> void:
 
 func _rb_groups_for(t_min: Tile) -> Array:
 	var out := []
-	if _rb_budget <= 0 or _rb_emitted >= REBUILD_CAND_CAP:
+	if _rb_budget <= 0 or _rb_emitted >= _rb_cand_cap:
 		return out
 	out.append_array(_rb_set_groups(t_min))
 	if _rb_budget <= 0:
@@ -732,7 +754,7 @@ func _rb_series_groups(t_min: Tile) -> Array:
 	return out
 
 func _rb_emit() -> void:
-	if _rb_emitted >= REBUILD_CAND_CAP:
+	if _rb_emitted >= _rb_cand_cap:
 		return
 	var ops := []
 	var hand_ids := []
