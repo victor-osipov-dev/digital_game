@@ -36,6 +36,34 @@ var _snap_table: Array = []
 var _snap_hand: Array = []
 var _next_row_id: int = 1
 
+# --- сетевая партия ------------------------------------------------------
+#
+# В одиночной игре рука есть у всех, и ходит current. В сетевой сервер
+# отдаёт руку ТОЛЬКО хозяину: у соперников её нет вовсе, есть число фишек.
+# Поэтому «чьи фишки я вижу» и «кто ходит» — разные вещи, и их нельзя
+# выводить одно из другого.
+var local_seat: int = -1
+var hand_count_override: Array = []   # число фишек у соперников
+var deck_count_override: int = -1     # сколько осталось в колоде
+# На связи ли игрок. В одиночной игре за всех отвечает бот, и поле пустое;
+# в сетевой это единственный способ показать «соперник отвалился».
+var connected: Array = []
+
+## На связи ли игрок. Нет данных — считаем, что да: иначе одиночная партия
+## и только что собранная сетевая показали бы «нет связи» у всех.
+func is_connected_player(i: int) -> bool:
+	if i < 0 or i >= connected.size():
+		return true
+	return bool(connected[i])
+
+# Место, чья рука настоящая. В одиночной игре это всегда current.
+func hand_seat() -> int:
+	return local_seat if local_seat >= 0 else current
+
+## Наш ли сейчас ход. В сетевой игре current может указывать на соперника.
+func my_turn() -> bool:
+	return local_seat < 0 or current == local_seat
+
 static func create(num_players: int, names: Array, p_require_30: bool) -> GameState:
 	var state := GameState.new()
 	state.require_30 = p_require_30
@@ -64,12 +92,19 @@ func current_player() -> Player:
 	return players[current] as Player
 
 func hand() -> Array:
-	return current_player().hand
+	return (players[hand_seat()] as Player).hand
 
 func hand_size(i: int) -> int:
+	# У соперника настоящей руки нет — сервер прислал только число.
+	if not hand_count_override.is_empty() and i >= 0 and i < hand_count_override.size():
+		return int(hand_count_override[i])
+	if i < 0 or i >= players.size():
+		return 0
 	return (players[i] as Player).hand.size()
 
 func tiles_left_in_deck() -> int:
+	if deck_count_override >= 0:
+		return deck_count_override
 	return deck.count()
 
 func can_touch_row(_row: Row) -> bool:
@@ -85,10 +120,10 @@ func can_take_back(tile: Tile) -> bool:
 	return not finished and turn_placed.has(tile)
 
 func can_draw() -> bool:
-	return not finished and turn_placed.is_empty() and deck.count() > 0 and table_status().ok
+	return not finished and turn_placed.is_empty() and tiles_left_in_deck() > 0 and table_status().ok
 
 func can_skip() -> bool:
-	return not finished and turn_placed.is_empty() and deck.count() == 0 and table_status().ok
+	return not finished and turn_placed.is_empty() and tiles_left_in_deck() == 0 and table_status().ok
 
 func add_row() -> Row:
 	var row := Row.new(_next_row_id)
@@ -96,6 +131,12 @@ func add_row() -> Row:
 	table.append(row)
 	turn_dirty = true
 	return row
+
+## Сдвигает счётчик новых рядов за пределы уже занятых id. Нужно при
+## пересборке состояния с сервера: иначе первый же новый ряд получит id,
+## который уже занят чужим рядом на столе.
+func reserve_row_ids(used: int) -> void:
+	_next_row_id = maxi(_next_row_id, used + 1)
 
 func remove_row(row: Row) -> void:
 	table.erase(row)
@@ -172,8 +213,9 @@ func take_back_to_hand(row_id: int, tile_id: int) -> bool:
 	row.tiles.remove_at(idx)
 	turn_placed.erase(tile)
 	turn_dirty = true
-	current_player().hand.append(tile)
-	Tile.sort_tiles(current_player().hand)
+	var owner := hand_seat()
+	(players[owner] as Player).hand.append(tile)
+	Tile.sort_tiles((players[owner] as Player).hand)
 	if row.tiles.is_empty():
 		remove_row(row)
 	return true
@@ -191,8 +233,9 @@ func draw_from_deck() -> Dictionary:
 	var tile := deck.draw()
 	if tile == null:
 		return _result(false, "Колода пуста")
-	current_player().hand.append(tile)
-	Tile.sort_tiles(current_player().hand)
+	var me := players[hand_seat()] as Player
+	me.hand.append(tile)
+	Tile.sort_tiles(me.hand)
 	_advance()
 	return _result(true, "", {tile=tile})
 
@@ -209,7 +252,11 @@ func skip_turn() -> Dictionary:
 	_advance()
 	return _result(true, "")
 
-func end_turn() -> Dictionary:
+## Проверки перед завершением хода. Ничего не меняет.
+##
+## Нужны для сетевой игры: сервер всё равно проверит у себя, но ждать
+## сети, чтобы показать «ряд невалиден», неудобно — ошибку видно сразу.
+func check_turn() -> Dictionary:
 	if finished:
 		return _result(false, "Игра окончена")
 	if turn_placed.is_empty():
@@ -230,14 +277,35 @@ func end_turn() -> Dictionary:
 				reason="Самый первый ход игры — минимум %d очков (у вас %d)" % [Rules.OPENING_POINTS, pts],
 				errors=[],
 			}
+	return _result(true, "")
+
+func end_turn() -> Dictionary:
+	var check := check_turn()
+	if not check["ok"]:
+		return check
 	first_turn = false
 	_remove_empty_rows()
-	if current_player().hand.is_empty():
-		winner = current
+	if hand().is_empty():
+		winner = hand_seat()
 		finished = true
 		return {ok=true, reason="", errors=[], win=true}
 	_advance()
 	return {ok=true, reason="", errors=[], win=false}
+
+## Готовый стол для сервера: [{id, tiles:[tile_id,...]}].
+## id > 0 — существующий ряд, 0 — новый. Пустые ряды не отправляем:
+## на сервере они и так исчезнут.
+func set_table_ops() -> Array:
+	var rows := []
+	for row in table:
+		var r := row as Row
+		if r.tiles.is_empty():
+			continue
+		var ids := PackedInt32Array()
+		for t in r.tiles:
+			ids.append((t as Tile).id)
+		rows.append({"id": r.id, "tiles": ids})
+	return rows
 
 func table_status() -> Dictionary:
 	var errors := []
@@ -292,7 +360,7 @@ func restore_checkpoint() -> bool:
 		return false
 	var snap: Dictionary = checkpoints.pop_back()
 	_apply_table(snap["table"])
-	(players[current] as Player).hand = (snap["hand"] as Array).duplicate()
+	(players[hand_seat()] as Player).hand = (snap["hand"] as Array).duplicate()
 	turn_placed = (snap["turn_placed"] as Array).duplicate()
 	turn_dirty = true
 	return true
@@ -353,16 +421,19 @@ func _apply_table(data: Array) -> void:
 		r.tiles = (entry["tiles"] as Array).duplicate()
 		table.append(r)
 
+func take_turn_snapshot() -> void:
+	_take_snapshot()
+
 func _take_snapshot() -> void:
 	_snap_table = _capture_table()
-	_snap_hand = (players[current] as Player).hand.duplicate()
+	_snap_hand = (players[hand_seat()] as Player).hand.duplicate()
 	turn_dirty = false
 
 func restore_turn_snapshot() -> bool:
 	if finished:
 		return false
 	_apply_table(_snap_table)
-	(players[current] as Player).hand = _snap_hand.duplicate()
+	(players[hand_seat()] as Player).hand = _snap_hand.duplicate()
 	turn_placed.clear()
 	turn_dirty = false
 	return true

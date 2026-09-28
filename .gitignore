@@ -1,3 +1,27 @@
 # Godot 4+ specific ignores
 .godot/
 /android/
+
+# Секреты и параметры серверов — НЕ КОММИТИТЬ
+.env
+.env.*
+!.env.example
+
+# Зависимости сервера: восстанавливаются из server/package-lock.json
+node_modules/
+
+# Кэш байт-кода Python у deploy.py — пересоздаётся сам и к проекту
+# отношения не имеет
+__pycache__/
+*.pyc
+
+# Каталоги состояния Godot и файлы, которые он генерирует
+.godot/
+*.translation
+
+# Сертификаты выпускаются заново на сервере и на машину; в репозитории
+# лежат только res://certs/*.crt, зашитые в клиент.
+server/deploy/tls/
+*.key
+*.pem
+

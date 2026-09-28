@@ -1,0 +1,77 @@
+# ==============================================================
+#  Игровой сервер Rummikub: всё в одном — HTTP, WebSocket, TLS.
+#  Один процесс, один порт. Никакого nginx: на 443 этих машин
+#  уже работает чужое продакшен-приложение, и мы его не трогаем.
+# ==============================================================
+[Unit]
+Description=Rummikub game server (authoritative, WSS)
+Documentation=https://github.com/OWNER/digital-game
+After=network-online.target
+Wants=network-online.target
+
+# 5 попыток запуска за минуту, потом отказ. Ключи живут в [Unit], а не в
+# [Service]: помещённые в [Service], они молча игнорируются («Unknown key
+# name ... ignoring»), и сервер, падающий в цикле, перезапускается
+# бесконечно — ровно тот случай, ради которого ограничение и нужно.
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+[Service]
+Type=simple
+User=digital-game
+Group=digital-game
+WorkingDirectory=/opt/digital-game
+
+# Секреты и адреса соседей — в отдельном файле, права 0640 и он вне
+# репозитория. В юните их быть не должно: `systemctl cat` попадёт
+# в отчёт на поддержку.
+EnvironmentFile=/etc/digital-game/server.env
+
+ExecStart=/usr/bin/node /opt/digital-game/src/index.js
+
+Restart=always
+RestartSec=3
+
+# --- Память. ------------------------------------------------------
+# На RU-машине 709 МБ RAM, из них свободно ~256 МБ, свопа нет.
+# Без ограничения ядро при нехватке памяти выбирает жертву по
+# размеру процесса — и на этой машине это nginx/xray с чужим
+# продакшеном. Поэтому верхнюю границу задаём здесь: превысил —
+# умер наш node, а не чужой сервис.
+MemoryHigh=140M
+MemoryMax=200M
+MemorySwapMax=0
+# Перезапускать при жёстком упоре в память, но не дублировать в oomd.
+OOMPolicy=stop
+
+# --- Прочее -------------------------------------------------------
+# Ограничения процесса: без новых привилегий, без доступа к ядру.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+# ProtectSystem=strict делает ВСЮ файловую систему доступной только
+# для чтения, кроме перечисленных здесь каталогов. Без этой строки
+# SQLite не может создать файл базы и сервер падает при старте с
+# «unable to open database file» — а всё остальное ограничение
+# рассчитано на то, чтобы работало.
+#
+# Одну и ту же пару путей проверяет deploy.py: если каталог данных
+# не перечислить здесь, он не будет доступен на запись.
+ReadWritePaths=/var/lib/digital-game
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=digital-game
+
+[Install]
+WantedBy=multi-user.target

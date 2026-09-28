@@ -8,6 +8,7 @@ var check_30: CheckBox = null
 var help_overlay: ColorRect = null
 var menu_scroll: ScrollContainer = null
 var menu_box: VBoxContainer = null
+var online_lobby: Control = null
 
 func _sync_scroll_min() -> void:
 	if menu_scroll == null or menu_box == null:
@@ -111,6 +112,17 @@ func _build_ui() -> void:
 	_apply_accent_style(start_btn, Color("2E7D32"), Color("388E3C"), Color("1B5E20"))
 	box.add_child(start_btn)
 
+	# Сетевая кнопка стоит рядом с одиночной, но выглядит слабее: это
+	# отдельный режим, и человек, который хочет поиграть с соседом за
+	# одним столом, не должен промахиваться мимо привычной кнопки.
+	var online_btn := Button.new()
+	online_btn.text = "Играть по сети"
+	online_btn.custom_minimum_size = Vector2(0, 50)
+	online_btn.add_theme_font_size_override("font_size", Settings.fs(17))
+	online_btn.pressed.connect(_on_online_pressed)
+	_apply_accent_style(online_btn, Color("1F4E79"), Color("2A6CA8"), Color("163A5C"))
+	box.add_child(online_btn)
+
 	var bottom := HBoxContainer.new()
 	bottom.alignment = BoxContainer.ALIGNMENT_CENTER
 	bottom.add_theme_constant_override("separation", 14)
@@ -131,7 +143,19 @@ func _build_ui() -> void:
 	bottom.add_child(quit_btn)
 
 	_build_help_overlay()
+	_build_online()
 	_sync_scroll_min()
+
+
+## Сетевое меню живёт поверх главного, а не отдельной сценой: возврат из
+## сетевого режима в меню не должен пересобирать список игроков и всю
+## разметку заново. Сцена — отдельная, экран — нет.
+func _build_online() -> void:
+	if online_lobby != null:
+		return
+	online_lobby = OnlineLobby.new()
+	online_lobby.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	add_child(online_lobby)
 
 func _make_option_row(label_text: String, names: PackedStringArray, current: int, handler: Callable) -> HBoxContainer:
 	var row := HBoxContainer.new()
@@ -302,3 +326,11 @@ func _on_start_pressed() -> void:
 	_sync_names_from_edits()
 	Settings.save_settings()
 	get_tree().change_scene_to_file("res://scenes/game.tscn")
+
+
+## Сетевое меню — последний ребёнок этого узла, поэтому рисуется поверх
+## главного и перехватывает щелчки: отдельную сцену заводить незачем.
+func _on_online_pressed() -> void:
+	_sync_names_from_edits()
+	Settings.save_settings()
+	(online_lobby as OnlineLobby).open()

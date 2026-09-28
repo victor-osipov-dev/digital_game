@@ -51,10 +51,33 @@ var _slot_hover_time: int = 0
 var _slot_hover_last: Vector2 = Vector2.ZERO
 var _slot_grace_until: int = 0
 
+# --- сетевой режим -------------------------------------------------------
+#
+# В сетевой игре экран устроен так же, но решения принимает сервер. Мест,
+# где клиент решает за него, тут ровно три: завершение хода, взятие из
+# колоды и пропуск. Перетаскивание фишек остаётся локальным — стол
+# переделывается у нас и уходит наверх одним куском.
+var _online: bool = false
+var _sending: bool = false
+var _wait_label: Label = null
+var _grace: float = 0.0
+var _paused: bool = false
+
 func _ready() -> void:
 	_build_ui()
 	resized.connect(_on_resized)
-	_new_match()
+	if Net.has_session() and Net.is_online():
+		_online = true
+		_net_begin()
+		Net.game_state.connect(_on_net_state)
+		Net.game_error.connect(_on_net_error)
+		Net.game_lost.connect(_on_net_lost)
+		Net.connection_changed.connect(_on_net_connection)
+		# Состояние уже могло прийти, пока сцена грузилась.
+		_apply_state(Net.pending_state(), 0.0, false)
+		_net_rejoin()
+	else:
+		_new_match()
 
 func _process(_delta: float) -> void:
 	if _drag_view != null and not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
@@ -229,6 +252,8 @@ func _build_ui() -> void:
 	toast_label.visible = false
 	add_child(toast_label)
 
+	_build_wait_label()
+
 	_build_pass_overlay()
 	_build_win_overlay()
 	_build_help_overlay()
@@ -249,9 +274,18 @@ func _build_ui() -> void:
 	menu_dialog.dialog_text = "Выйти в главное меню?"
 	menu_dialog.ok_button_text = "Выйти"
 	menu_dialog.get_cancel_button().text = "Отмена"
-	menu_dialog.confirmed.connect(func(): get_tree().change_scene_to_file("res://scenes/main_menu.tscn"))
+	menu_dialog.confirmed.connect(_on_leave_to_menu)
 	_style_dialog(menu_dialog)
 	add_child(menu_dialog)
+
+func _on_leave_to_menu() -> void:
+	# Из сетевой партии выход — это ещё и выход из комнаты на сервере.
+	# Молча уйти нельзя: комната останется висеть с нашим местом, и
+	# следующую партию сервер начнёт с нами же вместо нас новым.
+	if _online:
+		_net_unwatch()
+		Net.leave_room()
+	get_tree().change_scene_to_file("res://scenes/main_menu.tscn")
 
 func _style_dialog(dialog: ConfirmationDialog) -> void:
 	var lab := dialog.get_label()
@@ -338,6 +372,36 @@ func _build_pass_overlay() -> void:
 	pass_ready_button.pressed.connect(_on_pass_ready)
 	_apply_accent_style(pass_ready_button, Color("1565C0"), Color("1976D2"), Color("0D47A1"))
 	box.add_child(pass_ready_button)
+
+## Полоска статуса сетевой партии: чей ход, есть ли связь.
+##
+## Отдельная метка, а не тост, потому что показывает СОСТОЯНИЕ, которое
+## держится секундами и десятками секунд. Тост для этого не годится: он
+## исчезает, и через пару секунд игрок снова не понимает, почему стол не
+## реагирует на перетаскивание.
+func _build_wait_label() -> void:
+	_wait_label = Label.new()
+	_wait_label.anchor_left = 0.0
+	_wait_label.anchor_right = 1.0
+	_wait_label.anchor_top = 0.0
+	_wait_label.anchor_bottom = 0.0
+	_wait_label.offset_top = 84.0
+	_wait_label.offset_bottom = 116.0
+	_wait_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_wait_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_wait_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_wait_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_wait_label.add_theme_font_size_override("font_size", Settings.fs(15))
+	_wait_label.add_theme_color_override("font_color", Color("90CAF9"))
+	_wait_label.visible = false
+	add_child(_wait_label)
+
+
+func _show_wait(text: String) -> void:
+	if _wait_label == null:
+		return
+	_wait_label.text = text
+	_wait_label.visible = not text.is_empty()
 
 func _build_win_overlay() -> void:
 	win_overlay = ColorRect.new()
@@ -492,6 +556,9 @@ func _rebuild_ui() -> void:
 	var was_settings := settings_overlay != null and settings_overlay.visible
 	var pass_t := pass_title.text if pass_title != null else ""
 	var pass_n := pass_name.text if pass_name != null else ""
+	# Полоса сетевого статуса переживает пересборку интерфейса: иначе
+	# смена размера текста на секунду стёрла бы «нет связи».
+	var wait_t := _wait_label.text if _wait_label != null else ""
 	for child in get_children():
 		remove_child(child)
 		child.free()
@@ -499,6 +566,7 @@ func _rebuild_ui() -> void:
 	if state == null:
 		_new_match()
 		return
+	_show_wait(wait_t)
 	pass_overlay.visible = was_pass
 	win_overlay.visible = was_win
 	help_overlay.visible = was_help
@@ -577,6 +645,7 @@ func _make_settings_row(label_text: String, names: PackedStringArray, current: i
 # ---------------------------------------------------------------- match flow
 
 func _new_match() -> void:
+	_online = false
 	_bot_seq += 1
 	_bot_active = false
 	_hint_ids.clear()
@@ -584,10 +653,161 @@ func _new_match() -> void:
 	invalid_row_ids.clear()
 	win_overlay.visible = false
 	pass_overlay.visible = false
+	_show_wait("")
 	_show_pass(true)
 
 func _is_bot_turn() -> bool:
+	if _online:
+		return false
 	return state != null and Settings.is_bot(state.current)
+
+## Можно ли сейчас трогать стол. В сетевой игре — только на своём ходу и
+## не пока ждём ответа сервера: иначе можно было бы отправить второй ход
+## поверх первого, и они бы смешались.
+func _can_act() -> bool:
+	if state == null or state.finished or _bot_active or _is_bot_turn():
+		return false
+	if _online:
+		return state.my_turn() and not _sending
+	return true
+
+
+# ------------------------------------------------------------ сетевой режим
+
+## args у _send_and_wait — не украшение. Пока ждём ответа сервера, он
+## присылает новое состояние и подменяет state целиком. Значит ops для
+## set_table надо посчитать ДО отправки, из уже проверенного стола, а не
+## брать из state внутри замыкания — к тому моменту там уже другой ход.
+
+## Начало сетевой партии: прячем оверлеи одиночной игры.
+##
+## «Передайте устройство игроку» и «Готов(-а)» в сетевой игре неуместны:
+## у каждого игрока своё устройство, и «готов» означал бы ожидание
+## несуществующего действия.
+func _net_begin() -> void:
+	pass_overlay.visible = false
+	win_overlay.visible = false
+	_bot_seq += 1
+	_bot_active = false
+	_hint_ids.clear()
+
+
+func _net_unwatch() -> void:
+	if Net.game_state.is_connected(_on_net_state):
+		Net.game_state.disconnect(_on_net_state)
+	if Net.game_error.is_connected(_on_net_error):
+		Net.game_error.disconnect(_on_net_error)
+	if Net.game_lost.is_connected(_on_net_lost):
+		Net.game_lost.disconnect(_on_net_lost)
+	if Net.connection_changed.is_connected(_on_net_connection):
+		Net.connection_changed.disconnect(_on_net_connection)
+
+
+## Переспрашивает состояние после входа в сцену: пока грузились текстуры
+## и строились кнопки, сервер мог прислать ход соперника. Без этого
+## игрок увидел бы устаревший стол и «сходил» поверх чужого.
+func _net_rejoin() -> void:
+	_sending = true
+	var res := await Net.rejoin_game()
+	_sending = false
+	if String(res.get("t", "")) == NetProtocol.GAME_STATE:
+		return   # состояние придёт сигналом
+	toast(String(res.get("reason", "партия недоступна")), true)
+	_net_unwatch()
+	get_tree().change_scene_to_file("res://scenes/main_menu.tscn")
+
+
+func _on_net_state(view: Dictionary, grace: float, paused: bool) -> void:
+	_sending = false
+	_hint_ids.clear()
+	invalid_row_ids.clear()
+	_apply_state(view, grace, paused)
+	# Чужой ход — показываем, кто ходит. Наш собственный ход требует
+	# действия игрока, и подсказка с названием мешала бы.
+	if state != null and state.finished:
+		win_title.text = "Победитель - %s" % state.player_name(state.winner)
+		win_overlay.visible = true
+		_show_wait("")
+		refresh()
+		return
+	pass_overlay.visible = false
+	if state != null and not state.my_turn():
+		_show_turn_title()
+	_show_wait(_wait_text(grace, paused))
+	refresh()
+
+
+func _wait_text(grace: float, paused: bool) -> String:
+	if paused:
+		return "Игра на паузе: кто-то отвалился. Ждём возвращения."
+	if grace > 0.0:
+		return "Соперник не отвечает. Осталось ждать %d с." % int(ceil(grace))
+	return "Ход соперника"
+
+
+func _apply_state(view: Dictionary, grace: float, paused: bool) -> void:
+	if view.is_empty():
+		return
+	_grace = grace
+	_paused = paused
+	state = ViewBuilder.build(view)
+	_show_wait(_wait_text(grace, paused))
+
+
+func _on_net_error(reason: String, hard: bool, errors: Array) -> void:
+	_sending = false
+	invalid_row_ids.clear()
+	# state может быть ещё null: отказ приходит раньше первого game.state,
+	# если сервер отверг ход прямо после входа в партию.
+	for e in errors:
+		if state == null:
+			break
+		var idx := int(e.get("row", -1))
+		if idx >= 0 and idx < state.table.size():
+			invalid_row_ids.append((state.table[idx] as GameState.Row).id)
+	toast(reason, true)
+	# hard = сервер уже откатил наш стол и пришлёт game.state следом.
+	# Не откатываем сами: за нас это сделает серверное состояние, и два
+	# откатa подряд вернули бы игрока к несуществующему прошлому.
+	if not hard:
+		refresh()
+
+
+func _on_net_lost(reason: String) -> void:
+	_net_unwatch()
+	toast(reason, true)
+	await get_tree().create_timer(1.6).timeout
+	get_tree().change_scene_to_file("res://scenes/main_menu.tscn")
+
+
+func _on_net_connection(connected: bool, detail: String) -> void:
+	if connected:
+		_show_wait("")
+		return
+	# Связи нет — показываем это на экране, а не тостом: молчащий
+	# интерфейс во время сетевой партии выглядит как зависание.
+	_show_wait("Нет связи: %s" % detail)
+	refresh()
+
+
+## Отправляет готовый стол и ждёт вердикта. Сорванная связь тут же
+## возвращает управление: ждать бесконечно нельзя, партия может
+## продолжаться после переподключения.
+func _send_and_wait(send: Callable, args: Array = []) -> void:
+	if _sending:
+		return
+	_sending = true
+	_show_wait("Отправляем ход…")
+	refresh()
+	await send.callv(args)
+	_sending = false
+	if not Net.is_linked():
+		_show_wait("Нет связи с сервером")
+	elif state != null and state.my_turn() and not state.finished:
+		# Сервер ещё не ответил (или ответил отказом без своего состояния):
+		# управление возвращаем, иначе кнопки останутся мёртвыми навсегда.
+		_show_wait("")
+	refresh()
 
 func _show_pass(first: bool = false) -> void:
 	pass_overlay.visible = false
@@ -671,12 +891,15 @@ func _show_win() -> void:
 	win_overlay.visible = true
 
 func _on_deck_pressed() -> void:
-	if state == null or state.finished or _bot_active or _is_bot_turn():
+	if not _can_act():
 		return
 	draw_dialog.popup_centered()
 
 func _on_draw_confirmed() -> void:
 	_hint_ids.clear()
+	if _online:
+		await _send_and_wait(func(): Net.draw_from_deck())
+		return
 	var r := state.draw_from_deck()
 	if r.get("ok", false):
 		invalid_row_ids.clear()
@@ -686,7 +909,7 @@ func _on_draw_confirmed() -> void:
 		toast(String(r.get("reason", "")), true)
 
 func _on_main_pressed() -> void:
-	if state == null or state.finished or _bot_active:
+	if not _can_act():
 		return
 	if not state.turn_placed.is_empty():
 		_on_end_pressed()
@@ -697,6 +920,9 @@ func _on_main_pressed() -> void:
 
 func _on_end_pressed() -> void:
 	_hint_ids.clear()
+	if _online:
+		await _on_end_pressed_online()
+		return
 	var r := state.end_turn()
 	if r.get("ok", false):
 		invalid_row_ids.clear()
@@ -716,6 +942,9 @@ func _on_end_pressed() -> void:
 
 func _on_skip_pressed() -> void:
 	_hint_ids.clear()
+	if _online:
+		await _send_and_wait(func(): Net.skip_turn())
+		return
 	var r := state.skip_turn()
 	if r.get("ok", false):
 		invalid_row_ids.clear()
@@ -724,8 +953,38 @@ func _on_skip_pressed() -> void:
 	else:
 		toast(String(r.get("reason", "")), true)
 
+## Ход в сетевой игре.
+##
+## Сначала проверяем локально — чтобы ошибка («ряд из одной фишки»,
+## «не выложено ни одной») появилась мгновенно, не дожидаясь сети.
+## Проверка правил всё равно выполняется на сервере: клиентскую мы
+## показываем только ради скорости, а решение принимает сервер.
+##
+## Отправляем ГОТОВЫЙ СТОЛ целиком, а не «что я сделал». Тогда клиент не
+## может случайно выиграть, отправив серверу несуществующую операцию, а
+## серверу не нужно разбирать, что клиент имел в виду.
+func _on_end_pressed_online() -> void:
+	var check := state.check_turn()
+	if not bool(check.get("ok", false)):
+		invalid_row_ids.clear()
+		for e in check.get("errors", []):
+			var idx := int(e.get("row", -1))
+			if idx >= 0 and idx < state.table.size():
+				invalid_row_ids.append((state.table[idx] as GameState.Row).id)
+		toast(String(check.get("reason", "Ход нельзя завершить")), true)
+		refresh()
+		return
+	# Снимок стола берём ДО отправки: пока идёт запрос, сервер пришлёт
+	# своё состояние и подменит state, и взять ops из state уже нельзя.
+	var rows := state.set_table_ops()
+	await _send_and_wait(_send_table, [rows])
+
+
+func _send_table(rows: Array) -> void:
+	await Net.commit_table(rows)
+
 func _on_undo_pressed() -> void:
-	if state == null or state.finished or _bot_active:
+	if not _can_act():
 		return
 	if not state.turn_dirty:
 		toast("В этот ход ещё ничего не менялось", false)
@@ -737,7 +996,7 @@ func _on_undo_pressed() -> void:
 	toast("Стол и рука возвращены к началу хода", false)
 
 func _on_cp_save_pressed() -> void:
-	if state == null or state.finished or _bot_active:
+	if not _can_act():
 		return
 	if state.save_checkpoint():
 		toast("Расклад сохранён (чекпоинт)", false)
@@ -745,7 +1004,7 @@ func _on_cp_save_pressed() -> void:
 		toast("Сначала что-нибудь измените на столе", false)
 
 func _on_cp_restore_pressed() -> void:
-	if state == null or state.finished or _bot_active:
+	if not _can_act():
 		return
 	if state.restore_checkpoint():
 		_hint_ids.clear()
@@ -756,7 +1015,7 @@ func _on_cp_restore_pressed() -> void:
 		toast("Нет сохранённых раскладов", false)
 
 func _on_hint_pressed() -> void:
-	if state == null or state.finished or _bot_active or _is_bot_turn():
+	if not _can_act():
 		return
 	_hint_ids.clear()
 	var plan := TurnPlanner.plan(state, TurnPlanner.LEVEL_IMPOSSIBLE)
@@ -1060,6 +1319,13 @@ func _update_chips() -> void:
 		chip.add_theme_stylebox_override("panel", sb)
 		var lab := Label.new()
 		lab.text = "%s · %d" % [state.player_name(i), state.hand_size(i)]
+		# В сетевой игре показываем и наше место, и «мы тут» — иначе
+		# непонятно, чьи фишки лежат внизу. Отвалившегося помечаем
+		# отдельно: его место держится, но ходить он не может.
+		if _online and i == state.local_seat:
+			lab.text += " · вы"
+		if _online and not state.is_connected_player(i):
+			lab.text += " · нет связи"
 		lab.add_theme_font_size_override("font_size", Settings.fs(12))
 		lab.add_theme_color_override("font_color", Color(1, 1, 1, 0.95) if is_now else Color(1, 1, 1, 0.6))
 		chip.add_child(lab)
@@ -1071,7 +1337,7 @@ func _update_table() -> void:
 			table_box.remove_child(child)
 			child.free()
 	row_blocks.clear()
-	var draggable := not state.finished and not _is_bot_turn()
+	var draggable := _can_act()
 	for row in state.table:
 		var r := row as GameState.Row
 		if r == null or r.tiles.is_empty():
@@ -1090,31 +1356,37 @@ func _update_table() -> void:
 
 func _update_hand() -> void:
 	var bot_turn := _is_bot_turn()
-	hand_flow.set_tiles(state.hand(), "hand", 0, not state.finished and not bot_turn, bot_turn)
+	hand_flow.set_tiles(state.hand(), "hand", 0, _can_act(), bot_turn)
 
 func _update_buttons() -> void:
 	if state == null:
 		return
 	deck_button.text = "Колода\n%d" % state.tiles_left_in_deck()
 	var placed := not state.turn_placed.is_empty()
-	var bot := _bot_active or _is_bot_turn()
-	deck_button.disabled = state.finished or bot or not state.can_draw()
-	undo_button.disabled = state.finished or bot or not state.turn_dirty
-	cp_save_btn.disabled = state.finished or bot or not state.turn_dirty
-	cp_restore_btn.disabled = state.finished or bot or state.checkpoint_count() == 0
-	hint_btn.disabled = state.finished or bot
+	# В сетевой игре вместо бота — «не наш ход» и «ждём сервер». Разница
+	# видна только в подписях, а вот в кнопках она не нужна.
+	var busy := _bot_active or _is_bot_turn() or (_online and not state.my_turn())
+	var locked := state.finished or busy or (_online and _sending)
+	deck_button.disabled = locked or not state.can_draw()
+	undo_button.disabled = locked or not state.turn_dirty
+	cp_save_btn.disabled = locked or not state.turn_dirty
+	cp_restore_btn.disabled = locked or state.checkpoint_count() == 0
+	hint_btn.disabled = locked
 	if state.finished:
 		end_button.text = "Игра окончена"
 		end_button.disabled = true
+	elif _online and _sending:
+		end_button.text = "Ждём…"
+		end_button.disabled = true
 	elif placed:
 		end_button.text = "Продолжить"
-		end_button.disabled = bot
+		end_button.disabled = locked
 	elif state.tiles_left_in_deck() > 0:
 		end_button.text = "Взять"
-		end_button.disabled = bot or not state.can_draw()
+		end_button.disabled = locked or not state.can_draw()
 	else:
 		end_button.text = "Пропуск хода"
-		end_button.disabled = bot or not state.can_skip()
+		end_button.disabled = locked or not state.can_skip()
 
 func _update_hint_zone_size() -> void:
 	if hint_zone == null or table_scroll == null or table_box == null:
