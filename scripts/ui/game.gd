@@ -40,6 +40,7 @@ var draw_dialog: ConfirmationDialog = null
 var menu_dialog: ConfirmationDialog = null
 var toast_tween: Tween = null
 var title_tween: Tween = null
+var _again_btn: Button = null
 
 var _drag_view: TileView = null
 var _row_slots: Array = []
@@ -66,7 +67,11 @@ var _paused: bool = false
 func _ready() -> void:
 	_build_ui()
 	resized.connect(_on_resized)
-	if Net.has_session() and Net.is_online():
+	# Кто открыл сцену, тот и заказал режим: «Начать игру» — локально,
+	# вход/возврат в партию — по сети. Судить по «есть сессия и связь»
+	# нельзя: после мягкого выхода из онлайн-партии это всегда true, и
+	# «Начать игру» возвращало бы игрока в брошенную партию.
+	if Net.consume_game_intent():
 		_online = true
 		_net_begin()
 		Net.game_state.connect(_on_net_state)
@@ -113,7 +118,7 @@ func _build_ui() -> void:
 	layout.add_child(top)
 
 	deck_button = Button.new()
-	deck_button.custom_minimum_size = Vector2(92, 52)
+	deck_button.custom_minimum_size = Vector2(92, Settings.touch(52))
 	deck_button.add_theme_font_size_override("font_size", Settings.fs(14))
 	deck_button.pressed.connect(_on_deck_pressed)
 	var deck_sb := StyleBoxFlat.new()
@@ -153,7 +158,7 @@ func _build_ui() -> void:
 
 	var help_btn := Button.new()
 	help_btn.text = "?"
-	help_btn.custom_minimum_size = Vector2(44, 46)
+	help_btn.custom_minimum_size = Vector2(44, Settings.touch(46))
 	help_btn.add_theme_font_size_override("font_size", Settings.fs(20))
 	help_btn.pressed.connect(_open_help)
 	top.add_child(help_btn)
@@ -163,7 +168,7 @@ func _build_ui() -> void:
 
 	var menu_btn := Button.new()
 	menu_btn.text = "Меню"
-	menu_btn.custom_minimum_size = Vector2(68, 46)
+	menu_btn.custom_minimum_size = Vector2(68, Settings.touch(46))
 	menu_btn.add_theme_font_size_override("font_size", Settings.fs(14))
 	menu_btn.pressed.connect(func(): menu_dialog.popup_centered())
 	top.add_child(menu_btn)
@@ -224,7 +229,7 @@ func _build_ui() -> void:
 	undo_button = Button.new()
 	undo_button.text = "Отменить ход"
 	undo_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	undo_button.custom_minimum_size = Vector2(0, 52)
+	undo_button.custom_minimum_size = Vector2(0, Settings.touch(52))
 	undo_button.add_theme_font_size_override("font_size", Settings.fs(16))
 	undo_button.pressed.connect(_on_undo_pressed)
 	bottom.add_child(undo_button)
@@ -232,7 +237,7 @@ func _build_ui() -> void:
 	end_button = Button.new()
 	end_button.text = "Взять"
 	end_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	end_button.custom_minimum_size = Vector2(0, 52)
+	end_button.custom_minimum_size = Vector2(0, Settings.touch(52))
 	end_button.add_theme_font_size_override("font_size", Settings.fs(16))
 	end_button.pressed.connect(_on_main_pressed)
 	_apply_accent_style(end_button, Color("2E7D32"), Color("388E3C"), Color("1B5E20"))
@@ -279,30 +284,38 @@ func _build_ui() -> void:
 	add_child(menu_dialog)
 
 func _on_leave_to_menu() -> void:
-	# Из сетевой партии выход — это ещё и выход из комнаты на сервере.
-	# Молча уйти нельзя: комната останется висеть с нашим местом, и
-	# следующую партию сервер начнёт с нами же вместо нас новым.
+	# Из сетевой партии выход — это мягкий выход из комнаты на сервере:
+	# место и партия держатся за игроком, и главное меню предложит
+	# вернуться или покинуть комнату с концами. Полный выход — room.drop.
 	if _online:
 		_net_unwatch()
-		Net.leave_room()
+		if state != null and state.finished:
+			# Партия закончилась — возвращаться в неё нечего, «застрявшей»
+			# комнаты быть не должно: освобождаем место сразу.
+			Net.drop_room()
+		else:
+			Net.leave_room()
 	get_tree().change_scene_to_file("res://scenes/main_menu.tscn")
 
 func _style_dialog(dialog: ConfirmationDialog) -> void:
+	# Диалог с двумя выборами («Выйти»/«Отмена») при большом тексте не
+	# должен оставаться крошечным: окно раздвигаем, кнопки делаем высокими.
+	var maxw := int(minf(Settings.touch(420), get_viewport_rect().size.x * 0.9))
+	dialog.min_size = Vector2i(maxw, 0)
 	var lab := dialog.get_label()
 	if lab != null:
-		lab.add_theme_font_size_override("font_size", Settings.fs(16))
-	var ok_btn := dialog.get_ok_button()
-	if ok_btn != null:
-		ok_btn.add_theme_font_size_override("font_size", Settings.fs(15))
-	var cancel_btn := dialog.get_cancel_button()
-	if cancel_btn != null:
-		cancel_btn.add_theme_font_size_override("font_size", Settings.fs(15))
+		lab.add_theme_font_size_override("font_size", Settings.fs(17))
+		lab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	for b in [dialog.get_ok_button(), dialog.get_cancel_button()]:
+		if b != null:
+			b.add_theme_font_size_override("font_size", Settings.fs(16))
+			b.custom_minimum_size = Vector2(Settings.touch(120), Settings.touch(52))
 
 func _make_top_button(text_value: String, tip: String, handler: Callable) -> Button:
 	var btn := Button.new()
 	btn.text = text_value
 	btn.tooltip_text = tip
-	btn.custom_minimum_size = Vector2(60, 46)
+	btn.custom_minimum_size = Vector2(60, Settings.touch(46))
 	btn.add_theme_font_size_override("font_size", Settings.fs(13))
 	btn.pressed.connect(handler)
 	return btn
@@ -366,7 +379,7 @@ func _build_pass_overlay() -> void:
 
 	pass_ready_button = Button.new()
 	pass_ready_button.text = "Готов(-а)"
-	pass_ready_button.custom_minimum_size = Vector2(220, 60)
+	pass_ready_button.custom_minimum_size = Vector2(Settings.touch(220), Settings.touch(60))
 	pass_ready_button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	pass_ready_button.add_theme_font_size_override("font_size", Settings.fs(20))
 	pass_ready_button.pressed.connect(_on_pass_ready)
@@ -430,17 +443,18 @@ func _build_win_overlay() -> void:
 
 	var again_btn := Button.new()
 	again_btn.text = "Заново"
-	again_btn.custom_minimum_size = Vector2(180, 60)
+	again_btn.custom_minimum_size = Vector2(Settings.touch(180), Settings.touch(60))
 	again_btn.add_theme_font_size_override("font_size", Settings.fs(19))
 	again_btn.pressed.connect(_new_match)
 	_apply_accent_style(again_btn, Color("2E7D32"), Color("388E3C"), Color("1B5E20"))
 	btn_box.add_child(again_btn)
+	_again_btn = again_btn
 
 	var to_menu_btn := Button.new()
 	to_menu_btn.text = "В меню"
-	to_menu_btn.custom_minimum_size = Vector2(180, 60)
+	to_menu_btn.custom_minimum_size = Vector2(Settings.touch(180), Settings.touch(60))
 	to_menu_btn.add_theme_font_size_override("font_size", Settings.fs(19))
-	to_menu_btn.pressed.connect(func(): get_tree().change_scene_to_file("res://scenes/main_menu.tscn"))
+	to_menu_btn.pressed.connect(_on_leave_to_menu)
 	btn_box.add_child(to_menu_btn)
 
 func _build_help_overlay() -> void:
@@ -498,7 +512,7 @@ func _build_help_overlay() -> void:
 
 	var close_btn := Button.new()
 	close_btn.text = "Закрыть"
-	close_btn.custom_minimum_size = Vector2(200, 52)
+	close_btn.custom_minimum_size = Vector2(200, Settings.touch(52))
 	close_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	close_btn.add_theme_font_size_override("font_size", Settings.fs(17))
 	close_btn.pressed.connect(func(): help_overlay.visible = false)
@@ -617,7 +631,7 @@ func _build_settings_overlay() -> void:
 
 	var close_btn := Button.new()
 	close_btn.text = "Закрыть"
-	close_btn.custom_minimum_size = Vector2(200, 52)
+	close_btn.custom_minimum_size = Vector2(200, Settings.touch(52))
 	close_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	close_btn.add_theme_font_size_override("font_size", Settings.fs(17))
 	close_btn.pressed.connect(func(): settings_overlay.visible = false)
@@ -633,7 +647,7 @@ func _make_settings_row(label_text: String, names: PackedStringArray, current: i
 	row.add_child(lab)
 	var option := OptionButton.new()
 	option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	option.custom_minimum_size = Vector2(0, 42)
+	option.custom_minimum_size = Vector2(0, Settings.touch(42))
 	option.add_theme_font_size_override("font_size", Settings.fs(15))
 	for n in names:
 		option.add_item(n)
@@ -690,6 +704,12 @@ func _net_begin() -> void:
 	_bot_seq += 1
 	_bot_active = false
 	_hint_ids.clear()
+	# «Заново» на экране победы — это про локальную партию: сервер не умеет
+	# «сыграть ещё раз в той же комнате». В сетевой игре кнопка скрывается,
+	# иначе после конца партии она молча запускала локальную игру поверх
+	# живого места в комнате.
+	if _again_btn != null:
+		_again_btn.visible = false
 
 
 func _net_unwatch() -> void:
@@ -706,18 +726,31 @@ func _net_unwatch() -> void:
 ## Переспрашивает состояние после входа в сцену: пока грузились текстуры
 ## и строились кнопки, сервер мог прислать ход соперника. Без этого
 ## игрок увидел бы устаревший стол и «сходил» поверх чужого.
+##
+## Ответ реджойна приходит ЛИЧНО (с rid) и _dispatch его не видит —
+## «состояние придёт сигналом» неверно, применять его надо здесь.
 func _net_rejoin() -> void:
 	_sending = true
 	var res := await Net.rejoin_game()
 	_sending = false
 	if String(res.get("t", "")) == NetProtocol.GAME_STATE:
-		return   # состояние придёт сигналом
+		# Вернулись в партию: «застрявшей» комнаты больше нет.
+		Net.clear_pending_room()
+		_on_state_received(res.get("state", {}), float(res.get("grace", 0.0)),
+			bool(res.get("paused", false)))
+		return
+	# Партия не найдена (сервер перезапустили) либо место уже потеряно.
+	Net.clear_pending_room()
 	toast(String(res.get("reason", "партия недоступна")), true)
 	_net_unwatch()
 	get_tree().change_scene_to_file("res://scenes/main_menu.tscn")
 
 
 func _on_net_state(view: Dictionary, grace: float, paused: bool) -> void:
+	_on_state_received(view, grace, paused)
+
+
+func _on_state_received(view: Dictionary, grace: float, paused: bool) -> void:
 	_sending = false
 	_hint_ids.clear()
 	invalid_row_ids.clear()
@@ -740,6 +773,12 @@ func _on_net_state(view: Dictionary, grace: float, paused: bool) -> void:
 func _wait_text(grace: float, paused: bool) -> String:
 	if paused:
 		return "Игра на паузе: кто-то отвалился. Ждём возвращения."
+	if state != null and (state.finished or state.my_turn()):
+		# Наш ход (или партия кончилась) — «ход соперника» здесь врёт:
+		# чужая очередь показывается только когда ходит соперник. Иначе,
+		# едва ход вернулся к нам, надпись про «соперника» висела бы над
+		# нами же подсвеченной фишкой — наоборот.
+		return ""
 	if grace > 0.0:
 		return "Соперник не отвечает. Осталось ждать %d с." % int(ceil(grace))
 	return "Ход соперника"
@@ -783,6 +822,11 @@ func _on_net_lost(reason: String) -> void:
 func _on_net_connection(connected: bool, detail: String) -> void:
 	if connected:
 		_show_wait("")
+		# Связь восстановилась. Переспрашиваем партию целиком: за время
+		# обрыва соперник мог сходить. Вход в аккаунт больше НЕ возвращает
+		# игрока в партию рассылкой, поэтому здесь это делает сам клиент.
+		if _online and not _sending:
+			_net_rejoin()
 		return
 	# Связи нет — показываем это на экране, а не тостом: молчащий
 	# интерфейс во время сетевой партии выглядит как зависание.
@@ -799,10 +843,22 @@ func _send_and_wait(send: Callable, args: Array = []) -> void:
 	_sending = true
 	_show_wait("Отправляем ход…")
 	refresh()
-	await send.callv(args)
+	var res: Dictionary = await send.callv(args)
 	_sending = false
 	if not Net.is_linked():
 		_show_wait("Нет связи с сервером")
+	elif String(res.get("t", "")) == NetProtocol.GAME_STATE:
+		# Личный ответ сервера на наш ход и есть актуальное состояние
+		# партии: сходившему рассылку не дублируют, и, если ответ
+		# проигнорировать, собственный экран до чужого хода висел бы в
+		# устаревшем состоянии («я всё ещё хожу» — как после взятия
+		# карточки или передачи хода).
+		_on_state_received(res.get("state", {}), float(res.get("grace", 0.0)),
+			bool(res.get("paused", false)))
+	elif String(res.get("t", "")) == NetProtocol.GAME_ERROR:
+		# Отказ пришёл персонально нам: рассылки с ним нет, и молчание
+		# выглядело бы как зависание.
+		toast(String(res.get("reason", "Ход отклонён")), true)
 	elif state != null and state.my_turn() and not state.finished:
 		# Сервер ещё не ответил (или ответил отказом без своего состояния):
 		# управление возвращаем, иначе кнопки останутся мёртвыми навсегда.
@@ -980,8 +1036,8 @@ func _on_end_pressed_online() -> void:
 	await _send_and_wait(_send_table, [rows])
 
 
-func _send_table(rows: Array) -> void:
-	await Net.commit_table(rows)
+func _send_table(rows: Array) -> Dictionary:
+	return await Net.commit_table(rows)
 
 func _on_undo_pressed() -> void:
 	if not _can_act():
@@ -1324,6 +1380,10 @@ func _update_chips() -> void:
 		# отдельно: его место держится, но ходить он не может.
 		if _online and i == state.local_seat:
 			lab.text += " · вы"
+		# Слово «ходит» рядом с подсветкой: по одному цвету рамки в сетевой
+		# партии не понять, чья очередь, а текст читается сразу.
+		if is_now and not state.finished:
+			lab.text += " · ходит"
 		if _online and not state.is_connected_player(i):
 			lab.text += " · нет связи"
 		lab.add_theme_font_size_override("font_size", Settings.fs(12))

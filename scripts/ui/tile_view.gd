@@ -51,8 +51,10 @@ func _build() -> void:
 		sb.border_color = Color("FFFFFF")
 		sb.set_border_width_all(maxi(bw + 2, 5))
 	elif mark_last:
-		sb.border_color = Color("000000")
-		sb.set_border_width_all(maxi(bw + 1, 3))
+		# Фишки, добавленные в прошлый ход, — зелёным и жирно, чтобы
+		# было видно, куда ушли карты соперника.
+		sb.border_color = Color("43A047")
+		sb.set_border_width_all(maxi(bw + 3, 5))
 	else:
 		sb.border_color = Color(1, 1, 1, 0.35 if tile.is_joker else 0.18)
 		sb.set_border_width_all(maxi(bw, 2) if tile.is_joker else bw)

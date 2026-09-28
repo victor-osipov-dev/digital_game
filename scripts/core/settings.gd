@@ -4,8 +4,8 @@ const CFG_PATH := "user://settings.cfg"
 const MIN_PLAYERS := 2
 const MAX_PLAYERS := 5
 
-const TEXT_SCALES := [0.85, 1.0, 1.2]
-const TEXT_SCALE_NAMES := ["Маленький", "Средний", "Большой"]
+const TEXT_SCALES := [0.85, 1.0, 1.2, 1.45]
+const TEXT_SCALE_NAMES := ["Маленький", "Средний", "Большой", "Гигантский"]
 const TILE_WIDTHS := [32, 40, 48, 60, 66, 72]
 const TILE_SIZE_NAMES := ["Крошечный", "Маленький", "Средний", "Крупный", "Большой", "Максимум"]
 const BOT_LEVEL_NAMES := ["Лёгкий", "Средний", "Сложный", "Невозможный"]
@@ -20,10 +20,18 @@ var player_is_bot: Array = []
 
 func _ready() -> void:
 	load_settings()
+	if OS.get_name() == "Android":
+		DisplayServer.screen_set_orientation(DisplayServer.SCREEN_PORTRAIT)
 
 func fs(base: int) -> int:
 	var idx := clampi(text_scale, 0, TEXT_SCALES.size() - 1)
 	return maxi(1, int(round(base * TEXT_SCALES[idx])))
+
+## Размер интерактивного контроля (кнопки, поля ввода, переключатели).
+## Растёт вместе с выбранным размером текста, чтобы пальцем было легко:
+## большой шрифт бессмыслен, если кнопки по нему остались крошечными.
+func touch(base: int) -> int:
+	return fs(base)
 
 func tile_size() -> Vector2:
 	var idx := clampi(tile_step, 0, TILE_WIDTHS.size() - 1)

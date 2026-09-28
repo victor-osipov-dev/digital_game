@@ -40,6 +40,9 @@ signal servers_list(list: Array)
 signal rooms_list(rooms: Array, server: Dictionary)
 signal room_state(room: Dictionary)
 signal room_closed()
+# Комната, в которой игрок всё ещё числится (мягкий выход из партии или
+# вход в аккаунт при живом месте). Возврат — только явный, игрок решает.
+signal pending_room_changed(room: Dictionary)
 signal quick_state(queue: Dictionary)
 signal game_state(state: Dictionary, grace: float, paused: bool)
 ## Ход отклонён. hard = true означает «сервер уже откатил наш стол», и
@@ -60,6 +63,7 @@ var _session: Session = null
 var _user: Dictionary = {}
 var _catalog: Array = []
 var _last_state: Dictionary = {}
+var _pending_room: Dictionary = {}
 var _auto_reconnect := false
 var _retry_at_ms := 0
 var _retry_ms := 0
@@ -182,6 +186,49 @@ func pending_state() -> Dictionary:
 
 func in_game() -> bool:
 	return not _last_state.is_empty()
+
+## Комната, в которой игрок ещё числится: {code, state, ...} или {}.
+## Кладётся на мягком выходе из партии, на входе в аккаунт при живом
+## месте (auth.ok.room) и чистится, едва игрок вернулся в комнату или
+## партию либо покинул её с концами.
+func pending_room() -> Dictionary:
+	return _pending_room
+
+func clear_pending_room() -> void:
+	_set_pending_room({})
+
+## Пометить активную комнату как «застрявшую», чтобы главное меню и список
+## комнат предложили вернуться в неё или покинуть насовсем. Например, когда
+## игрок вышел из лобби комнаты в главное меню, не выходя из самой комнаты.
+func park_room(room: Dictionary) -> void:
+	_set_pending_room(room)
+
+func _set_pending_room(value: Dictionary) -> void:
+	var next: Dictionary = value.duplicate()
+	if _pending_room == next:
+		return
+	_pending_room = next
+	pending_room_changed.emit(_pending_room)
+
+
+var _game_intent_online := false
+
+
+## Заказ на следующий вход в сцену партии. Ставится тем, кто меняет сцену:
+## «Начать игру» на главном меню — локальная партия (false); вход в сетевую
+## партию или возврат в неё — true. Раньше сцена сама решала по «есть
+## сессия и связь», и после мягкого выхода из онлайн-партии кнопка
+## «Начать игру» утаскивала игрока обратно в брошенную партию вместо
+## локальной игры.
+func plan_game(online: bool) -> void:
+	_game_intent_online = online
+
+
+## Сцена партии читает заказ ровно один раз: что заказали, то и сыгралось.
+func consume_game_intent() -> bool:
+	var v := _game_intent_online
+	_game_intent_online = false
+	return v
 
 func has_session() -> bool:
 	return _session.is_valid()
@@ -314,6 +361,8 @@ func _dispatch(msg: Dictionary) -> void:
 		NetProtocol.HELLO:
 			_on_hello(msg)
 		NetProtocol.GAME_STATE:
+			# Партия активна/жива — «застрявшей комнаты» больше нет.
+			_set_pending_room({})
 			var view: Dictionary = msg.get("state", {})
 			if not view.is_empty():
 				# Копия нужна потому, что ниже отдаём наружу ссылку на общий
@@ -325,12 +374,11 @@ func _dispatch(msg: Dictionary) -> void:
 			game_error.emit(String(msg.get("reason", "ошибка")), bool(msg.get("hard", false)),
 				msg.get("errors", []))
 		NetProtocol.ROOM_STATE:
+			# Вернулись в комнату — «застрявшей» больше нет.
+			_set_pending_room({})
 			room_state.emit(msg.get("room", {}))
 		NetProtocol.ROOM_LEFT:
-			# Партия закончилась уходом: состояние больше не наше, иначе
-			# вернувшись в меню, сцена найдёт «свою» партию на чужом месте.
-			_last_state = {}
-			room_closed.emit()
+			_handle_room_left(msg)
 		NetProtocol.QUICK_STATE:
 			quick_state.emit(msg.get("queue", {}))
 		NetProtocol.TOAST:
@@ -345,6 +393,7 @@ func _on_hello(hello: Dictionary) -> void:
 	var tiles = hello.get("catalog", [])
 	if tiles is Array:
 		_catalog = tiles
+		ViewBuilder.set_catalog(tiles)
 	greeted.emit(hello)
 	if _session.is_valid():
 		# Молчаливый вход по сохранённому токену. Токен живой на любом
@@ -367,6 +416,9 @@ func _resume_silent() -> void:
 func _apply_auth(res: Dictionary) -> void:
 	_state = READY
 	_user = res.get("user", {})
+	# Вход мог подтвердить, что игрок ещё числится в комнате (auth.ok.room).
+	# Не возвращаем его туда сами — только показываем и ждём решения.
+	_set_pending_room(res.get("room", {}))
 	var token := String(res.get("token", ""))
 	if not token.is_empty():
 		_session.token = token
@@ -376,6 +428,17 @@ func _apply_auth(res: Dictionary) -> void:
 	_had_session = true
 	connection_changed.emit(true, server_label())
 	logged_in.emit(_user, String(res.get("notice", "")))
+
+
+## Ответ/рассылка об уходе из комнаты. Стрижёт всё, что с комнатой связано:
+## состояние партии не наше, а «застрявшая» комната — ровно то, что сервер
+## прислал в поле room (есть только у мягкого выхода из партии).
+func _handle_room_left(msg: Dictionary) -> void:
+	if String(msg.get("t", "")) != NetProtocol.ROOM_LEFT:
+		return
+	_last_state = {}
+	_set_pending_room(msg.get("room", {}))
+	room_closed.emit()
 
 
 func _resolve_waiter(rid: String, msg: Dictionary) -> void:
@@ -519,6 +582,7 @@ func logout() -> Dictionary:
 	_state = GREETED if _greeted else OFFLINE
 	_session.clear()
 	_had_session = false
+	_set_pending_room({})
 	logged_out.emit()
 	return res
 
@@ -567,7 +631,17 @@ func join_room(code: String, password: String) -> Dictionary:
 
 
 func leave_room() -> Dictionary:
-	return await request(NetProtocol.ROOM_LEAVE)
+	var res := await request(NetProtocol.ROOM_LEAVE)
+	_handle_room_left(res)
+	return res
+
+
+## Полный выход из комнаты: из лобби или из идущей партии место
+## освобождается сразу, и вернуть игрока в неё уже нельзя.
+func drop_room() -> Dictionary:
+	var res := await request(NetProtocol.ROOM_DROP)
+	_handle_room_left(res)
+	return res
 
 
 func start_room() -> Dictionary:

@@ -278,6 +278,19 @@ class Hub {
         if (!r.ok) { this.reply(ctx, { t: S2C.GAME_ERROR, reason: r.reason }, rid); break; }
         ctx.roomCode = null;
         ctx.seat = -1;
+        const out = { t: S2C.ROOM_LEFT, soft: !!r.soft };
+        // Мягкий выход из партии: место осталось, и клиент должен знать,
+        // в какой комнате его ещё ждут, чтобы предложить вернуться.
+        if (r.soft && r.room) out.room = views.roomSummary(r.room, r.seat);
+        this.reply(ctx, out, rid);
+        if (room) this.broadcastRoom(room, null);
+        break;
+      }
+      case C2S.ROOM_DROP: {
+        const room = this.rooms.roomOf(ctx.user);
+        this.rooms.leaveGame(ctx.user);
+        ctx.roomCode = null;
+        ctx.seat = -1;
         this.reply(ctx, { t: S2C.ROOM_LEFT }, rid);
         if (room) this.broadcastRoom(room, null);
         break;
@@ -332,7 +345,8 @@ class Hub {
         break;
       }
       case C2S.GAME_REJOIN: {
-        const r = this.rooms.onReconnect(ctx.user, ctx.socket);
+        const r = this.rooms.onReconnect(ctx.user, ctx.socket,
+          (room, seat, socket) => this.claimSeat(room, seat, socket));
         if (!r) { this.reply(ctx, { t: S2C.GAME_ERROR, reason: 'Партия не найдена' }, rid); break; }
         ctx.roomCode = r.room.code;
         ctx.seat = r.seat;
@@ -372,15 +386,18 @@ class Hub {
       login: r.account.login,
       nick: r.account.nick,
     };
-    // Застрявший в комнате на момент логина? Возвращаем в неё.
-    const back = this.rooms.onReconnect(ctx.user, ctx.socket,
-      (room, seat, socket) => this.claimSeat(room, seat, socket));
     const out = {
       t: S2C.AUTH_OK,
       token: r.token,
       user: this.accounts.publicView(r.account),
       server: this.selfPublic(),
     };
+    // Вход в аккаунт — не возврат в комнату: если игрок всё ещё числится
+    // в партии (мягкий выход / забытое место / живой старый сокет в лобби),
+    // сообщаем об этом в auth.ok.room, но сами его туда не тащим. Возврат —
+    // явное решение игрока: game.rejoin из партии или room.join из лобби.
+    const stuck = this.rooms.stuckRoom(ctx.user);
+    if (stuck) out.room = views.roomSummary(stuck.room, stuck.seat);
     // notice кладём только когда он есть. JSON null — это не «пустая
     // строка», и клиент на нём спотыкается: Dictionary.get('notice', '')
     // при ключе со значением null возвращает null, а не умолчание, и
@@ -389,11 +406,6 @@ class Hub {
     // незачем отправлять то, что читать нечем.
     if (notice) out.notice = notice;
     this.reply(ctx, out, rid);
-    if (back) {
-      ctx.roomCode = back.room.code;
-      ctx.seat = back.seat;
-      this.pushGameState(back.room, -1);
-    }
   }
 
   /**

@@ -35,6 +35,10 @@ var checkpoints: Array = []
 var _snap_table: Array = []
 var _snap_hand: Array = []
 var _next_row_id: int = 1
+# Максимальный id ряда, пришедшего с сервера. Всё, что локально больше —
+# ряд, созданный игроком на этом устройстве, и серверу его надо слать
+# новым (id=0), а не существующим (id>0).
+var _server_row_id_max: int = 0
 
 # --- сетевая партия ------------------------------------------------------
 #
@@ -137,6 +141,7 @@ func add_row() -> Row:
 ## который уже занят чужим рядом на столе.
 func reserve_row_ids(used: int) -> void:
 	_next_row_id = maxi(_next_row_id, used + 1)
+	_server_row_id_max = maxi(_server_row_id_max, used)
 
 func remove_row(row: Row) -> void:
 	table.erase(row)
@@ -304,7 +309,8 @@ func set_table_ops() -> Array:
 		var ids := PackedInt32Array()
 		for t in r.tiles:
 			ids.append((t as Tile).id)
-		rows.append({"id": r.id, "tiles": ids})
+		var id := r.id if r.id <= _server_row_id_max else 0
+		rows.append({"id": id, "tiles": ids})
 	return rows
 
 func table_status() -> Dictionary:

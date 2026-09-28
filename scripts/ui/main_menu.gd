@@ -9,6 +9,10 @@ var help_overlay: ColorRect = null
 var menu_scroll: ScrollContainer = null
 var menu_box: VBoxContainer = null
 var online_lobby: Control = null
+var _online_note: Label = null
+var _room_actions: HBoxContainer = null
+var _return_room_btn: Button = null
+var _drop_room_btn: Button = null
 
 func _sync_scroll_min() -> void:
 	if menu_scroll == null or menu_box == null:
@@ -17,9 +21,35 @@ func _sync_scroll_min() -> void:
 	var vp := get_viewport_rect().size
 	menu_scroll.custom_minimum_size = Vector2(c.x, minf(c.y, vp.y))
 
+
+# Сама механика (вернуться / покинуть с концами) — в онлайн-лобби. Здесь
+# напоминание про активную комнату и две явные кнопки: без них игроку,
+# вышедшему из партии или из лобби комнаты, некуда было бы ткнуться.
+func _refresh_online_note() -> void:
+	if _online_note == null:
+		return
+	var pending := Net.pending_room()
+	_sync_scroll_min()
+	if pending.is_empty():
+		_online_note.visible = false
+		_room_actions.visible = false
+		return
+	var playing := String(pending.get("state", "")) == "playing"
+	_online_note.text = "Вы всё ещё в комнате %s: %s." % [
+		String(pending.get("code", "?")),
+		"партия идёт" if playing else "игроки в сборе",
+	]
+	_online_note.visible = true
+	_room_actions.visible = true
+	_sync_scroll_min()
+
 func _ready() -> void:
 	_build_ui()
 	_rebuild_names()
+	# Напоминание «вы всё ещё в комнате» на самом главном экране: сигнал
+	# молчит при свежем входе, поэтому сразу читаем текущее состояние.
+	Net.pending_room_changed.connect(_refresh_online_note)
+	_refresh_online_note()
 
 func _build_ui() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -74,7 +104,7 @@ func _build_ui() -> void:
 	count_row.add_child(count_label)
 
 	count_option = OptionButton.new()
-	count_option.custom_minimum_size = Vector2(90, 44)
+	count_option.custom_minimum_size = Vector2(Settings.touch(110), Settings.touch(50))
 	count_option.add_theme_font_size_override("font_size", Settings.fs(17))
 	for n in range(Settings.MIN_PLAYERS, Settings.MAX_PLAYERS + 1):
 		count_option.add_item(str(n))
@@ -106,7 +136,7 @@ func _build_ui() -> void:
 
 	var start_btn := Button.new()
 	start_btn.text = "Начать игру"
-	start_btn.custom_minimum_size = Vector2(0, 58)
+	start_btn.custom_minimum_size = Vector2(0, Settings.touch(58))
 	start_btn.add_theme_font_size_override("font_size", Settings.fs(20))
 	start_btn.pressed.connect(_on_start_pressed)
 	_apply_accent_style(start_btn, Color("2E7D32"), Color("388E3C"), Color("1B5E20"))
@@ -117,11 +147,45 @@ func _build_ui() -> void:
 	# одним столом, не должен промахиваться мимо привычной кнопки.
 	var online_btn := Button.new()
 	online_btn.text = "Играть по сети"
-	online_btn.custom_minimum_size = Vector2(0, 50)
+	online_btn.custom_minimum_size = Vector2(0, Settings.touch(50))
 	online_btn.add_theme_font_size_override("font_size", Settings.fs(17))
 	online_btn.pressed.connect(_on_online_pressed)
 	_apply_accent_style(online_btn, Color("1F4E79"), Color("2A6CA8"), Color("163A5C"))
 	box.add_child(online_btn)
+
+	# Строка-напоминание, если игрок всё ещё числится в комнате (мягкий
+	# выход из партии или выход из лобби комнаты в меню).
+	_online_note = Label.new()
+	_online_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_online_note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_online_note.add_theme_font_size_override("font_size", Settings.fs(13))
+	_online_note.add_theme_color_override("font_color", Color("FFE0B2"))
+	_online_note.visible = false
+	box.add_child(_online_note)
+
+	# Явные кнопки «вернуться в игру» и «покинуть комнату насовсем»: они
+	# должны быть видны, пока игрок числится в комнате, и прятаться вместе
+	# с напоминанием, когда он вернулся или вышел с концами.
+	_room_actions = HBoxContainer.new()
+	_room_actions.alignment = BoxContainer.ALIGNMENT_CENTER
+	_room_actions.add_theme_constant_override("separation", 12)
+	_room_actions.visible = false
+	box.add_child(_room_actions)
+
+	_return_room_btn = Button.new()
+	_return_room_btn.text = "Вернуться в игру"
+	_return_room_btn.custom_minimum_size = Vector2(0, Settings.touch(46))
+	_return_room_btn.add_theme_font_size_override("font_size", Settings.fs(15))
+	_return_room_btn.pressed.connect(_on_return_room_pressed)
+	_apply_accent_style(_return_room_btn, Color("2E7D32"), Color("388E3C"), Color("1B5E20"))
+	_room_actions.add_child(_return_room_btn)
+
+	_drop_room_btn = Button.new()
+	_drop_room_btn.text = "Покинуть комнату"
+	_drop_room_btn.custom_minimum_size = Vector2(0, Settings.touch(46))
+	_drop_room_btn.add_theme_font_size_override("font_size", Settings.fs(15))
+	_drop_room_btn.pressed.connect(_on_drop_room_pressed)
+	_room_actions.add_child(_drop_room_btn)
 
 	var bottom := HBoxContainer.new()
 	bottom.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -130,14 +194,14 @@ func _build_ui() -> void:
 
 	var rules_btn := Button.new()
 	rules_btn.text = "Как играть"
-	rules_btn.custom_minimum_size = Vector2(200, 50)
+	rules_btn.custom_minimum_size = Vector2(200, Settings.touch(50))
 	rules_btn.add_theme_font_size_override("font_size", Settings.fs(16))
 	rules_btn.pressed.connect(func(): help_overlay.visible = true)
 	bottom.add_child(rules_btn)
 
 	var quit_btn := Button.new()
 	quit_btn.text = "Выход"
-	quit_btn.custom_minimum_size = Vector2(200, 50)
+	quit_btn.custom_minimum_size = Vector2(200, Settings.touch(50))
 	quit_btn.add_theme_font_size_override("font_size", Settings.fs(16))
 	quit_btn.pressed.connect(func(): get_tree().quit())
 	bottom.add_child(quit_btn)
@@ -167,7 +231,7 @@ func _make_option_row(label_text: String, names: PackedStringArray, current: int
 	row.add_child(lab)
 	var option := OptionButton.new()
 	option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	option.custom_minimum_size = Vector2(0, 42)
+	option.custom_minimum_size = Vector2(0, Settings.touch(42))
 	option.add_theme_font_size_override("font_size", Settings.fs(15))
 	for n in names:
 		option.add_item(n)
@@ -254,7 +318,7 @@ func _build_help_overlay() -> void:
 
 	var close_btn := Button.new()
 	close_btn.text = "Закрыть"
-	close_btn.custom_minimum_size = Vector2(200, 52)
+	close_btn.custom_minimum_size = Vector2(200, Settings.touch(52))
 	close_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	close_btn.add_theme_font_size_override("font_size", Settings.fs(17))
 	close_btn.pressed.connect(func(): help_overlay.visible = false)
@@ -277,6 +341,7 @@ func _rebuild_names() -> void:
 		edit.max_length = 16
 		edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		edit.add_theme_font_size_override("font_size", Settings.fs(16))
+		edit.custom_minimum_size = Vector2(0, Settings.touch(46))
 		row.add_child(edit)
 		name_edits.append(edit)
 
@@ -325,6 +390,11 @@ func _on_bot_level(index: int) -> void:
 func _on_start_pressed() -> void:
 	_sync_names_from_edits()
 	Settings.save_settings()
+	# Явный выбор одиночной партии: «застрявшая» комната и онлайн-сессия
+	# тут ни при чём. Без заказа сцена сама догадываться не должна —
+	# иначе «Начать игру» после мягкого выхода из онлайн-партии снова
+	# тащило бы нас в неё.
+	Net.plan_game(false)
 	get_tree().change_scene_to_file("res://scenes/game.tscn")
 
 
@@ -334,3 +404,18 @@ func _on_online_pressed() -> void:
 	_sync_names_from_edits()
 	Settings.save_settings()
 	(online_lobby as OnlineLobby).open()
+
+
+## «Вернуться в игру» на главном экране: партию дополучит сама сцена,
+## комнату покажет сетевой экран. Кнопка есть только пока pending не пуст.
+func _on_return_room_pressed() -> void:
+	_sync_names_from_edits()
+	Settings.save_settings()
+	(online_lobby as OnlineLobby).return_to_room()
+
+
+## «Покинуть комнату» на главном экране: полный выход, место освобождается.
+func _on_drop_room_pressed() -> void:
+	_sync_names_from_edits()
+	Settings.save_settings()
+	(online_lobby as OnlineLobby).drop_room_now()

@@ -214,7 +214,7 @@ func test_local_edits(data: Dictionary) -> void:
 	var rows := g.set_table_ops()
 	var found := false
 	for r in rows:
-		if int((r as Dictionary)["id"]) == row.id:
+		if int((r as Dictionary)["id"]) == 0:
 			found = _int_list((r as Dictionary)["tiles"]) == [tile.id]
 	ok("новый ряд поехал бы на сервер с id=0-ным", found)
 

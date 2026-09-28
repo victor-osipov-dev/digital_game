@@ -54,6 +54,19 @@ var _busy_flag := false
 var _started := false
 var _tick: Timer = null
 var _back_btn: Button = null
+var _stuck_box: PanelContainer = null
+var _stuck_label: Label = null
+
+# Комната, в которой мы сейчас сидим (страница лобби). Нужна, чтобы при
+# выходе из лобби в главное меню не потерять её: кнопки «вернуться» и
+# «покинуть насовсем» должны остаться доступными и там, и в списке комнат.
+var _current_room: Dictionary = {}
+# Код текущей комнаты отдельным полем: _current_room чистится, когда мы
+# уходим парковать комнату в главное меню, а код ещё понадобится, если
+# партия начнётся без нас — восстановить pending как «партия идёт».
+var _lobby_room_code := ""
+var _return_btn: Button = null
+var _drop_btn: Button = null
 # Все ли места заняты — по последнему снимку лобби. Кнопка «Начать»
 # опирается на это, а не пересчитывает сама: пересчёт в двух местах
 # разойдётся, и хост увидит доступную кнопку, которую сервер не примет.
@@ -88,6 +101,13 @@ func close() -> void:
 	if _started:
 		_started = false
 		Net.leave_room()
+		_current_room = {}
+	# Выходим из лобби комнаты в главное меню, саму комнату не покидая:
+	# место за нами сохраняется, и «вернуться»/«покинуть насовсем» должны
+	# ждать игрока и на главном экране, и в списке комнат.
+	elif not _current_room.is_empty():
+		Net.park_room(_current_room)
+		_current_room = {}
 	visible = false
 	_tick.stop()
 
@@ -131,12 +151,26 @@ func _on_net_room_state(room: Dictionary) -> void:
 
 func _on_net_room_left() -> void:
 	_started = false
+	_current_room = {}
+	_lobby_room_code = ""
 	if visible:
 		_goto_rooms()
 
 func _on_net_game_state(_view: Dictionary, _grace: float, _paused: bool) -> void:
-	# Партия началась — уходим в неё, сами её не рисуем.
+	# Партия началась — уходим в неё, сами её не рисуем. Сидим на странице
+	# комнат, а не в лобби комнаты? Тогда это не наша рассылка (мягко
+	# вышедшего игрока сервер из партии выписал, состояния ему не шлют).
+	if not _page_lobby.visible:
+		# Партия началась, пока мы в отрыве от лобби (главное меню после
+		# парковки комнаты). Рассылка GAME_STATE СБРАСЫВАЕТ pending, и без
+		# восстановления пропала бы и кнопка «вернуться», и баннер в списке
+		# комнат, хотя место в партии за нами ещё держится. Возвращаем
+		# pending как «партия идёт» — вернуться в неё всё ещё можно.
+		if not _lobby_room_code.is_empty():
+			Net.park_room({"code": _lobby_room_code, "state": "playing"})
+		return
 	_started = true
+	Net.plan_game(true)
 	get_tree().change_scene_to_file("res://scenes/game.tscn")
 
 
@@ -260,6 +294,7 @@ func _do_logout() -> void:
 func _goto_rooms() -> void:
 	_set_page(_page_rooms)
 	_update_status()
+	_refresh_stuck()
 	if _rooms.is_empty():
 		await _load_rooms()
 	else:
@@ -365,7 +400,7 @@ func _make_room_row(room: Dictionary) -> Control:
 
 	var join := Button.new()
 	join.text = "Войти"
-	join.custom_minimum_size = Vector2(84, 38)
+	join.custom_minimum_size = Vector2(Settings.touch(84), Settings.touch(38))
 	join.add_theme_font_size_override("font_size", Settings.fs(14))
 	join.pressed.connect(_do_join.bind(String(room.get("code", "")), String(room.get("server", ""))))
 	box.add_child(join)
@@ -494,6 +529,17 @@ func _create_require_30() -> bool:
 func _show_lobby(room: Dictionary) -> void:
 	if room.is_empty():
 		return
+	_current_room = room
+	_lobby_room_code = String(room.get("code", ""))
+	if visible:
+		# Мы смотрим на комнату — «застрявшей» больше нет, баннеру нечего
+		# показывать, а кнопки «вернуться» не нужны: мы уже внутри.
+		Net.clear_pending_room()
+	else:
+		# Комната обновилась, пока мы в отрыве (главное меню после парковки):
+		# обновляем parked-состояние, чтобы напоминания не врали и не гаснуть
+		# от ROOM_STATE, который сбрасывает pending.
+		Net.park_room(room)
 	_set_page(_page_lobby)
 	_lobby_code.text = "Комната %s" % String(room.get("code", "?"))
 	_lobby_seats.text = "%s · места: %d · первый ход: %s" % [
@@ -554,8 +600,13 @@ func _do_start() -> void:
 	var res := await Net.start_room()
 	_set_busy("")
 	if String(res.get("t", "")) == NetProtocol.GAME_STATE:
-		# Состояние партии уже пришло сигналом game_state, и _on_net_game_state
-		# перевёл нас в сцену партии. Показывать тут ошибку не на чем.
+		# Хосту сервер шлёт ЛИЧНЫЙ ответ с его рукой, но не рассылку
+		# (broadcastRoom исключает его место) — из-за этого _on_net_game_state
+		# у хоста не срабатывает, и без явного перехода хост застревал в
+		# лобби после нажатия «Начать партию». Сцену меняем здесь же.
+		_started = true
+		Net.plan_game(true)
+		get_tree().change_scene_to_file("res://scenes/game.tscn")
 		return
 	_set_note(_lobby_note, _reason(res, "Не удалось начать партию"), true)
 
@@ -563,6 +614,88 @@ func _do_start() -> void:
 func _do_leave_room() -> void:
 	await Net.leave_room()
 	_goto_rooms()
+
+
+# ----------------------------------------------------------------- возврат
+
+
+## Баннер «вы всё ещё в комнате». Показывается на странице комнат, когда
+## сервер сообщил, что игрок числится в комнате/партии (мягкий выход,
+## вход в аккаунт при живом месте), а сам возвращать его не стал.
+func _refresh_stuck() -> void:
+	if _stuck_box == null:
+		return
+	var pending := Net.pending_room()
+	if pending.is_empty():
+		_stuck_box.visible = false
+		return
+	var code := String(pending.get("code", "?"))
+	var playing := String(pending.get("state", "")) == "playing"
+	var where := "игроки в сборе"
+	if playing:
+		where = "партия идёт"
+	_stuck_label.text = "Вы всё ещё в комнате %s: %s. " % [code, where]
+	_stuck_label.text += "Вернитесь в неё или покиньте насовсем."
+	_return_btn.text = "Вернуться в партию" if playing else "Вернуться в комнату"
+	_stuck_box.visible = true
+	_update_buttons()
+
+
+## «Вернуться» с баннера. Для партии — просто открываем сцену: свежее
+## состояние она добудет сама (game.rejoin в _ready / после переподключения)
+## и почистит pending. Для лобби — обычный вход по коду комнаты.
+func _do_return_room() -> void:
+	var pending := Net.pending_room()
+	if String(pending.get("state", "")) == "playing":
+		if not Net.is_online():
+			# Без связи сцена партии в _ready ушла бы в локальную игру, а
+			# это не «вернуться в партию». Лучше честно сказать, что связи нет.
+			_set_note(_rooms_note, "Нет связи с сервером: вернуться в партию пока нельзя", true)
+			return
+		Net.plan_game(true)
+		get_tree().change_scene_to_file("res://scenes/game.tscn")
+		return
+	if not String(pending.get("code", "")).is_empty():
+		await _do_join(String(pending.get("code", "")), "")
+
+
+## «Покинуть комнату» с баннера: полный выход из лобби или партии, место
+## освобождается сразу, вернуть игрока в неё уже никто не сможет.
+## true, если комната покинута; false, если сервер отказал и причина
+## выведена в _rooms_note.
+func _do_drop_room() -> bool:
+	_set_busy("Покидаем комнату…")
+	var res := await Net.drop_room()
+	_set_busy("")
+	if String(res.get("t", "")) == NetProtocol.ROOM_LEFT:
+		return true
+	_set_note(_rooms_note, _reason(res, "Не удалось покинуть комнату"), true)
+	return false
+
+
+## Точка входа из главного меню: «Вернуться в игру». Для партии — просто
+## открываем сцену (состояние она добудет сама). Для комнаты — открываем
+## сетевой экран и заходим в комнату, чтобы игрок увидел, куда пришёл.
+func return_to_room() -> void:
+	var pending := Net.pending_room()
+	if String(pending.get("state", "")) == "playing":
+		if not Net.is_online():
+			# Без связи предупреждение должно быть видно: открываем сетевой
+			# экран, и _do_return_room скажет там, что вернуться пока нельзя.
+			open()
+		_do_return_room()
+		return
+	open()
+	_do_return_room()
+
+
+## Точка входа из главного меню: «Покинуть комнату» — полный выход, место
+## освобождается сразу, баннер и напоминание гаснут вместе с pending.
+## Неудачу (например, нет связи) показываем на видимом сетевом экране,
+## а не глотаем в скрытом.
+func drop_room_now() -> void:
+	if not await _do_drop_room():
+		open()
 
 
 # =============================================================== общие мелочи
@@ -620,6 +753,11 @@ func _update_buttons() -> void:
 	_join_btn.disabled = busy or not authed
 	_start_btn.disabled = busy or not authed or not _lobby_all_in
 	_leave_btn.disabled = busy or not authed
+	# Баннер «вы всё ещё в комнате»: кнопки живут, только когда есть что
+	# возвращать. Внутри запроса (busy) они гаснут вместе со всеми.
+	var stuck := not Net.pending_room().is_empty()
+	_return_btn.disabled = busy or not stuck
+	_drop_btn.disabled = busy or not stuck
 	_join_code.editable = authed and not busy
 	_join_pass.editable = authed and not busy
 
@@ -725,7 +863,7 @@ func _header(text: String, size: int = 17) -> Label:
 func _field(placeholder: String, secret := false) -> LineEdit:
 	var edit := LineEdit.new()
 	edit.placeholder_text = placeholder
-	edit.custom_minimum_size = Vector2(0, 44)
+	edit.custom_minimum_size = Vector2(0, Settings.touch(44))
 	edit.add_theme_font_size_override("font_size", Settings.fs(15))
 	edit.secret = secret
 	return edit
@@ -734,7 +872,7 @@ func _field(placeholder: String, secret := false) -> LineEdit:
 func _button(text: String, size: int = 15) -> Button:
 	var b := Button.new()
 	b.text = text
-	b.custom_minimum_size = Vector2(0, 48)
+	b.custom_minimum_size = Vector2(0, Settings.touch(48))
 	b.add_theme_font_size_override("font_size", Settings.fs(size))
 	return b
 
@@ -796,7 +934,7 @@ func _build() -> void:
 	head_space.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	head.add_child(head_space)
 	_back_btn = _button("Назад", 14)
-	_back_btn.custom_minimum_size = Vector2(110, 40)
+	_back_btn.custom_minimum_size = Vector2(Settings.touch(110), Settings.touch(40))
 	_back_btn.pressed.connect(close)
 	head.add_child(_back_btn)
 
@@ -831,12 +969,14 @@ func _build() -> void:
 	Net.room_state.connect(_on_net_room_state)
 	Net.room_closed.connect(_on_net_room_left)
 	Net.game_state.connect(_on_net_game_state)
+	Net.pending_room_changed.connect(_refresh_stuck)
 	_tick = Timer.new()
 	_tick.wait_time = HEALTH_TICK_S
 	_tick.autostart = false
 	_tick.timeout.connect(_on_tick)
 	add_child(_tick)
 	_set_page(_page_auth)
+	_refresh_stuck()
 	_update_buttons()
 
 
@@ -907,6 +1047,43 @@ func _build_rooms() -> VBoxContainer:
 	page.add_theme_constant_override("separation", 8)
 	page.visible = false
 
+	# --- «вы всё ещё в комнате»: мягко вышедшего из партии игрока сервер
+	# не возвращает сам, но и не выписывает молча — место держится за ним.
+	# Баннер показывает это прямо на странице комнат и отдаёт два выхода:
+	# вернуться или покинуть комнату с концами.
+	_stuck_box = PanelContainer.new()
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color("3E2723", 0.95)
+	sb.corner_radius_top_left = 8
+	sb.corner_radius_top_right = 8
+	sb.corner_radius_bottom_left = 8
+	sb.corner_radius_bottom_right = 8
+	sb.content_margin_left = 12
+	sb.content_margin_right = 12
+	sb.content_margin_top = 10
+	sb.content_margin_bottom = 10
+	_stuck_box.add_theme_stylebox_override("panel", sb)
+	_stuck_box.visible = false
+	page.add_child(_stuck_box)
+	var stuck_inner := VBoxContainer.new()
+	stuck_inner.add_theme_constant_override("separation", 6)
+	_stuck_box.add_child(stuck_inner)
+	_stuck_label = Label.new()
+	_stuck_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_stuck_label.add_theme_font_size_override("font_size", Settings.fs(15))
+	_stuck_label.add_theme_color_override("font_color", Color("FFE0B2"))
+	stuck_inner.add_child(_stuck_label)
+	var stuck_row := HBoxContainer.new()
+	stuck_row.add_theme_constant_override("separation", 8)
+	stuck_inner.add_child(stuck_row)
+	_return_btn = _button("Вернуться", 14)
+	_return_btn.pressed.connect(_do_return_room)
+	_apply_accent(_return_btn, Color("2E7D32"), Color("388E3C"), Color("1B5E20"))
+	stuck_row.add_child(_return_btn)
+	_drop_btn = _button("Покинуть комнату", 14)
+	_drop_btn.pressed.connect(_do_drop_room)
+	stuck_row.add_child(_drop_btn)
+
 	# --- создать
 	page.add_child(_header("Своя комната", 19))
 	page.add_child(_header("Сервер выбирается случайно, чтобы комнаты шли на обе машины", 12))
@@ -914,7 +1091,7 @@ func _build_rooms() -> VBoxContainer:
 	create_row.add_theme_constant_override("separation", 8)
 	page.add_child(create_row)
 	_seats_option = OptionButton.new()
-	_seats_option.custom_minimum_size = Vector2(110, 44)
+	_seats_option.custom_minimum_size = Vector2(Settings.touch(110), Settings.touch(44))
 	_seats_option.add_theme_font_size_override("font_size", Settings.fs(15))
 	for n in range(2, 6):
 		_seats_option.add_item("мест: %d" % n)
@@ -955,7 +1132,7 @@ func _build_rooms() -> VBoxContainer:
 	_rooms_note.add_theme_font_size_override("font_size", Settings.fs(13))
 	head.add_child(_rooms_note)
 	_refresh_btn = _button("Обновить", 13)
-	_refresh_btn.custom_minimum_size = Vector2(120, 40)
+	_refresh_btn.custom_minimum_size = Vector2(Settings.touch(120), Settings.touch(40))
 	_refresh_btn.pressed.connect(_refresh_rooms)
 	head.add_child(_refresh_btn)
 
@@ -989,7 +1166,7 @@ func _logout_row(page: VBoxContainer) -> void:
 	row.alignment = BoxContainer.ALIGNMENT_END
 	page.add_child(row)
 	var out := _button("Выйти из аккаунта", 13)
-	out.custom_minimum_size = Vector2(200, 40)
+	out.custom_minimum_size = Vector2(200, Settings.touch(40))
 	out.pressed.connect(_do_logout)
 	row.add_child(out)
 

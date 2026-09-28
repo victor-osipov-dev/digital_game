@@ -22,6 +22,7 @@ const ROOMS_LIST := "rooms.list"
 const ROOM_CREATE := "room.create"       # {seats, require30, name, password} -> room.state
 const ROOM_JOIN := "room.join"           # {code, password} -> room.state
 const ROOM_LEAVE := "room.leave"
+const ROOM_DROP := "room.drop"           # {} -> room.left (полный выход, место освобождается сразу)
 const ROOM_START := "room.start"         # -> game.state | game.error
 const ROOM_CHAT := "room.chat"           # зарезервировано
 
@@ -115,7 +116,7 @@ static func ok_types(command: String) -> PackedStringArray:
 			return PackedStringArray([GAME_STATE, GAME_ERROR])
 		ROOM_CREATE, ROOM_JOIN:
 			return PackedStringArray([ROOM_STATE, GAME_ERROR])
-		ROOM_LEAVE:
+		ROOM_LEAVE, ROOM_DROP:
 			return PackedStringArray([ROOM_LEFT, GAME_ERROR])
 		QUICK_JOIN, QUICK_LEAVE:
 			return PackedStringArray([QUICK_STATE, GAME_ERROR])

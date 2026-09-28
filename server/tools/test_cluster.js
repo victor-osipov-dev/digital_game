@@ -565,18 +565,26 @@ function planRowFromView(state, catalog) {
     assert.strictEqual(st.t, 'room.state', 'игрок выбит из комнаты наблюдателем');
   });
 
-  await test('переподключение в лобби возвращает игрока в комнату', async () => {
-    // Настоящий сценарий: сокет оборвался, игрок открыл новый и вернулся.
-    // Прежний сокет к этому моменту уже мёртв, но сервер всё равно обязан
-    // отдать место новому, а не выбить игрока на закрытии старого.
+  await test('вход не вытесняет игрока из лобби и не возвращает его сам', async () => {
+    // Вход в аккаунт больше НЕ перехватывает сокет и не тащит игрока в
+    // комнату: он лишь называет в auth.ok.room комнату, в которой игрок
+    // числится. Возврат — явный шаг игрока (room.join / game.rejoin), и
+    // именно возврат перепривязывает место и вытесняет старый сокет.
     const back = await new Client(PORT_A, 'carol-back').connect();
     const r = await back.rpc({ t: 'auth.login', login: 'carol', password: 'secret123' },
       ['auth.ok', 'auth.err']);
     assert.strictEqual(r.t, 'auth.ok', 'вход после обрыва не прошёл');
+    assert.ok(r.room && r.room.code === foreignRoomCode,
+      `auth.ok не сообщил о комнате игрока: ${JSON.stringify(r)}`);
+    // Прежний сокет жив и владеет местом: вход его не вытеснил.
     const st = await back.rpc({ t: 'rooms.list' }, 'rooms.list');
     assert.ok(st.rooms.some((x) => x.code === foreignRoomCode),
-      `комната ${foreignRoomCode} пропала при переподключении`);
-    // Прежний сокет вытеснен и закрыт — с ним больше не работают.
+      `комната ${foreignRoomCode} пропала при входе`);
+    // Явный возврат привязывает место к новому сокету и вытесняет старый.
+    const joined = await back.rpc({ t: 'room.join', code: foreignRoomCode },
+      ['room.state', 'game.error']);
+    assert.strictEqual(joined.t, 'room.state', 'явный возврат в комнату не прошёл');
+    // Прежний сокет после этого закрыт — с ним больше не работают.
     carol.close();
     open.splice(open.indexOf(carol), 1);
     await sleep(300);
@@ -828,6 +836,66 @@ function planRowFromView(state, catalog) {
     assert.strictEqual(r.t, 'game.state', JSON.stringify(r));
     assert.strictEqual(r.state.hand.length, before + 1, 'взятая фишка пришла в руку');
     if (r.state.you === 1) erinHandExpected = r.state.hand.length;
+  });
+
+  // ------------------------------------------------- выход из партии и возврат
+  section('Выход из партии и возврат');
+
+  // Отдельная комната под этот сценарий: мягкий выход ставит партию на
+  // паузу, и трогать рабочую пару carol/erin из предыдущих тестов нельзя.
+  const frank = await signedIn(PORT_A, 'frank', 'secret123', 'Франк', 'frank@A');
+  const gina = await signedIn(PORT_A, 'gina', 'secret123', 'Гина', 'gina@A');
+  let exitRoom = null;
+
+  await test('мягкий выход из идущей партии оставляет место за игроком', async () => {
+    const room = await frank.rpc({ t: 'room.create', seats: 2, require30: false, name: 'Выход' }, 'room.state');
+    exitRoom = room.room.code;
+    const join = await gina.rpc({ t: 'room.join', code: exitRoom }, ['room.state', 'game.error']);
+    assert.strictEqual(join.t, 'room.state', JSON.stringify(join));
+    const start = await frank.rpc({ t: 'room.start' }, ['game.state', 'game.error']);
+    assert.strictEqual(start.t, 'game.state', JSON.stringify(start));
+    // Мягкий выход: место остаётся, а ответ называет комнату, в которой
+    // игрока ждут (из неё клиент строит баннер «вы всё ещё в комнате»).
+    const leave = await gina.rpc({ t: 'room.leave' }, ['room.left', 'game.error']);
+    assert.strictEqual(leave.t, 'room.left', JSON.stringify(leave));
+    assert.ok(leave.room && leave.room.code === exitRoom && leave.room.state === 'playing',
+      `мягкий выход не сообщил, где игрока ждут: ${JSON.stringify(leave)}`);
+    assert.strictEqual(leave.soft, true, 'сервер должен отметить мягкий выход');
+  });
+
+  await test('вход в аккаунт не возвращает игрока в партию принудительно', async () => {
+    const back = await new Client(PORT_A, 'gina-back').connect();
+    const r = await back.rpc({ t: 'auth.login', login: 'gina', password: 'secret123' },
+      ['auth.ok', 'auth.err']);
+    assert.strictEqual(r.t, 'auth.ok', `вход после выхода не прошёл: ${JSON.stringify(r)}`);
+    // Комната названа в auth.ok — но только названа.
+    assert.ok(r.room && r.room.code === exitRoom && r.room.state === 'playing',
+      `вход не сообщил об идущей партии: ${JSON.stringify(r)}`);
+    // И никакой рассылки game.state прямо после входа: вернуть игрока в
+    // партию теперь можно только его явным решением.
+    await sleep(700);
+    const stray = back.queue.find((m) => m.t === 'game.state');
+    assert.strictEqual(stray, undefined,
+      `вход принудительно вернул игрока в партию: ${JSON.stringify(stray)}`);
+    // Явный возврат (game.rejoin) забирает место на себя и возвращает на поле.
+    const rejoin = await back.rpc({ t: 'game.rejoin' }, ['game.state', 'game.error']);
+    assert.strictEqual(rejoin.t, 'game.state', `ре-джойн не прошёл: ${JSON.stringify(rejoin)}`);
+    assert.strictEqual(rejoin.state.you, 1, 'гина вернулась на своё место');
+    // Дальше работаем с новым соединением (старое вытеснено и закрыто).
+    gina.ws = back.ws;
+    gina.label = 'gina';
+    gina.next = back.next.bind(back);
+    gina.send = back.send.bind(back);
+  });
+
+  await test('room.drop освобождает место с концами, партия закрывается', async () => {
+    // Полный выход: ответ без поля room (нечего вспоминать), место свободно.
+    const drop = await gina.rpc({ t: 'room.drop' }, ['room.left', 'game.error']);
+    assert.strictEqual(drop.t, 'room.left', JSON.stringify(drop));
+    assert.ok(!('room' in drop), 'полный выход не должен оставлять комнату ждущей');
+    // Партия из двух игроков без одного — закрывается, вернуться нельзя.
+    const rejoin = await frank.rpc({ t: 'game.rejoin' }, ['game.state', 'game.error']);
+    assert.strictEqual(rejoin.t, 'game.error', 'партию с одним игроком закрыли не сразу');
   });
 
   // ------------------------------------------------------------ секрет

@@ -31,6 +31,7 @@ const C2S = {
   ROOM_CREATE: 'room.create',     // {seats, require30, name, password} -> room.state
   ROOM_JOIN: 'room.join',         // {code, password} -> room.state
   ROOM_LEAVE: 'room.leave',       // {} -> room.left
+  ROOM_DROP: 'room.drop',         // {} -> room.left  (полный выход, место освобождается сразу)
   ROOM_START: 'room.start',       // {} -> room.state | game.state
   ROOM_CHAT: 'room.chat',         // {text} -> room.chat  (зарезервировано)
 

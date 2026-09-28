@@ -172,9 +172,20 @@ class Rooms {
     const seat = room.seatOfUser(user.id);
     if (seat === -1) { this.byUser.delete(user.id); return { ok: true, room, seat: -1 }; }
     if (room.state === 'playing') {
-      // Из партии не выходим молча — сначала считаем, что человек отвалился.
-      // Явный выход делает leaveGame (см. hub).
-      return { ok: false, reason: 'Сначала выйдите из партии' };
+      // Мягкий выход из партии. Место остаётся за игроком (и он числится
+      // в byUser): вход в аккаунт не должен принудительно возвращать его,
+      // но сам человек может вернуться — game.rejoin или room.join. Если
+      // не вернётся за grace, место уйдёт обычным expireDisconnects.
+      room.sockets.delete(seat);
+      const p = room.players[seat];
+      if (p) p.connected = false;
+      if (room.game) {
+        const gp = room.game.players[seat];
+        if (gp) gp.connected = false;
+      }
+      room.pauseFor(seat);
+      room.touch();
+      return { ok: true, room, seat, soft: true };
     }
     room.players[seat] = null;
     room.sockets.delete(seat);
@@ -426,13 +437,12 @@ class Rooms {
     return touched;
   }
 
-  /** Явный выход из партии. */
+  /** Явный ПОЛНЫЙ выход из комнаты: место освобождается сразу, в любом
+   *  состоянии (лобби или идущая партия). Мягкий выход — leaveRoom; сюда
+   *  ходят, когда игрок не хочет, чтобы его возвращали в комнату вообще. */
   leaveGame(user) {
     const room = this.roomOf(user);
     if (!room) return { ok: true, room: null };
-    if (room.state === 'lobby') {
-      return { ok: true, room, lobby: true };
-    }
     const seat = room.seatOfUser(user.id);
     if (seat >= 0) {
       room.sockets.delete(seat);
@@ -443,7 +453,19 @@ class Rooms {
     this.byUser.delete(user.id);
     this._dropFromQuick(user.id);
     this._cleanupRoom(room);
-    return { ok: true, room, lobby: false };
+    return { ok: true, room, lobby: room.state === 'lobby' };
+  }
+
+  /** Комната (лобби или партия), в которой игрок до сих пор числится, —
+   *  только для чтения. Возврата сюда НЕТ: вернуть игрока — его решение. */
+  stuckRoom(user) {
+    const code = this.byUser.get(user.id);
+    if (!code) return null;
+    const room = this.rooms.get(code);
+    if (!room) return null;
+    const seat = room.seatOfUser(user.id);
+    if (seat < 0) return null;
+    return { room, seat };
   }
 
   _cleanupRoom(room) {
