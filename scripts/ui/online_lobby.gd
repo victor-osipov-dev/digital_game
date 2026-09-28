@@ -94,8 +94,36 @@ func close() -> void:
 
 func _on_net_connection(connected: bool, detail: String) -> void:
 	_update_status()
-	if not connected and visible:
-		_set_note(_busy, "Нет связи с сервером: %s" % detail, true)
+	if not visible:
+		return
+	if connected:
+		# Связь восстановлена: прежнее «нет связи» должно уйти, иначе
+		# красная надпись переживёт удачный переподключительный сеанс.
+		# Занятую надпись трогать нельзя — она про другой запрос.
+		if not _busy_flag:
+			_set_note(_busy, "", false)
+		# Приветствие к этой точке уже пришло, если состояние живое, —
+		# пересчитываем кнопки, чтобы не оставить их серыми: они считаются
+		# один раз в _build, и между открытием сокета и hello флажок
+		# is_greeted() ещё ложный.
+		_update_buttons()
+		return
+	# connected == false значит не «связь оборвалась», а «связи пока
+	# нет»: так же помечает рукопожатие, когда сокет уже создан, но
+	# ещё не открыт. Красное «Нет связи» рядом с живым пингом того же
+	# сервера в списке выглядело как противоречие, поэтому обрывом
+	# считаем только настоящий OFFLINE, а is_online() — ровно та
+	# проверка, которая эти состояния различает (её же _on_tick
+	# использует, чтобы не пересоздавать сокет на ровном месте).
+	if Net.is_online():
+		return
+	_set_note(_busy, "Нет связи с сервером: %s" % detail, true)
+
+
+func _on_net_greeted(_hello: Dictionary) -> void:
+	# Кнопки входа считаются в _build, когда is_greeted() ещё false, и
+	# ждут именно этого сигнала, чтобы стать кликабельными.
+	_update_buttons()
 
 
 func _on_net_room_state(room: Dictionary) -> void:
@@ -127,6 +155,11 @@ func _enter() -> void:
 func _enter_auth() -> void:
 	_set_page(_page_auth)
 	_update_status()
+	_update_buttons()
+	# Надпись о связи сюда не переносится: на странице входа она была бы
+	# не к месту и залипала бы после успешного подключения, потому что
+	# чистится только вместе с busy-задачей.
+	_set_note(_busy, "", false)
 	_auth_note.text = ""
 	if _login_edit.text.is_empty():
 		_login_edit.text = Net.session_login()
@@ -160,6 +193,10 @@ func _do_connect() -> void:
 		if Net.is_logged_in():
 			_goto_rooms()
 			return
+		if Net.is_greeted():
+			# Сервер поздоровался, а сессии нет — нет смысла ждать
+			# остаток таймаута, вход уже возможен.
+			break
 		if not Net.is_online() and Net.has_session():
 			# Сокет упал, пока поднимался. Пробуем следующий сервер.
 			break
@@ -169,6 +206,7 @@ func _do_connect() -> void:
 	elif visible:
 		_enter_auth()
 		_update_status()
+		_update_buttons()
 
 
 # =============================================================== вход
@@ -200,8 +238,12 @@ func _do_register() -> void:
 
 
 func _after_auth(res: Dictionary, ok_text: String) -> void:
-	var kind := String(res.get("t", ""))
-	if kind == NetProtocol.AUTH_OK:
+	# Net.login/Net.register возвращают не сырое сообщение сервера, а
+	# единую обёртку: {ok:true, user} либо {ok:false, reason}. Проверка
+	# поля "t" тут не годится — его в обёртке нет, и успешный вход
+	# выглядел бы как отказ (в сессию вошли, а страницу комнат не
+	# показали, пока не переоткрыть экран).
+	if bool(res.get("ok", false)):
 		_auth_note.text = ok_text
 		_goto_rooms()
 		return
@@ -782,6 +824,10 @@ func _build() -> void:
 	root.add_child(_page_lobby)
 
 	Net.connection_changed.connect(_on_net_connection)
+	# Приветствие — момент, когда вход на сервере становится возможен:
+	# кнопки «Войти»/«Создать аккаунт» считаются один раз в _build, пока
+	# is_greeted() ещё false, и без подписки остаются серыми навсегда.
+	Net.greeted.connect(_on_net_greeted)
 	Net.room_state.connect(_on_net_room_state)
 	Net.room_closed.connect(_on_net_room_left)
 	Net.game_state.connect(_on_net_game_state)

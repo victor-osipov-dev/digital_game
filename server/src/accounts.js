@@ -164,12 +164,12 @@ class Accounts {
     if (!acc) {
       // Ровно столько работы, сколько при реальном логине, чтобы по
       // времени ответа нельзя было перебором отличить «нет логина»
-      // от «неверный пароль».
+      // от «неверный пароль» (текст ошибки при этом всё равно разный).
       hashPassword(String(password || ''));
-      return { ok: false, reason: 'Неверный логин или пароль' };
+      return { ok: false, reason: 'Логин не найден' };
     }
     if (!verifyPassword(String(password || ''), acc.pwd_hash)) {
-      return { ok: false, reason: 'Неверный логин или пароль' };
+      return { ok: false, reason: 'Неверный пароль' };
     }
     this.db.touchAccount(loginCi);
     return { ok: true, account: acc, token: this.issue(acc) };
