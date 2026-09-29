@@ -1007,7 +1007,7 @@ func _on_deck_pressed() -> void:
 func _on_draw_confirmed() -> void:
 	_hint_ids.clear()
 	if _online:
-		await _send_and_wait(func(): Net.draw_from_deck())
+		await _send_and_wait(func(): return await Net.draw_from_deck())
 		return
 	var r := state.draw_from_deck()
 	if r.get("ok", false):
@@ -1052,7 +1052,7 @@ func _on_end_pressed() -> void:
 func _on_skip_pressed() -> void:
 	_hint_ids.clear()
 	if _online:
-		await _send_and_wait(func(): Net.skip_turn())
+		await _send_and_wait(func(): return await Net.skip_turn())
 		return
 	var r := state.skip_turn()
 	if r.get("ok", false):
