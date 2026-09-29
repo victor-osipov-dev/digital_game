@@ -91,6 +91,7 @@ func _boot() -> void:
 			["OptionButton", "get_item_id"],
 			["OptionButton", "get_item_count"],
 			["OptionButton", "select"],
+			["OptionButton", "get_popup"],
 			["Timer", "set_wait_time"],
 			["Timer", "set_one_shot"],
 			["SceneTree", "create_timer"],
