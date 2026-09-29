@@ -21,7 +21,7 @@ var player_is_bot: Array = []
 func _ready() -> void:
 	load_settings()
 	if OS.get_name() == "Android":
-		DisplayServer.screen_set_orientation(DisplayServer.SCREEN_PORTRAIT)
+		DisplayServer.screen_set_orientation(DisplayServer.SCREEN_SENSOR)
 
 func fs(base: int) -> int:
 	var idx := clampi(text_scale, 0, TEXT_SCALES.size() - 1)

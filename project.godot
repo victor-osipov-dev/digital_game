@@ -13,9 +13,9 @@ config_version=5
 config/name="Digital Game"
 run/main_scene="res://scenes/main_menu.tscn"
 config/features=PackedStringArray("4.7", "GL Compatibility")
-config/icon="res://icon.svg"
-boot_splash/show_image=false
 boot_splash/bg_color=Color(0.05098, 0.06275, 0.0902, 1)
+boot_splash/show_image=false
+config/icon="res://icon.svg"
 
 [autoload]
 
@@ -28,7 +28,11 @@ window/size/viewport_width=576
 window/size/viewport_height=1024
 window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
-window/handheld/orientation=1
+window/handheld/orientation=6
+
+[editor]
+
+movie_writer/movie_file="C:/Users/victor/Desktop/Projects/godot/video.avi"
 
 [physics]
 
