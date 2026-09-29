@@ -127,6 +127,14 @@ func _on_net_connection(connected: bool, detail: String) -> void:
 		# один раз в _build, и между открытием сокета и hello флажок
 		# is_greeted() ещё ложный.
 		_update_buttons()
+		# Вход через reconnect уже случился и pending сверен с сервером
+		# (auth.ok.room). Если сервер больше не числит нас в комнате, а лобби
+		# всё ещё показывает комнату с прошлой жизни — комната закрылась,
+		# пока мы были офлайн, и держать её на экране нельзя: выход оттуда
+		# припарковал бы мёртвую комнату и повесил баннер «вы всё ещё в
+		# комнате», в которую не вернуться.
+		if not _current_room.is_empty():
+			_reconcile_room_after_reconnect()
 		return
 	# connected == false значит не «связь оборвалась», а «связи пока
 	# нет»: так же помечает рукопожатие, когда сокет уже создан, но
@@ -155,6 +163,22 @@ func _on_net_room_left() -> void:
 	_lobby_room_code = ""
 	if visible:
 		_goto_rooms()
+
+## Сличает комнату, которую показывает лобби, с серверной правдой после
+## переподключения. pending уже заполнен из auth.ok.room: пустой — комната
+## закрылась, пока нас не было (или владелец вышел), и место в ней больше
+## не держится. Возвращаемся в список и говорим об этом прямо, а не вешаем
+## баннер «вы всё ещё в комнате», в которую вернуться нельзя.
+func _reconcile_room_after_reconnect() -> void:
+	if not Net.pending_room().is_empty():
+		# Сервер подтвердил, что место за нами держится: лобби не врёт.
+		return
+	var code := String(_current_room.get("code", "?"))
+	_current_room = {}
+	_lobby_room_code = ""
+	if _page_lobby.visible:
+		_goto_rooms()
+		_set_note(_rooms_note, "Комната %s закрылась, пока вы были офлайн" % code, true)
 
 func _on_net_game_state(_view: Dictionary, _grace: float, _paused: bool) -> void:
 	# Партия началась — уходим в неё, сами её не рисуем. Сидим на странице
@@ -446,6 +470,11 @@ func _do_join(code: String, server_id: String) -> void:
 			# сервере, мы бы молча смотрели не на тот список комнат.
 			await _switch_to(home, "Возвращаемся")
 			break
+	var failed_code := String(res.get("reason", "")) == "Комната не найдена"
+	if failed_code and String(Net.pending_room().get("code", "")).to_upper() == code.to_upper():
+		# Возврат в комнату, которую сервер больше не знает: место за нами
+		# не держится, и напоминание «вы всё ещё в комнате» врало бы.
+		Net.clear_pending_room()
 	_set_note(_rooms_note, _reason(res, "Не удалось войти в комнату"), true)
 
 
