@@ -78,9 +78,11 @@ function main() {
     if (!made.ok) throw new Error(`createRoom: ${made.reason}`);
     const r = made.room;
     tryRooms.joinRoom(players[1], r.code, '');
-    tryRooms.joinRoom(players[2], r.code, '');
+    // Сокеты всем местам — до того, как третий игрок (заполнив комнату)
+    // запустит партию: на старте сервер пометил бы всем connected=false.
     markAllConnected(r);
-    if (!tryRooms.startGame(players[0]).ok) {
+    tryRooms.joinRoom(players[2], r.code, '');
+    if (r.state !== 'playing') {
       tryRooms.stop();
       continue;
     }

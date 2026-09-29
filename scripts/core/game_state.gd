@@ -8,6 +8,7 @@ class Player:
 	extends RefCounted
 	var pname: String = ""
 	var hand: Array = []
+	var is_bot: bool = false
 
 	func _init(p_name: String = "") -> void:
 		pname = p_name
@@ -94,6 +95,14 @@ func player_name(i: int) -> String:
 
 func current_player() -> Player:
 	return players[current] as Player
+
+## Сидит ли за местом серверный бот. В одиночной игре сообщество стоит
+## из ботов, но их в сети никто не видит — поэтому помогаем только для
+## сетевых партий с пометкой isBot от сервера.
+func is_bot_player(i: int) -> bool:
+	if local_seat < 0 or i < 0 or i >= players.size():
+		return false
+	return (players[i] as Player).is_bot
 
 func hand() -> Array:
 	return (players[hand_seat()] as Player).hand

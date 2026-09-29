@@ -79,7 +79,9 @@ static func build(view: Dictionary) -> GameState:
 		if not (raw is Dictionary):
 			continue
 		var d: Dictionary = raw
-		g.players.append(GameState.Player.new(String(d.get("nick", "?"))))
+		var player := GameState.Player.new(String(d.get("nick", "?")))
+		player.is_bot = bool(d.get("isBot", false))
+		g.players.append(player)
 		g.hand_count_override.append(maxi(0, int(d.get("handCount", 0))))
 		g.connected.append(bool(d.get("connected", true)))
 

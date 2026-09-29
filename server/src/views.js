@@ -14,6 +14,12 @@ function tileCatalog() {
 
 /** Представление комнаты для списка комнат. */
 function roomSummary(room, selfSeat) {
+  const players = room.players
+    .filter((p) => p !== null)
+    .map((p) => ({ nick: p.nick, connected: p.connected, isBot: !!p.isBot }));
+  // Занятость для списка — живыми людьми: бот-места и так видны отдельно,
+  // и «партия на 1/4 с ботами» не должна выглядеть как «ждём троих».
+  const humans = players.filter((p) => !p.isBot).length;
   return {
     code: room.code,
     name: room.name,
@@ -22,10 +28,9 @@ function roomSummary(room, selfSeat) {
     hasPassword: !!room.passwordHash,
     host: room.seats > 0 ? (room.players[0] ? room.players[0].nick : '?') : '?',
     state: room.state,
-    players: room.players
-      .filter((p) => p !== null)
-      .map((p) => ({ nick: p.nick, connected: p.connected })),
-    filled: room.players.filter((p) => p !== null).length,
+    players,
+    filled: humans,
+    bots: players.filter((p) => p.isBot).length,
   };
 }
 
@@ -87,6 +92,7 @@ function gameView(room, seat) {
       handCount: p.handIds.length,
       connected: p.connected,
       dropped: p.dropped,
+      isBot: !!p.isBot,
       isYou: p.seat === seat,
     })),
     // Стол публичен целиком

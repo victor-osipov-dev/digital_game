@@ -45,6 +45,7 @@ var _join_btn: Button = null
 var _lobby_code: Label = null
 var _lobby_seats: Label = null
 var _lobby_players: VBoxContainer = null
+var _auto_hint: Label = null
 var _start_btn: Button = null
 var _leave_btn: Button = null
 var _lobby_note: Label = null
@@ -71,6 +72,10 @@ var _drop_btn: Button = null
 # опирается на это, а не пересчитывает сама: пересчёт в двух местах
 # разойдётся, и хост увидит доступную кнопку, которую сервер не примет.
 var _lobby_all_in := false
+# Достаточно ли ЖИВЫХ ЛЮДЕЙ, чтобы партия могла начаться: двое и больше.
+# Боты доберутся сами как при заполнении, так и по таймеру автостарта,
+# поэтому кнопке «Начать» не нужна полная комната — нужны двое.
+var _lobby_ready := false
 
 # Как часто освежать «кто на связи», пока меню открыто. Реже, чем список
 # комнат: список — по кнопке, а вот «сервер жив» должно исправляться само,
@@ -410,6 +415,14 @@ func _make_room_row(room: Dictionary) -> Control:
 		String(room.get("name", "?")), filled, seats,
 		String(room.get("serverName", "?")),
 	]
+	# Идущую партию тоже показываем в списке: в неё можно войти вместо
+	# бота. Помечать надо явно — иначе по «N/M» человека примут её за
+	# лобби, где можно сесть на свободное место.
+	if String(room.get("state", "")) == "playing":
+		text += " · партия идёт"
+	var bots := int(room.get("bots", 0))
+	if bots > 0:
+		text += " · боты: %d" % bots
 	if bool(room.get("require30", true)):
 		text += " · от 30"
 	if bool(room.get("hasPassword", false)):
@@ -449,8 +462,7 @@ func _do_join(code: String, server_id: String) -> void:
 	_set_busy("Заходим в %s…" % code)
 	var res := await Net.join_room(code, _join_pass.text)
 	_set_busy("")
-	if String(res.get("t", "")) == NetProtocol.ROOM_STATE:
-		_show_lobby(res.get("room", {}))
+	if _enter_from_join(res):
 		return
 	# Вход по коду ничего не говорит о сервере, поэтому «не найдена» на
 	# текущем сервере — не ответ, а «ещё не смотрели». Обходим остальные
@@ -464,8 +476,7 @@ func _do_join(code: String, server_id: String) -> void:
 			if not await _switch_to(other_id, "Ищем комнату"):
 				return
 			var again := await Net.join_room(code, _join_pass.text)
-			if String(again.get("t", "")) == NetProtocol.ROOM_STATE:
-				_show_lobby(again.get("room", {}))
+			if _enter_from_join(again):
 				return
 			# Не нашли и здесь. Возвращаемся домой: оставшись на чужом
 			# сервере, мы бы молча смотрели не на тот список комнат.
@@ -477,6 +488,26 @@ func _do_join(code: String, server_id: String) -> void:
 		# не держится, и напоминание «вы всё ещё в комнате» врало бы.
 		Net.clear_pending_room()
 	_set_note(_rooms_note, _reason(res, "Не удалось войти в комнату"), true)
+
+
+## Разбор ответа на ROOM_JOIN: лобби комнаты или — если мы последним
+## заполнили комнату или вошли вместо бота — уже сама партия.
+## true, если ответ обработан.
+func _enter_from_join(res: Dictionary) -> bool:
+	match String(res.get("t", "")):
+		NetProtocol.ROOM_STATE:
+			_show_lobby(res.get("room", {}))
+			return true
+		NetProtocol.GAME_STATE:
+			# Вход в идущую/только что заполненную партию: сцену меняем
+			# сами (game.tscn в _ready добудет свежее состояние через
+			# game.rejoin) — рассылка GAME_STATE сюда не придёт, сервер
+			# исключает из неё наше место.
+			_started = true
+			Net.plan_game(true)
+			get_tree().change_scene_to_file("res://scenes/game.tscn")
+			return true
+	return false
 
 
 ## Подключается к серверу по id. false, если сервера больше нет в списке
@@ -611,13 +642,18 @@ func _show_lobby(room: Dictionary) -> void:
 	var is_host := bool(room.get("isHost", false))
 	var all_in := taken >= seats
 	_lobby_all_in = all_in
+	# Боты добирают пустые места сами (при заполнении или по таймеру
+	# автостарта), поэтому кнопке «Начать» вместе со всеми не нужен —
+	# нужны лишь двое живых.
+	_lobby_ready = taken >= 2
 	_start_btn.visible = is_host
-	_start_btn.disabled = not all_in
 	if is_host:
-		_start_btn.text = "Начать партию" if all_in \
+		_start_btn.text = "Начать партию" if _lobby_ready \
 			else "Ждём игроков (%d из %d)" % [taken, seats]
 	_update_buttons()
-	# Сервер всё равно не начнёт, пока не придут все и не все будут на
+	_auto_hint.text = "Игра начнётся сама при заполнении или примерно через минуту; " \
+		+ "свободные места займут боты."
+	# Сервер всё равно не начнёт, пока не придут двое и не все будут на
 	# связи, — но сказать об этом заранее честнее, чем ловить отказ.
 	_set_note(_lobby_note,
 		("Все на месте. %s" % ("Начинайте." if is_host else "Ждём, начнёт хост."))
@@ -782,7 +818,7 @@ func _update_buttons() -> void:
 	_create_btn.disabled = busy or not authed
 	_quick_btn.disabled = busy or not authed
 	_join_btn.disabled = busy or not authed
-	_start_btn.disabled = busy or not authed or not _lobby_all_in
+	_start_btn.disabled = busy or not authed or not _lobby_ready
 	_leave_btn.disabled = busy or not authed
 	# Баннер «вы всё ещё в комнате»: кнопки живут, только когда есть что
 	# возвращать. Внутри запроса (busy) они гаснут вместе со всеми.
@@ -1226,6 +1262,13 @@ func _build_lobby() -> VBoxContainer:
 	_lobby_players.custom_minimum_size = Vector2(0, 160)
 	_lobby_players.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	page.add_child(_lobby_players)
+
+	_auto_hint = Label.new()
+	_auto_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_auto_hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_auto_hint.add_theme_font_size_override("font_size", Settings.fs(12))
+	_auto_hint.add_theme_color_override("font_color", Color(1, 1, 1, 0.5))
+	page.add_child(_auto_hint)
 
 	_lobby_note = Label.new()
 	_lobby_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART

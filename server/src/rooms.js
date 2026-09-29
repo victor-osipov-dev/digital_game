@@ -38,6 +38,9 @@ class Room {
     this.paused = new Map();
     this.sockets = new Map(); // seat -> socket
     this.fromQuick = !!opts.fromQuick;
+    // Таймер «дозабрать пустые места ботами» (ставится в лобби, чистится
+    // при старте). Боты ходят по room._botTimer из хаба.
+    this.startTimer = null;
   }
 
   seatOfUser(userId) {
@@ -98,6 +101,9 @@ class Rooms {
   stop() {
     if (this.sweeper) clearInterval(this.sweeper);
     this.sweeper = null;
+    for (const room of this.rooms.values()) {
+      if (room.startTimer) { clearTimeout(room.startTimer); room.startTimer = null; }
+    }
   }
 
   // ------------------------------------------------------------ комнаты
@@ -130,16 +136,34 @@ class Rooms {
   joinRoom(user, code, password) {
     const room = this.rooms.get(String(code || '').toUpperCase());
     if (!room) return { ok: false, reason: 'Комната не найдена' };
-    if (room.state !== 'lobby') return { ok: false, reason: 'Партия уже началась' };
     if (room.passwordHash && !this._checkRoomPassword(room, password)) {
       return { ok: false, reason: 'Неверный пароль комнаты' };
     }
     const existing = room.seatOfUser(user.id);
-    if (existing !== -1) return { ok: true, room, seat: existing };
-    const seat = room.freeSeat();
+    if (existing !== -1) {
+      // Мягкий выход не отбирает место: вернувшемуся отдаём его же стул.
+      return { ok: true, room, seat: existing, playing: room.state === 'playing' };
+    }
+    if (room.state === 'playing') {
+      // В идущую партию можно войти на освободившееся место или взамен
+      // бота. Сервер сам заменяет бота человеком.
+      let seat = room.freeSeat();
+      if (seat === -1) {
+        const bots = this._botSeats(room);
+        if (bots.length === 0) return { ok: false, reason: 'В комнате нет свободных мест' };
+        seat = bots[0];
+      }
+      this._seatHumanIntoPlaying(room, user, seat);
+      return { ok: true, room, seat, playing: true };
+    }
+const seat = room.freeSeat();
     if (seat === -1) return { ok: false, reason: 'В комнате нет свободных мест' };
     this._seatPlayer(room, user, seat);
-    return { ok: true, room, seat };
+    if (room.isFull()) this._launchIfFull(room);
+    else this._armStart(room);
+    // Последним вошедшим заполнил комнату — она уже играет, и личным ответом
+    // хаб отдаст ему не лобби, а партию.
+    return { ok: true, room, seat, playing: room.state === 'playing' };
   }
 
   _checkRoomPassword(room, password) {
@@ -159,6 +183,7 @@ class Rooms {
       connected: false,
       joinedMs: Date.now(),
       wins: 0,
+      isBot: false,
     };
     this.byUser.set(user.id, room.code);
     room.touch();
@@ -203,11 +228,151 @@ class Rooms {
     }
   }
 
+  // ------------------------------------------------------------ боты и автостарт
+
+  /** Живые люди (боты в «занятости» не считаются). */
+  humanCount(room) {
+    let n = 0;
+    for (const p of room.players) if (p !== null && !p.isBot) n += 1;
+    return n;
+  }
+
+  _botSeats(room) {
+    const out = [];
+    for (let i = 0; i < room.seats; i += 1) {
+      if (room.players[i] && room.players[i].isBot) out.push(i);
+    }
+    return out;
+  }
+
+  _hasBotSeat(room) {
+    for (let i = 0; i < room.seats; i += 1) {
+      if (room.players[i] && room.players[i].isBot) return true;
+    }
+    return false;
+  }
+
+  /** Запись «За бота сидит бот» без привязки к аккаунту. */
+  _seatBotAt(room, seat) {
+    room.players[seat] = {
+      userId: null,
+      login: '',
+      nick: `Бот ${seat + 1}`,
+      connected: false,
+      joinedMs: Date.now(),
+      wins: 0,
+      isBot: true,
+    };
+  }
+
+  _fillBots(room) {
+    for (let i = 0; i < room.seats; i += 1) {
+      if (room.players[i] !== null) continue;
+      this._seatBotAt(room, i);
+    }
+  }
+
+  /**
+   * Человек занял место в идущей партии (пустое или бота). Перезаписываем
+   * обоих: и запись комнаты, и (через _seatHumanIntoPlaying) игрока партии.
+   */
+  _seatHumanIntoPlaying(room, user, seat) {
+    const wasBot = !!(room.players[seat] && room.players[seat].isBot);
+    this._seatPlayer(room, user, seat);
+    if (room.game && room.game.players[seat]) {
+      const gp = room.game.players[seat];
+      gp.name = user.nick;
+      gp.connected = false;
+      gp.dropped = false;
+      gp.isBot = false;
+    }
+    log.info(`комната ${room.code}: ${user.nick} вошёл в идущую партию (место ${seat}, было ботом: ${wasBot})`);
+  }
+
+  /**
+   * Место переходит боту: человек не вернулся за время ожидания. Место не
+   * освобождается (партия полна), аккаунт отвязывается от комнаты.
+   */
+  _botifySeat(room, seat) {
+    const p = room.players[seat];
+    if (p && p.userId !== null && p.userId !== undefined) this.byUser.delete(p.userId);
+    this._seatBotAt(room, seat);
+    if (room.game && room.game.players[seat] && !room.game.players[seat].dropped) {
+      const gp = room.game.players[seat];
+      gp.name = room.players[seat].nick;
+      gp.connected = false;
+      gp.dropped = false;
+      gp.isBot = true;
+      // Бот начинает ход с чистого стола: недоконченный черновик не его.
+      if (room.game.current === seat && room.game.turnPlacedIds.length > 0) {
+        room.game.rollback();
+      }
+    }
+    room.touch();
+  }
+
+  /**
+   * Поставить таймер «начать партию с ботами». Ставится только когда в лобби
+   * два и более живых игрока и комната ещё не заполнена; полная комната
+   * стартует сразу через _launchIfFull.
+   */
+  _armStart(room) {
+    if (room.state !== 'lobby') return;
+    if (this.humanCount(room) < 2) return;
+    if (room.startTimer) return;
+    room.startTimer = setTimeout(() => {
+      room.startTimer = null;
+      this._launchGame(room);
+    }, config.botFillWaitMs);
+    if (room.startTimer.unref) room.startTimer.unref();
+  }
+
+  _launchIfFull(room) {
+    if (room.state !== 'lobby') return;
+    if (room.filled() < room.seats) return;
+    if (this.humanCount(room) < 2) return;
+    this._launchGame(room);
+  }
+
+  /**
+   * Общий путь старта: из таймера, из заполнения, из startGame, из быстрой
+   * очереди. Добирает пустые места ботами, создаёт партию и зовёт onPlay —
+   * хаб на нём рассылает состояние и запускает ботов.
+   */
+  _launchGame(room) {
+    if (room.state !== 'lobby') return { ok: false, reason: 'Партия уже началась' };
+    // Таймер мог сработать после удаления комнаты (sweep/выход) — не стартуем.
+    if (this.rooms.get(room.code) !== room) return { ok: false, reason: 'Комнаты больше нет' };
+    const humans = this.humanCount(room);
+    if (humans < 2) return { ok: false, reason: 'Нужно минимум 2 игрока' };
+    if (room.startTimer) { clearTimeout(room.startTimer); room.startTimer = null; }
+    this._fillBots(room);
+    const names = room.players.map((p) => (p ? p.nick : '?'));
+    room.game = GameState.create(room.seats, names, room.require30);
+    for (let i = 0; i < room.seats; i += 1) {
+      const gp = room.game.players[i];
+      const p = room.players[i];
+      gp.connected = !!(room.sockets.has(i)) && !p.isBot;
+      gp.isBot = !!p.isBot;
+    }
+    room.state = 'playing';
+    room.paused.clear();
+    room.touch();
+    log.info(`комната ${room.code}: партия началась (людей ${humans} из ${room.seats} мест, ботов добираем)`);
+    if (typeof this.onPlay === 'function') this.onPlay(room);
+    return { ok: true, room };
+  }
+
   listRooms() {
     const out = [];
     for (const room of this.rooms.values()) {
-      if (room.state !== 'lobby') continue;
-      if (room.isFull()) continue;
+      if (room.state === 'lobby') {
+        if (room.isFull()) continue;
+      } else if (room.state !== 'playing' || !this._hasBotSeat(room)) {
+        // Идущую партию без свободных бот-мест в список не показываем: туда
+        // уже никто не войдёт.
+        continue;
+      }
       out.push(views.roomSummary(room, -1));
     }
     out.sort((a, b) => (a.filled / a.seats) - (b.filled / b.seats));
@@ -228,29 +393,12 @@ class Rooms {
     const seat = room.seatOfUser(user.id);
     if (seat !== room.hostSeat) return { ok: false, reason: 'Начинает хост комнаты' };
     if (room.state !== 'lobby') return { ok: false, reason: 'Партия уже идёт' };
-    if (room.filled() < 2) {
-      return { ok: false, reason: `Нужно минимум 2 игрока, сейчас ${room.filled()}` };
+    if (this.humanCount(room) < 2) {
+      return { ok: false, reason: `Нужно минимум 2 игрока, сейчас ${this.humanCount(room)}` };
     }
-    // Решили ждать заполнения ВСЕХ мест, а не играть «сколько пришло».
-    if (room.filled() < room.seats) {
-      return {
-        ok: false,
-        reason: `Занято ${room.filled()} из ${room.seats}. Дождитесь всех игроков или освободите место.`,
-      };
-    }
-    if (!room.allConnected()) {
-      return { ok: false, reason: 'Не все игроки на связи' };
-    }
-    const names = room.players.map((p) => (p ? p.nick : '?'));
-    room.game = GameState.create(room.seats, names, room.require30);
-    for (let i = 0; i < room.seats; i += 1) {
-      room.game.players[i].connected = !!(room.sockets.has(i));
-    }
-    room.state = 'playing';
-    room.paused.clear();
-    room.touch();
-    log.info(`комната ${room.code}: партия началась (${room.seats} игроков)`);
-    return { ok: true, room, seat };
+    // Раньше ждали заполнения ВСЕХ мест и всех на связи. Теперь пустые места
+    // на старте занимают боты, а таймер автостарта их доберёт и без кнопки.
+    return this._launchGame(room);
   }
 
   // ------------------------------------------------------------ ходы партии
@@ -420,7 +568,7 @@ class Rooms {
     return { room, seat };
   }
 
-  /** Время ожидания переподключения вышло — игрок выбывает из партии. */
+  /** Время ожидания переподключения вышло — место занимает бот. */
   expireDisconnects() {
     const now = Date.now();
     const touched = [];
@@ -429,8 +577,8 @@ class Rooms {
       for (const [seat, d] of Array.from(room.paused.entries())) {
         if (d.deadline > now) continue;
         room.paused.delete(seat);
-        if (room.game) room.game.dropPlayer(seat);
-        log.info(`комната ${room.code}: место ${seat} потеряно, игрок не вернулся`);
+        this._botifySeat(room, seat);
+        log.info(`комната ${room.code}: место ${seat} занято ботом (игрок не вернулся)`);
         touched.push(room);
       }
     }

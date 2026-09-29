@@ -107,6 +107,7 @@ class GameState {
         handIds: [],
         connected: false,
         dropped: false,
+        isBot: false,
       });
     }
     st.deck = new Deck(rng);

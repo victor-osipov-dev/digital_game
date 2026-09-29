@@ -95,6 +95,15 @@ const config = {
   pingIntervalMs: int('DG_PING_INTERVAL_MS', 25000),
   pongTimeoutMs: int('DG_PONG_TIMEOUT_MS', 20000),
 
+  // --- автостарт и боты ------------------------------------------------
+  // Лобби с людьми ждёт пустые места это время, а потом добирает их ботами.
+  botFillWaitMs: int('DG_BOT_FILL_WAIT_MS', 60000),
+  // Знакомый минимум «думать» боту, чтобы ход читался как человеческий.
+  botTurnDelayMs: int('DG_BOT_TURN_DELAY_MS', 1400),
+  // Случайная добавка к задержке: один и тот же ход не должен выглядеть как
+  // бенчмарк. Держим в пределах комфорта (иначе партия застрянет у бота).
+  botTurnJitterMs: int('DG_BOT_TURN_JITTER_MS', 1000),
+
   // Прочее
   protocolVersion: int('DG_PROTOCOL_VERSION', 1),
   logLevel: str('DG_LOG_LEVEL', 'info'),

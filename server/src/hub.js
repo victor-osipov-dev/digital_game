@@ -5,6 +5,7 @@ const { config } = require('./config');
 const log = require('./log');
 const { C2S, S2C, RID_FIELD, MAX_MESSAGE_BYTES } = require('./protocol');
 const views = require('./views');
+const { planGame } = require('./engine/bot');
 
 /**
  * Что может соединение-наблюдатель (lobby.open).
@@ -33,7 +34,7 @@ class Hub {
     this.wss = null;
     this.clock = setInterval(() => this.tick(), config.pingIntervalMs);
     if (this.clock.unref) this.clock.unref();
-    this.drain = setInterval(() => this.rooms.expireDisconnects(), 5000);
+    this.drain = setInterval(() => this.drainExpired(), 5000);
     if (this.drain.unref) this.drain.unref();
   }
 
@@ -47,6 +48,9 @@ class Hub {
     if (this.clock) clearInterval(this.clock);
     if (this.drain) clearInterval(this.drain);
     if (this.wss) this.wss.close();
+    for (const room of this.rooms.rooms.values()) {
+      if (room._botTimer) { clearTimeout(room._botTimer); room._botTimer = null; }
+    }
   }
 
   // ------------------------------------------------------------ сокеты
@@ -268,8 +272,16 @@ class Hub {
         const r = this.rooms.joinRoom(ctx.user, msg.code, msg.password);
         if (!r.ok) { this.reply(ctx, { t: S2C.GAME_ERROR, reason: r.reason }, rid); break; }
         this.attachSeat(ctx, r.room, r.seat);
-        this.reply(ctx, { t: S2C.ROOM_STATE, room: views.fullLobbyView(r.room, r.seat) }, rid);
+        if (r.playing) {
+          // Вход в идущую партию: личным ответом уходит уже само состояние
+          // партии (с рукой этого игрока), а не лобби. Иначе клиент показал
+          // бы лобби и потребовал бы «нажать старт» в идущей игре.
+          this.pushGameState(r.room, r.seat, rid);
+        } else {
+          this.reply(ctx, { t: S2C.ROOM_STATE, room: views.fullLobbyView(r.room, r.seat) }, rid);
+        }
         this.broadcastRoom(r.room, r.seat);
+        this.maybeRunBots(r.room);
         break;
       }
       case C2S.ROOM_LEAVE: {
@@ -283,7 +295,10 @@ class Hub {
         // в какой комнате его ещё ждут, чтобы предложить вернуться.
         if (r.soft && r.room) out.room = views.roomSummary(r.room, r.seat);
         this.reply(ctx, out, rid);
-        if (room) this.broadcastRoom(room, null);
+        if (room) {
+          this.broadcastRoom(room, null);
+          this.maybeRunBots(room);
+        }
         break;
       }
       case C2S.ROOM_DROP: {
@@ -292,15 +307,19 @@ class Hub {
         ctx.roomCode = null;
         ctx.seat = -1;
         this.reply(ctx, { t: S2C.ROOM_LEFT }, rid);
-        if (room) this.broadcastRoom(room, null);
+        if (room) {
+          this.broadcastRoom(room, null);
+          this.maybeRunBots(room);
+        }
         break;
       }
       case C2S.ROOM_START: {
         const r = this.rooms.startGame(ctx.user);
         if (!r.ok) { this.reply(ctx, { t: S2C.GAME_ERROR, reason: r.reason }, rid); break; }
-        // Хосту — личный ответ с его рукой, остальным — рассылка.
+        // Старт сам вызывает rooms.onPlay → hub.onRoomPlay, который рассылает
+        // состояние всем участникам. Здесь хозяину — только личный ответ
+        // (тот же GAME_STATE, но с rid, чтобы клиент закрыл свой запрос).
         this.pushGameState(r.room, r.seat, rid);
-        this.broadcastRoom(r.room, r.seat);
         break;
       }
 
@@ -352,6 +371,7 @@ class Hub {
         ctx.seat = r.seat;
         this.pushGameState(r.room, r.seat, rid);
         this.broadcastRoom(r.room, r.seat);
+        this.maybeRunBots(r.room);
         break;
       }
 
@@ -420,6 +440,9 @@ class Hub {
     room.clearPause(seat);
     const p = room.players[seat];
     if (p) p.connected = true;
+    if (room.game && room.game.players[seat] && !room.game.players[seat].isBot) {
+      room.game.players[seat].connected = true;
+    }
     room.touch();
   }
 
@@ -454,6 +477,103 @@ class Hub {
     if (room.state === 'playing' && room.game.finished) {
       const w = room.game.players[room.game.winner];
       log.info(`комната ${room.code}: победа ${w ? w.name : '?'}`);
+    }
+    this.maybeRunBots(room);
+  }
+
+  // ------------------------------------------------------------ боты
+
+  /**
+   * Начало партии добралось до хаба: комната собрана людьми и ботами.
+   * Это единственное место, откуда идёт рассылка старта, поэтому и
+   * кнопка «начать», и автостарт по таймеру дают ровно одно событие.
+   */
+  onRoomPlay(room) {
+    this.broadcastRoom(room, null);
+    this.maybeRunBots(room);
+  }
+
+  /**
+   * Если ход за ботом — запланировать его ход. Дубли в очереди гасим
+   * флагом room._botTimer; паузу (ждём переподключение человека) пропускаем.
+   */
+  maybeRunBots(room) {
+    if (!room) return;
+    if (room.state !== 'playing' || !room.game || room.game.finished) return;
+    if (room.isPaused()) return;
+    if (room._botTimer) return;
+    const cur = room.game.currentPlayer();
+    if (!cur || !cur.isBot) return;
+    const delay = config.botTurnDelayMs
+      + Math.floor(Math.random() * (config.botTurnJitterMs + 1));
+    room._botTimer = setTimeout(() => {
+      room._botTimer = null;
+      if (room.state !== 'playing' || !room.game || room.game.finished) return;
+      if (this.rooms.rooms.get(room.code) !== room) return;
+      if (room.isPaused()) { this.maybeRunBots(room); return; }
+      this.playBotTurn(room);
+    }, delay);
+    if (room._botTimer.unref) room._botTimer.unref();
+  }
+
+  /**
+   * Ход бота: план (см. engine/bot.js) применяется ровно как ход живого
+   * игрока — beginTurn/applyOps/endTurn/commit. Если выложить нечего или
+   * план не прошёл, бот берёт из колоды, на пустой колоде пропускает ход.
+   */
+  playBotTurn(room) {
+    const g = room.game;
+    const seat = g.current;
+    const player = g.players[seat];
+    if (!player || !player.isBot || player.dropped || room.isPaused()) return;
+    try {
+      const plan = planGame(g);
+      if (plan) {
+        g.beginTurn();
+        let ok = g.applyOps(plan.ops);
+        const res = ok ? g.endTurn() : { ok: false };
+        if (!ok || !res.ok) {
+          g.rollback();
+          log.info(`комната ${room.code}: бот ${player.name} промахнулся планом, берёт из колоды`);
+        } else {
+          g.commit();
+          room.touch();
+          const rec = room.players[seat];
+          if (rec && rec.login) this.db.addResult(rec.login, res.win === true);
+          else if (res.win === true) log.info(`комната ${room.code}: бот ${player.name} победил`);
+          this.afterBotMove(room);
+          return;
+        }
+      }
+      // Нечего выкладывать (или план отклонён движком) — берём из колоды.
+      g.beginTurn();
+      let r = g.drawFromDeck();
+      if (!r.ok) {
+        if (g.tilesLeftInDeck() === 0) r = g.skipTurn();
+        else {
+          g.rollback();
+          log.warn(`комната ${room.code}: бот не смог походить (${r.reason})`);
+          return;
+        }
+      }
+      g.commit();
+      room.touch();
+      this.afterBotMove(room);
+    } catch (e) {
+      log.error(`комната ${room.code}: бот упал: ${e.stack || e.message}`);
+      try { g.rollback(); } catch (_) { /* транзакции могло не быть */ }
+    }
+  }
+
+  afterBotMove(room) {
+    this.broadcastRoom(room, null);
+    this.maybeRunBots(room);
+  }
+
+  drainExpired() {
+    for (const room of this.rooms.expireDisconnects()) {
+      this.broadcastRoom(room, null);
+      this.maybeRunBots(room);
     }
   }
 
@@ -551,6 +671,7 @@ class Hub {
     // Комнаты с истёкшим ожиданием переподключения.
     for (const room of this.rooms.expireDisconnects()) {
       this.broadcastRoom(room, null);
+      this.maybeRunBots(room);
     }
     void now;
   }

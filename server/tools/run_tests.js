@@ -757,11 +757,22 @@ test('повторный вход того же игрока не занимае
   assert.strictEqual(room2.filled(), 2, 'лишнего места не появилось');
 });
 
-test('партия не стартует, пока места не заняты', () => {
-  const r = rooms.startGame(userOf('guest1'));
-  assert.strictEqual(r.ok, false, room2.seats + ' места, а игроков меньше');
-  assert.ok(r.reason.includes('Дождитесь'));
-  assert.strictEqual(room2.state, 'lobby');
+test('незанятые места партия добирает ботами при старте', () => {
+  // Отдельная комната со своими игроками, чтобы не трогать byUser room2.
+  const fa = accounts.register('filla', 'secret123', 'Фила');
+  const fb = accounts.register('fillb', 'secret123', 'Филб');
+  assert.ok(fa.ok && fb.ok);
+  const fillRoom = rooms.createRoom(userOf('filla'), { seats: 4, name: 'С ботами' }).room;
+  rooms.joinRoom(userOf('fillb'), fillRoom.code, null);
+  assert.strictEqual(fillRoom.filled(), 2);
+  const r = rooms.startGame(userOf('filla'));
+  assert.strictEqual(r.ok, true, r.reason);
+  assert.strictEqual(fillRoom.state, 'playing');
+  assert.strictEqual(fillRoom.game.players[0].isBot, false, 'люди остаются людьми');
+  assert.strictEqual(fillRoom.game.players[1].isBot, false);
+  assert.strictEqual(fillRoom.game.players[2].isBot, true, 'пустые места занимают боты');
+  assert.strictEqual(fillRoom.game.players[3].isBot, true);
+  assert.strictEqual(fillRoom.game.handSize(0), 14);
 });
 
 test('партия не стартует с одним игроком', () => {
@@ -772,16 +783,14 @@ test('партия не стартует с одним игроком', () => {
   void solo;
 });
 
-test('после заполнения всех мест партия стартует', () => {
+test('после заполнения всех мест партия стартует сама', () => {
   const extra = accounts.register('guest3', 'secret123', 'Гость3');
   assert.strictEqual(extra.ok, true);
   const r1 = rooms.joinRoom(userOf('guest2'), room2.code, null);
   const r2 = rooms.joinRoom(userOf('guest3'), room2.code, null);
   assert.strictEqual(r1.ok && r2.ok, true, `${r1.reason || ''} ${r2.reason || ''}`);
   assert.strictEqual(room2.filled(), room2.seats);
-  markAllConnected(room2);
-  const r = rooms.startGame(userOf('guest1'));
-  assert.strictEqual(r.ok, true, r.reason);
+  // Кнопка «начать» не нужна: полная комната стартует сама.
   assert.strictEqual(room2.state, 'playing');
   assert.strictEqual(room2.game.handSize(0), 14);
 });
@@ -1000,9 +1009,9 @@ test('ход, набравший 30+ очков первым, проходит �
   const me = { id: 'a', login: 'a', nick: 'A' };
   const room = rooms.createRoom(me, { seats: 2, require30: true }).room;
   const you = { id: 'b', login: 'b', nick: 'B' };
+  // Второй игрок заполняет комнату — партия стартует сама.
   rooms.joinRoom(you, room.code, null);
-  markAllConnected(room);
-  assert.strictEqual(rooms.startGame(me).ok, true);
+  assert.strictEqual(room.state, 'playing');
   const game = room.game;
   const ops = planValidRow(game, 0, 30);
   if (ops === null) {
@@ -1023,8 +1032,7 @@ const stMe = { id: 'st-a', login: 'st-a', nick: 'ST-A' };
 const stYou = { id: 'st-b', login: 'st-b', nick: 'ST-B' };
 const stRoom = rooms.createRoom(stMe, { seats: 2, require30: false }).room;
 rooms.joinRoom(stYou, stRoom.code, null);
-markAllConnected(stRoom);
-assert.strictEqual(rooms.startGame(stMe).ok, true);
+assert.strictEqual(stRoom.state, 'playing', 'второй игрок заполняет комнату и старт идёт сам');
 const stGame = stRoom.game;
 
 /** Кладёт игроку заведомо валидный ряд и завершает ход. */
@@ -1168,8 +1176,7 @@ test('set_table возвращает взятое назад в руку', () =>
   const b = { id: 'tb-b', login: 'tb-b', nick: 'TB-B' };
   const room = rooms.createRoom(a, { seats: 2, require30: false }).room;
   rooms.joinRoom(b, room.code, null);
-  markAllConnected(room);
-  assert.strictEqual(rooms.startGame(a).ok, true);
+  assert.strictEqual(room.state, 'playing', 'второй игрок заполняет комнату и старт идёт сам');
   const game = room.game;
 
   const mine = planValidRowIds(game, 0, 0, 4);
@@ -1270,9 +1277,7 @@ group('== Обрывы связи ==');
 
 const room3 = rooms.createRoom(userOf('host1'), { seats: 2, require30: false }).room;
 rooms.joinRoom(userOf('guest1'), room3.code, null);
-markAllConnected(room3);
-rooms.startGame(userOf('host1'));
-assert.strictEqual(room3.state, 'playing');
+assert.strictEqual(room3.state, 'playing', 'второй игрок заполняет комнату и старт идёт сам');
 const u1 = userOf('guest1');
 rooms.onDisconnect(u1);
 test('после обрыва в партии место НЕ освобождается сразу', () => {
@@ -1296,30 +1301,32 @@ test('переподключение снимает паузу', () => {
   assert.ok(!room3.isPaused());
 });
 
-test('по истечении срока ожидания игрок выбывает, партия продолжается', () => {
+test('по истечении срока ожидания место занимает бот, партия продолжается', () => {
   rooms.onDisconnect(u1);
   // перематываем дедлайн в прошлое
   const d = room3.paused.get(1);
   d.deadline = Date.now() - 1;
   const touched = rooms.expireDisconnects();
   assert.ok(touched.includes(room3), 'комната должна попасть в список обновлений');
-  assert.strictEqual(room3.game.players[1].dropped, true, 'игрок выбыл');
+  assert.strictEqual(room3.game.players[1].isBot, true, 'опустевшее место занял бот');
   assert.strictEqual(room3.state, 'playing', 'партия продолжается без него');
-  assert.strictEqual(room3.filled(), 2, 'информация о игроке в комнате остаётся');
+  assert.strictEqual(room3.filled(), 2, 'место в комнате осталось занятым (ботом)');
 });
 
-test('после выбывания ход идёт мимо него', () => {
+test('после ботификации ход переходит боту', () => {
   const game = room3.game;
   const before = game.current;
   game.advance();
-  assert.notStrictEqual(game.current, 1, 'выбывший не должен получать ход');
-  assert.ok(game.current === before || game.current === 0);
+  assert.strictEqual(game.current, 1, 'выбывшего заменяет бот, и ход уходит ему');
+  assert.strictEqual(game.players[1].isBot, true);
+  assert.ok(before === 0);
 });
 
 test('в лобби обрыв освобождает место сразу', () => {
-  const room4 = rooms.createRoom(userOf('host1'), { seats: 2 }).room;
+  const room4 = rooms.createRoom(userOf('host1'), { seats: 3 }).room;
   rooms.joinRoom(userOf('guest1'), room4.code, null);
   assert.strictEqual(room4.filled(), 2);
+  assert.strictEqual(room4.state, 'lobby', 'неполная комната не стартует');
   rooms.onDisconnect(userOf('guest1'));
   assert.strictEqual(room4.filled(), 1, 'в лобби ждать нечего — место свободно');
 });

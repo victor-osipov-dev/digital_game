@@ -20,7 +20,7 @@ const CHANGE_NICK := "auth.nick"         # {nick} -> auth.ok
 const SERVERS_LIST := "servers.list"
 const ROOMS_LIST := "rooms.list"
 const ROOM_CREATE := "room.create"       # {seats, require30, name, password} -> room.state
-const ROOM_JOIN := "room.join"           # {code, password} -> room.state
+const ROOM_JOIN := "room.join"           # {code, password} -> room.state | game.state
 const ROOM_LEAVE := "room.leave"
 const ROOM_DROP := "room.drop"           # {} -> room.left (полный выход, место освобождается сразу)
 const ROOM_START := "room.start"         # -> game.state | game.error
@@ -114,8 +114,11 @@ static func ok_types(command: String) -> PackedStringArray:
 	match command:
 		GAME_COMMIT, GAME_DRAW, GAME_SKIP, GAME_REJOIN, ROOM_START:
 			return PackedStringArray([GAME_STATE, GAME_ERROR])
-		ROOM_CREATE, ROOM_JOIN:
+		ROOM_CREATE:
 			return PackedStringArray([ROOM_STATE, GAME_ERROR])
+		# ROOM_JOIN в идущую партию отвечает сразу game.state.
+		ROOM_JOIN:
+			return PackedStringArray([ROOM_STATE, GAME_STATE, GAME_ERROR])
 		ROOM_LEAVE, ROOM_DROP:
 			return PackedStringArray([ROOM_LEFT, GAME_ERROR])
 		QUICK_JOIN, QUICK_LEAVE:

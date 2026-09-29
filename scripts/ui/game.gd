@@ -930,7 +930,13 @@ func _on_pass_ready() -> void:
 func _show_turn_title() -> void:
 	if state == null:
 		return
-	turn_title_label.text = "Ход: %s" % state.current_player().pname
+	var who := state.current_player().pname
+	# Серверный бот ходит сам, и пометить его обязаны: иначе партия,
+	# сидящая на паузе или идущая на чужих устройствах, выглядит как
+	# молчащий человек с выключенным экраном.
+	if state.is_bot_player(state.current):
+		who += " (бот)"
+	turn_title_label.text = "Ход: %s" % who
 	turn_title_overlay.visible = true
 	turn_title_overlay.modulate.a = 0.0
 	if title_tween != null and title_tween.is_running():
@@ -1445,6 +1451,11 @@ func _update_chips() -> void:
 		# отдельно: его место держится, но ходить он не может.
 		if _online and i == state.local_seat:
 			lab.text += " · вы"
+		# Серверные боты добирают места в сетевой партии — их показываем
+		# явно, чтобы игрок понимал, почему «не у того» ход и кто вообще
+		# за столом. Офлайн-ботов одиночной игры не трогаем.
+		if _online and state.is_bot_player(i):
+			lab.text += " · бот"
 		# Слово «ходит» рядом с подсветкой: по одному цвету рамки в сетевой
 		# партии не понять, чья очередь, а текст читается сразу.
 		if is_now and not state.finished:

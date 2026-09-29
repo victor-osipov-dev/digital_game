@@ -11,9 +11,10 @@ extends Node
 #   godot --headless --path . res://tests/test_runner.tscn -- --mode=guest --ts=<метка>
 #
 # Для полноценного матча запускаются ДВА процесса с одинаковой меткой ts:
-# host создаёт комнату и ждёт гостя, guest находит её по имени в списке и
-# входит; хост нажимает «Начать партию», оба получают состояние партии.
-# Выходной код процесса: 0 — все шаги PASS, иначе 1.
+# host создаёт комнату на 2 места, guest находит её по имени в списке и
+# входит; заполнив комнату, гость запускает партию сам (автостарт), и оба
+# процесса уходят в сцену партии. Выходной код процесса: 0 — все шаги PASS,
+# иначе 1.
 
 const PASSWORD := "test1234"
 
@@ -211,7 +212,8 @@ func _run_match_host(ts: String) -> void:
 
 	lobby._room_name.text = "dgtest-%s" % ts
 	# Комната по умолчанию создаётся на 3 места; для матча двух игроков
-	# выбираем 2 места через интерфейс, иначе all_in не будет истиной.
+	# выбираем 2 места через интерфейс, иначе партия стартует по таймеру
+	# автостарта, а не «по заполнению» (обе схемы мы проверяем ниже).
 	lobby._seats_option.select(0)
 	lobby._create_btn.pressed.emit()
 	var got_lobby := await _wait_for(20, func(): return lobby._page_lobby.visible and not lobby._lobby_code.text.is_empty())
@@ -224,25 +226,16 @@ func _run_match_host(ts: String) -> void:
 		return
 	print("TEST  INFO | host room=%s" % lobby._lobby_code.text)
 
-	var all_in := await _wait_for(150, func(): return lobby._page_lobby.visible and lobby._lobby_all_in)
-	_step("host: гость занял место", all_in,
-		"" if all_in else "note='%s' seats='%s'" % [lobby._lobby_note.text, lobby._lobby_seats.text])
-	if not all_in:
-		return
-
-	await get_tree().process_frame
-	lobby._start_btn.pressed.emit()
-	var watch := Time.get_ticks_msec() + 60000
-	while Time.get_ticks_msec() < watch and not _scene_is_game():
-		print("TEST  WATCH | host | busy='%s' online=%s logged=%s scene=%s" % [
-			lobby._busy.text, Net.is_online(), Net.is_logged_in(),
+	# Комната 2 места: гость, заняв второе, заполняет её — и сервер
+	# запускает партию САМ, без кнопки «Начать». Хосту рассылка уходит
+	# GAME_STATE, и он сразу уходит в сцену партии. Ждать _lobby_all_in
+	# нельзя: с полной комнатой лобби уже не показывается никому.
+	var filled := await _wait_for(150, _scene_is_game)
+	_step("host: гость заполнил комнату — партия стартовала сама", filled,
+		"" if filled else "note='%s' seats='%s' scene='%s'" % [
+			lobby._lobby_note.text, lobby._lobby_seats.text,
 			get_tree().current_scene.name if get_tree().current_scene != null else "?"])
-		await get_tree().create_timer(2.0).timeout
-	var scene_started := await _wait_for(15, _scene_is_game)
-	_step("host: открылась сцена партии", scene_started,
-		"" if scene_started else "busy='%s' online=%s logged=%s" % [
-			lobby._busy.text, Net.is_online(), Net.is_logged_in()])
-	if not scene_started:
+	if not filled:
 		return
 
 	var game = get_tree().current_scene

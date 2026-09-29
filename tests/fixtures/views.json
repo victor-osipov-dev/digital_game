@@ -651,21 +651,182 @@
   ],
   "game": {
     "seat0": {
-      "code": "QJNGM",
+      "code": "U8W5F",
       "require30": false,
       "seats": 3,
       "you": 0,
       "hand": [
-        10,
-        13,
-        19,
+        5,
+        9,
         29,
-        30,
-        52,
-        63,
-        73,
+        36,
+        43,
+        79,
+        81,
+        84,
+        85,
         91,
+        95
+      ],
+      "players": [
+        {
+          "seat": 0,
+          "nick": "Алиса",
+          "handCount": 11,
+          "connected": true,
+          "dropped": false,
+          "isBot": false,
+          "isYou": true
+        },
+        {
+          "seat": 1,
+          "nick": "Борис",
+          "handCount": 11,
+          "connected": true,
+          "dropped": false,
+          "isBot": false,
+          "isYou": false
+        },
+        {
+          "seat": 2,
+          "nick": "Кэрол",
+          "handCount": 14,
+          "connected": true,
+          "dropped": false,
+          "isBot": false,
+          "isYou": false
+        }
+      ],
+      "table": [
+        {
+          "id": 1,
+          "tileIds": [
+            72,
+            73,
+            75
+          ]
+        },
+        {
+          "id": 2,
+          "tileIds": [
+            38,
+            40,
+            42
+          ]
+        }
+      ],
+      "deckCount": 66,
+      "current": 2,
+      "myTurn": false,
+      "firstTurn": false,
+      "turnPlaced": [],
+      "lastTurn": [
+        38,
+        40,
+        42
+      ],
+      "finished": false,
+      "winner": -1,
+      "winnerName": ""
+    },
+    "seat1": {
+      "code": "U8W5F",
+      "require30": false,
+      "seats": 3,
+      "you": 1,
+      "hand": [
+        17,
+        26,
+        47,
+        57,
+        61,
+        62,
+        63,
+        82,
+        87,
+        99,
+        105
+      ],
+      "players": [
+        {
+          "seat": 0,
+          "nick": "Алиса",
+          "handCount": 11,
+          "connected": true,
+          "dropped": false,
+          "isBot": false,
+          "isYou": false
+        },
+        {
+          "seat": 1,
+          "nick": "Борис",
+          "handCount": 11,
+          "connected": true,
+          "dropped": false,
+          "isBot": false,
+          "isYou": true
+        },
+        {
+          "seat": 2,
+          "nick": "Кэрол",
+          "handCount": 14,
+          "connected": true,
+          "dropped": false,
+          "isBot": false,
+          "isYou": false
+        }
+      ],
+      "table": [
+        {
+          "id": 1,
+          "tileIds": [
+            72,
+            73,
+            75
+          ]
+        },
+        {
+          "id": 2,
+          "tileIds": [
+            38,
+            40,
+            42
+          ]
+        }
+      ],
+      "deckCount": 66,
+      "current": 2,
+      "myTurn": false,
+      "firstTurn": false,
+      "turnPlaced": [],
+      "lastTurn": [
+        38,
+        40,
+        42
+      ],
+      "finished": false,
+      "winner": -1,
+      "winnerName": ""
+    },
+    "seat2": {
+      "code": "U8W5F",
+      "require30": false,
+      "seats": 3,
+      "you": 2,
+      "hand": [
+        2,
+        4,
+        20,
+        41,
+        44,
+        52,
+        70,
+        74,
+        88,
+        90,
         92,
+        93,
+        101,
         106
       ],
       "players": [
@@ -675,82 +836,7 @@
           "handCount": 11,
           "connected": true,
           "dropped": false,
-          "isYou": true
-        },
-        {
-          "seat": 1,
-          "nick": "Борис",
-          "handCount": 11,
-          "connected": true,
-          "dropped": false,
-          "isYou": false
-        },
-        {
-          "seat": 2,
-          "nick": "Кэрол",
-          "handCount": 14,
-          "connected": true,
-          "dropped": false,
-          "isYou": false
-        }
-      ],
-      "table": [
-        {
-          "id": 1,
-          "tileIds": [
-            56,
-            57,
-            60
-          ]
-        },
-        {
-          "id": 2,
-          "tileIds": [
-            79,
-            82,
-            83
-          ]
-        }
-      ],
-      "deckCount": 66,
-      "current": 2,
-      "myTurn": false,
-      "firstTurn": false,
-      "turnPlaced": [],
-      "lastTurn": [
-        79,
-        82,
-        83
-      ],
-      "finished": false,
-      "winner": -1,
-      "winnerName": ""
-    },
-    "seat1": {
-      "code": "QJNGM",
-      "require30": false,
-      "seats": 3,
-      "you": 1,
-      "hand": [
-        2,
-        7,
-        31,
-        36,
-        40,
-        46,
-        62,
-        85,
-        87,
-        89,
-        107
-      ],
-      "players": [
-        {
-          "seat": 0,
-          "nick": "Алиса",
-          "handCount": 11,
-          "connected": true,
-          "dropped": false,
+          "isBot": false,
           "isYou": false
         },
         {
@@ -759,85 +845,7 @@
           "handCount": 11,
           "connected": true,
           "dropped": false,
-          "isYou": true
-        },
-        {
-          "seat": 2,
-          "nick": "Кэрол",
-          "handCount": 14,
-          "connected": true,
-          "dropped": false,
-          "isYou": false
-        }
-      ],
-      "table": [
-        {
-          "id": 1,
-          "tileIds": [
-            56,
-            57,
-            60
-          ]
-        },
-        {
-          "id": 2,
-          "tileIds": [
-            79,
-            82,
-            83
-          ]
-        }
-      ],
-      "deckCount": 66,
-      "current": 2,
-      "myTurn": false,
-      "firstTurn": false,
-      "turnPlaced": [],
-      "lastTurn": [
-        79,
-        82,
-        83
-      ],
-      "finished": false,
-      "winner": -1,
-      "winnerName": ""
-    },
-    "seat2": {
-      "code": "QJNGM",
-      "require30": false,
-      "seats": 3,
-      "you": 2,
-      "hand": [
-        14,
-        18,
-        17,
-        24,
-        34,
-        35,
-        38,
-        39,
-        59,
-        66,
-        90,
-        95,
-        99,
-        102
-      ],
-      "players": [
-        {
-          "seat": 0,
-          "nick": "Алиса",
-          "handCount": 11,
-          "connected": true,
-          "dropped": false,
-          "isYou": false
-        },
-        {
-          "seat": 1,
-          "nick": "Борис",
-          "handCount": 11,
-          "connected": true,
-          "dropped": false,
+          "isBot": false,
           "isYou": false
         },
         {
@@ -846,6 +854,7 @@
           "handCount": 14,
           "connected": true,
           "dropped": false,
+          "isBot": false,
           "isYou": true
         }
       ],
@@ -853,17 +862,17 @@
         {
           "id": 1,
           "tileIds": [
-            56,
-            57,
-            60
+            72,
+            73,
+            75
           ]
         },
         {
           "id": 2,
           "tileIds": [
-            79,
-            82,
-            83
+            38,
+            40,
+            42
           ]
         }
       ],
@@ -873,9 +882,9 @@
       "firstTurn": false,
       "turnPlaced": [],
       "lastTurn": [
-        79,
-        82,
-        83
+        38,
+        40,
+        42
       ],
       "finished": false,
       "winner": -1,
@@ -883,7 +892,7 @@
     }
   },
   "lobby": {
-    "code": "3DQ47",
+    "code": "F7D88",
     "name": "Свободная",
     "seats": 2,
     "require30": true,
@@ -907,7 +916,7 @@
     ]
   },
   "summary": {
-    "code": "3DQ47",
+    "code": "F7D88",
     "name": "Свободная",
     "seats": 2,
     "require30": true,
@@ -917,10 +926,12 @@
     "players": [
       {
         "nick": "Борис",
-        "connected": true
+        "connected": true,
+        "isBot": false
       }
     ],
-    "filled": 1
+    "filled": 1,
+    "bots": 0
   },
   "expectations": {
     "deckCount": 66,
@@ -928,17 +939,17 @@
       {
         "id": 1,
         "tiles": [
-          56,
-          57,
-          60
+          72,
+          73,
+          75
         ]
       },
       {
         "id": 2,
         "tiles": [
-          79,
-          82,
-          83
+          38,
+          40,
+          42
         ]
       }
     ],
@@ -949,9 +960,9 @@
     ],
     "current": 2,
     "lastTurn": [
-      79,
-      82,
-      83
+      38,
+      40,
+      42
     ],
     "firstTurn": false
   }

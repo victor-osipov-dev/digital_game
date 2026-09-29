@@ -26,6 +26,9 @@ rooms.setUserResolver((id) => {
 });
 
 const hub = new Hub({ db, accounts, cluster, rooms });
+// Автостарт комнаты завершается здесь: хаб рассылает стартовое состояние
+// всем участникам и запускает ботов на пустых местах.
+rooms.onPlay = (room) => hub.onRoomPlay(room);
 
 // Свойство экземпляра с тем же именем, что и метод класса, молча
 // перекрывает метод: `cluster.peers()` превращался в `cluster.peers` (массив)

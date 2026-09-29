@@ -625,28 +625,28 @@ function planRowFromView(state, catalog) {
     assert.strictEqual(r.room.filled ?? 1, 1);
   });
 
-  await test('второй игрок входит по коду', async () => {
-    const r = await erin.rpc({ t: 'room.join', code: gameRoom }, ['room.state', 'game.error']);
-    assert.strictEqual(r.t, 'room.state', JSON.stringify(r));
-    assert.strictEqual(r.room.players[1].nick, 'Эрин');
-    assert.strictEqual(r.room.players[1].connected, true);
+  await test('второй игрок входит — партия стартует сама', async () => {
+    const r = await erin.rpc({ t: 'room.join', code: gameRoom }, ['room.state', 'game.state', 'game.error']);
+    assert.strictEqual(r.t, 'game.state', `заполненная комната должна стартовать сама: ${JSON.stringify(r)}`);
+    assert.strictEqual(r.state.you, 1, 'второй игрок видит своё место');
+    assert.strictEqual(r.state.players[1].nick, 'Эрин');
+    assert.strictEqual(r.state.hand.length, 14);
   });
 
-  await test('не хост запустить партию не может', async () => {
+  await test('не хост и не кнопка — партия уже идёт', async () => {
     const r = await erin.rpc({ t: 'room.start' }, ['game.state', 'game.error']);
     assert.strictEqual(r.t, 'game.error', JSON.stringify(r));
   });
 
-  await test('хост запускает, обоим приходит игра со своей рукой', async () => {
-    const r = await carol.rpc({ t: 'room.start' }, ['game.state', 'game.error']);
-    assert.strictEqual(r.t, 'game.state', JSON.stringify(r));
+  await test('хосту пришла игра со своей рукой и местом', async () => {
+    const r = await carol.rpc({ t: 'game.rejoin' }, 'game.state');
+    assert.strictEqual(r.state.you, 0);
     assert.strictEqual(r.state.hand.length, 14, 'хосту пришла его рука');
     assert.strictEqual(r.state.players.length, 2);
-    assert.strictEqual(r.state.you, 0);
   });
 
   await test('второй игрок получает игру с собственной рукой', async () => {
-    const r = await erin.next((m) => m.t === 'game.state');
+    const r = await erin.rpc({ t: 'game.rejoin' }, 'game.state');
     assert.strictEqual(r.state.you, 1);
     assert.strictEqual(r.state.hand.length, 14);
   });
@@ -850,9 +850,10 @@ function planRowFromView(state, catalog) {
   await test('мягкий выход из идущей партии оставляет место за игроком', async () => {
     const room = await frank.rpc({ t: 'room.create', seats: 2, require30: false, name: 'Выход' }, 'room.state');
     exitRoom = room.room.code;
-    const join = await gina.rpc({ t: 'room.join', code: exitRoom }, ['room.state', 'game.error']);
-    assert.strictEqual(join.t, 'room.state', JSON.stringify(join));
-    const start = await frank.rpc({ t: 'room.start' }, ['game.state', 'game.error']);
+    const join = await gina.rpc({ t: 'room.join', code: exitRoom }, ['game.state', 'game.error']);
+    assert.strictEqual(join.t, 'game.state', `заполнение комнаты должно запустить партию: ${JSON.stringify(join)}`);
+    // Хост партию тоже видит — она началась сама, без кнопки.
+    const start = await frank.rpc({ t: 'game.rejoin' }, 'game.state');
     assert.strictEqual(start.t, 'game.state', JSON.stringify(start));
     // Мягкий выход: место остаётся, а ответ называет комнату, в которой
     // игрока ждут (из неё клиент строит баннер «вы всё ещё в комнате»).
