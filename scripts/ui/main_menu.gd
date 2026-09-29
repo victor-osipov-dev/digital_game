@@ -88,6 +88,42 @@ func _build_ui() -> void:
 	subtitle.add_theme_color_override("font_color", Color(1, 1, 1, 0.55))
 	box.add_child(subtitle)
 
+	# Строка-напоминание, если игрок всё ещё числится в комнате (мягкий
+	# выход из партии или выход из лобби комнаты в меню). Стоит вверху,
+	# а не среди настроек: человек, вернувшийся в меню из партии, должен
+	# увидеть «Вернуться в игру» сразу, без прокрутки.
+	_online_note = Label.new()
+	_online_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_online_note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_online_note.add_theme_font_size_override("font_size", Settings.fs(13))
+	_online_note.add_theme_color_override("font_color", Color("FFE0B2"))
+	_online_note.visible = false
+	box.add_child(_online_note)
+
+	# Явные кнопки «вернуться в игру» и «покинуть комнату насовсем»: они
+	# должны быть видны, пока игрок числится в комнате, и прятаться вместе
+	# с напоминанием, когда он вернулся или вышел с концами.
+	_room_actions = HBoxContainer.new()
+	_room_actions.alignment = BoxContainer.ALIGNMENT_CENTER
+	_room_actions.add_theme_constant_override("separation", 12)
+	_room_actions.visible = false
+	box.add_child(_room_actions)
+
+	_return_room_btn = Button.new()
+	_return_room_btn.text = "Вернуться в игру"
+	_return_room_btn.custom_minimum_size = Vector2(0, Settings.touch(46))
+	_return_room_btn.add_theme_font_size_override("font_size", Settings.fs(15))
+	_return_room_btn.pressed.connect(_on_return_room_pressed)
+	_apply_accent_style(_return_room_btn, Color("2E7D32"), Color("388E3C"), Color("1B5E20"))
+	_room_actions.add_child(_return_room_btn)
+
+	_drop_room_btn = Button.new()
+	_drop_room_btn.text = "Покинуть комнату"
+	_drop_room_btn.custom_minimum_size = Vector2(0, Settings.touch(46))
+	_drop_room_btn.add_theme_font_size_override("font_size", Settings.fs(15))
+	_drop_room_btn.pressed.connect(_on_drop_room_pressed)
+	_room_actions.add_child(_drop_room_btn)
+
 	var spacer := Control.new()
 	spacer.custom_minimum_size = Vector2(0, 8)
 	box.add_child(spacer)
@@ -152,40 +188,6 @@ func _build_ui() -> void:
 	online_btn.pressed.connect(_on_online_pressed)
 	_apply_accent_style(online_btn, Color("1F4E79"), Color("2A6CA8"), Color("163A5C"))
 	box.add_child(online_btn)
-
-	# Строка-напоминание, если игрок всё ещё числится в комнате (мягкий
-	# выход из партии или выход из лобби комнаты в меню).
-	_online_note = Label.new()
-	_online_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_online_note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_online_note.add_theme_font_size_override("font_size", Settings.fs(13))
-	_online_note.add_theme_color_override("font_color", Color("FFE0B2"))
-	_online_note.visible = false
-	box.add_child(_online_note)
-
-	# Явные кнопки «вернуться в игру» и «покинуть комнату насовсем»: они
-	# должны быть видны, пока игрок числится в комнате, и прятаться вместе
-	# с напоминанием, когда он вернулся или вышел с концами.
-	_room_actions = HBoxContainer.new()
-	_room_actions.alignment = BoxContainer.ALIGNMENT_CENTER
-	_room_actions.add_theme_constant_override("separation", 12)
-	_room_actions.visible = false
-	box.add_child(_room_actions)
-
-	_return_room_btn = Button.new()
-	_return_room_btn.text = "Вернуться в игру"
-	_return_room_btn.custom_minimum_size = Vector2(0, Settings.touch(46))
-	_return_room_btn.add_theme_font_size_override("font_size", Settings.fs(15))
-	_return_room_btn.pressed.connect(_on_return_room_pressed)
-	_apply_accent_style(_return_room_btn, Color("2E7D32"), Color("388E3C"), Color("1B5E20"))
-	_room_actions.add_child(_return_room_btn)
-
-	_drop_room_btn = Button.new()
-	_drop_room_btn.text = "Покинуть комнату"
-	_drop_room_btn.custom_minimum_size = Vector2(0, Settings.touch(46))
-	_drop_room_btn.add_theme_font_size_override("font_size", Settings.fs(15))
-	_drop_room_btn.pressed.connect(_on_drop_room_pressed)
-	_room_actions.add_child(_drop_room_btn)
 
 	var bottom := HBoxContainer.new()
 	bottom.alignment = BoxContainer.ALIGNMENT_CENTER
