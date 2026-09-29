@@ -54,6 +54,7 @@ var _slot_hover_last: Vector2 = Vector2.ZERO
 var _slot_grace_until: int = 0
 var _pan_pressed: bool = false
 var _pan_pos: Vector2 = Vector2.ZERO
+var _pan_press_on_tile: bool = false
 
 # --- сетевой режим -------------------------------------------------------
 #
@@ -225,7 +226,8 @@ func _build_ui() -> void:
 	tsb.content_margin_top = 12.0
 	tsb.content_margin_bottom = 12.0
 	toast_panel.add_theme_stylebox_override("panel", tsb)
-	toast_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	toast_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	toast_panel.gui_input.connect(_on_toast_input)
 	toast_center.add_child(toast_panel)
 	toast_panel.visible = false
 	_toast_panel = toast_panel
@@ -1123,7 +1125,9 @@ func _on_hint_pressed() -> void:
 	var action := String(plan.get("action", ""))
 	if action == "place":
 		_hint_ids = (plan.get("tiles", []) as Array).duplicate()
-		toast("Подсказка: выложите %d - +%d очков" % [_hint_ids.size(), int(plan.get("points", 0))], false)
+		toast("Подсказка: выложите %d/%d %s — это +%d очков" % [
+			_hint_ids.size(), _hint_available(_hint_ids), _card_word(_hint_ids.size()),
+			int(plan.get("points", 0))], false)
 	elif action == "draw":
 		toast("Подсказка: возьмите число из колоды", false)
 	elif action == "skip":
@@ -1146,6 +1150,11 @@ func on_drag_started(view: TileView) -> void:
 	_slot_hover_pos = -1
 	_slot_hover_time = 0
 	_slot_grace_until = 0
+	# Пока тянем карточку, стол не должен сам ловить touch-скролл:
+	# ScrollContainer перехватывает жест в щели между плитками, карточка
+	# отстаёт от пальца, а ряды начинают уезжать. Своё листание по краям
+	# экрана во время перетаскивания по-прежнему делает _auto_scroll_drag.
+	_set_drag_scroll_locked(true)
 
 func _end_drag() -> void:
 	if _drag_view != null and is_instance_valid(_drag_view):
@@ -1155,6 +1164,15 @@ func _end_drag() -> void:
 	_slot_hover_time = 0
 	_slot_grace_until = 0
 	_clear_row_slots()
+	_set_drag_scroll_locked(false)
+	_pan_pressed = false
+	_pan_press_on_tile = false
+
+func _set_drag_scroll_locked(locked: bool) -> void:
+	if table_scroll == null:
+		return
+	table_scroll.mouse_filter = (
+		Control.MOUSE_FILTER_IGNORE if locked else Control.MOUSE_FILTER_STOP)
 
 func _update_row_slot_hover() -> void:
 	if state == null or state.finished:
@@ -1395,6 +1413,7 @@ func refresh() -> void:
 	_slot_hover_time = 0
 	_slot_grace_until = 0
 	_clear_row_slots()
+	_set_drag_scroll_locked(false)
 	_update_chips()
 	_update_table()
 	_update_hand()
@@ -1537,9 +1556,15 @@ func _input(event: InputEvent) -> void:
 			# уже известна (событие мыши обновляет её после обработки).
 			_pan_pressed = false
 			_pan_pos = get_global_mouse_position()
+			# Касание по карточке принадлежит перетаскиванию: пан не должен
+			# отнимать жест, даже если при быстром рывке палец сразу ушёл
+			# в щель между рядами (drag-данные создаются чуть позже — этим
+			# же событием движения, в GUI).
+			_pan_press_on_tile = _point_on_tile(_pan_pos)
 		else:
 			_pan_scroll(get_global_mouse_position() - _pan_pos)
 			_pan_pressed = false
+			_pan_press_on_tile = false
 	elif event is InputEventMouseMotion:
 		var mm := event as InputEventMouseMotion
 		if (mm.button_mask & MOUSE_BUTTON_MASK_LEFT) == 0:
@@ -1548,6 +1573,8 @@ func _input(event: InputEvent) -> void:
 			return
 		if not _pan_pressed:
 			_pan_pos = get_global_mouse_position()
+			if _pan_press_on_tile:
+				return
 			_pan_pressed = _can_pan_table(_pan_pos)
 			return
 		_pan_scroll(get_global_mouse_position() - _pan_pos)
@@ -1566,6 +1593,8 @@ func _pan_scroll(delta: Vector2) -> void:
 ## Листать можно в любом месте стола, кроме самих карточек: с карточки
 ## жест принадлежит перетаскиванию.
 func _can_pan_table(p: Vector2) -> bool:
+	if _drag_view != null:
+		return false
 	if table_scroll == null or not table_scroll.is_visible_in_tree():
 		return false
 	if _modal_open():
@@ -1581,6 +1610,24 @@ func _can_pan_table(p: Vector2) -> bool:
 			if tile_view != null and tile_view.get_global_rect().has_point(p):
 				return false
 	return true
+
+## Точка над карточкой (ряд или рука): с такого касания жест принадлежит
+## перетаскиванию, а не листанию стола.
+func _point_on_tile(p: Vector2) -> bool:
+	for block in row_blocks:
+		var row := block as RowBlock
+		if row == null or row.flow == null or not row.is_visible_in_tree():
+			continue
+		for view in row.flow.tile_views:
+			var t := view as TileView
+			if t != null and t.get_global_rect().has_point(p):
+				return true
+	if hand_flow != null:
+		for view in hand_flow.tile_views:
+			var t := view as TileView
+			if t != null and t.get_global_rect().has_point(p):
+				return true
+	return false
 
 ## Модальные экраны лежат поверх стола: жест по ним партию листать не должен.
 func _modal_open() -> bool:
@@ -1609,6 +1656,46 @@ func toast(text: String, is_error: bool = false) -> void:
 	toast_tween = create_tween()
 	toast_tween.tween_interval(2.6)
 	toast_tween.tween_property(_toast_panel, "modulate:a", 0.0, 0.5)
-	toast_tween.tween_callback(func():
-		toast_label.visible = false
-		_toast_panel.visible = false)
+	toast_tween.tween_callback(_hide_toast)
+
+func _hide_toast() -> void:
+	if toast_tween != null and toast_tween.is_running():
+		toast_tween.kill()
+	toast_label.visible = false
+	_toast_panel.visible = false
+
+func _on_toast_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.pressed:
+		_hide_toast()
+
+## Сколько всего таких карточек в руке (тот же цвет и номинал, джокеры — вместе):
+## подсказка «выложите 1/5 карточку» читается понятнее, чем простое число.
+func _hint_available(ids: Array) -> int:
+	var n := ids.size()
+	if n == 0 or state == null:
+		return n
+	var ref: Tile = null
+	for t in state.hand():
+		if (t as Tile).id == int(ids[0]):
+			ref = t
+			break
+	if ref == null:
+		return n
+	var total := 0
+	for t in state.hand():
+		var t2: Tile = t
+		if t2.is_joker or ref.is_joker:
+			if t2.is_joker == ref.is_joker:
+				total += 1
+		elif t2.color == ref.color and t2.value == ref.value:
+			total += 1
+	return maxi(total, n)
+
+func _card_word(count: int) -> String:
+	var d := count % 10
+	var h := count % 100
+	if d == 1 and h != 11:
+		return "карточку"
+	if d >= 2 and d <= 4 and not (h >= 12 and h <= 14):
+		return "карточки"
+	return "карточек"
