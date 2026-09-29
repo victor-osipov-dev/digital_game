@@ -52,6 +52,8 @@ var _slot_hover_pos: int = -1
 var _slot_hover_time: int = 0
 var _slot_hover_last: Vector2 = Vector2.ZERO
 var _slot_grace_until: int = 0
+var _pan_pressed: bool = false
+var _pan_pos: Vector2 = Vector2.ZERO
 
 # --- сетевой режим -------------------------------------------------------
 #
@@ -235,6 +237,7 @@ func _build_ui() -> void:
 	toast_label.add_theme_font_size_override("font_size", Settings.fs(22))
 	toast_label.visible = false
 	toast_panel.add_child(toast_label)
+	_fit_toast_width()
 
 	var chips_scroll := ScrollContainer.new()
 	chips_scroll.custom_minimum_size = Vector2(0, Settings.touch(34))
@@ -242,6 +245,9 @@ func _build_ui() -> void:
 	layout.add_child(chips_scroll)
 	chips_box = HBoxContainer.new()
 	chips_box.add_theme_constant_override("separation", 6)
+	# Контейнер чипов не ловит касание: иначе полосу с числами нельзя
+	# свайпнуть вбок (собственные карточки-чипы клика не требуют).
+	chips_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	chips_scroll.add_child(chips_box)
 
 	table_scroll = ScrollContainer.new()
@@ -494,13 +500,18 @@ func _build_help_overlay() -> void:
 	help_overlay.visible = false
 	add_child(help_overlay)
 
-	var center := CenterContainer.new()
-	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	help_overlay.add_child(center)
+	# MarginContainer, а не CenterContainer: окно должно занять весь экран,
+	# чтобы правила листались на любом телефоне, а кнопка «Закрыть» всегда
+	# оставалась под рукой, а не уезжала за нижний край.
+	var mg := MarginContainer.new()
+	mg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	mg.add_theme_constant_override("margin_left", 10)
+	mg.add_theme_constant_override("margin_right", 10)
+	mg.add_theme_constant_override("margin_top", 10)
+	mg.add_theme_constant_override("margin_bottom", 10)
+	help_overlay.add_child(mg)
 
 	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(520, 760)
-	panel.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	var psb := StyleBoxFlat.new()
 	psb.bg_color = Color("1B2029")
 	psb.set_corner_radius_all(14)
@@ -511,7 +522,7 @@ func _build_help_overlay() -> void:
 	psb.content_margin_top = 14.0
 	psb.content_margin_bottom = 14.0
 	panel.add_theme_stylebox_override("panel", psb)
-	center.add_child(panel)
+	mg.add_child(panel)
 
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 10)
@@ -527,12 +538,16 @@ func _build_help_overlay() -> void:
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.custom_minimum_size = Vector2(0, 560)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.custom_minimum_size = Vector2(0, Settings.touch(200))
 	box.add_child(scroll)
 
 	var rich := RichTextLabel.new()
 	rich.bbcode_enabled = true
 	rich.fit_content = true
+	# Без этого жест глотает сам RichTextLabel (STOP по умолчанию) и до
+	# ScrollContainer не доходит: окно правил на телефоне не листалось.
+	rich.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	rich.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	rich.add_theme_font_size_override("normal_font_size", Settings.fs(15))
 	rich.add_theme_font_size_override("bold_font_size", Settings.fs(17))
@@ -678,7 +693,7 @@ func _make_settings_row(label_text: String, names: PackedStringArray, current: i
 	var option := OptionButton.new()
 	option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	option.custom_minimum_size = Vector2(0, Settings.touch(42))
-	option.add_theme_font_size_override("font_size", Settings.fs(15))
+	Settings.style_option(option, 15)
 	for n in names:
 		option.add_item(n)
 	option.select(clampi(current, 0, names.size() - 1))
@@ -1493,9 +1508,97 @@ func _update_hint_zone_size() -> void:
 	if not is_equal_approx(hint_zone.custom_minimum_size.y, target):
 		hint_zone.custom_minimum_size.y = target
 
+## Подсказка всегда чуть уже экрана.
+##
+## Без минимальной ширины Label с автопереносом внутри CenterContainer
+## сжимается до одного символа в строке, и текст рассыпался буква-в-букву
+## на пол-экрана высотой. Ширину задаём от текущей ширины окна, поэтому
+## пересчитывается и после поворота/пересборки интерфейса.
+func _fit_toast_width() -> void:
+	if toast_label == null:
+		return
+	toast_label.custom_minimum_size = Vector2(maxf(240.0, size.x - 56.0), 0.0)
+
+## Листание стола пальцем по фону рядов.
+##
+## ScrollContainer на телефоне начинает жест только когда палец попал мимо
+## всех STOP-контролов, а ряд и его FlowTiles — drop-цели: их обязательно
+## пришлось бы оставить STOP, иначе ломается перетаскивание карточек.
+## Поэтому жест с фона ряда разбираем здесь: событие мыши (эмулированное
+## от касания) гасим, прокрутку двигаем сами. Сами карточки не трогаем —
+## с них перетаскивание по-прежнему работает как раньше.
+func _input(event: InputEvent) -> void:
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if mb.button_index != MOUSE_BUTTON_LEFT:
+			return
+		if mb.pressed:
+			# Решение принимаем на первом же движении: там позиция нажатия
+			# уже известна (событие мыши обновляет её после обработки).
+			_pan_pressed = false
+			_pan_pos = get_global_mouse_position()
+		else:
+			_pan_scroll(get_global_mouse_position() - _pan_pos)
+			_pan_pressed = false
+	elif event is InputEventMouseMotion:
+		var mm := event as InputEventMouseMotion
+		if (mm.button_mask & MOUSE_BUTTON_MASK_LEFT) == 0:
+			# Палец отпущен (или окно потеряло фокус) — жест больше не наш.
+			_pan_pressed = false
+			return
+		if not _pan_pressed:
+			_pan_pos = get_global_mouse_position()
+			_pan_pressed = _can_pan_table(_pan_pos)
+			return
+		_pan_scroll(get_global_mouse_position() - _pan_pos)
+
+func _pan_scroll(delta: Vector2) -> void:
+	if not _pan_pressed:
+		return
+	_pan_pos += delta
+	if table_scroll == null or is_zero_approx(delta.y):
+		return
+	var bar := table_scroll.get_v_scroll_bar()
+	table_scroll.scroll_vertical = clampf(
+		table_scroll.scroll_vertical - delta.y, 0.0, bar.max_value)
+	get_viewport().set_input_as_handled()
+
+## Листать можно в любом месте стола, кроме самих карточек: с карточки
+## жест принадлежит перетаскиванию.
+func _can_pan_table(p: Vector2) -> bool:
+	if table_scroll == null or not table_scroll.is_visible_in_tree():
+		return false
+	if _modal_open():
+		return false
+	if not table_scroll.get_global_rect().has_point(p):
+		return false
+	for block in row_blocks:
+		var row := block as RowBlock
+		if row == null or row.flow == null or not row.is_visible_in_tree():
+			continue
+		for view in row.flow.tile_views:
+			var tile_view := view as TileView
+			if tile_view != null and tile_view.get_global_rect().has_point(p):
+				return false
+	return true
+
+## Модальные экраны лежат поверх стола: жест по ним партию листать не должен.
+func _modal_open() -> bool:
+	if draw_dialog != null and draw_dialog.visible:
+		return true
+	if menu_dialog != null and menu_dialog.visible:
+		return true
+	for overlay in [pass_overlay, win_overlay, help_overlay, settings_overlay,
+			turn_title_overlay]:
+		var o := overlay as Control
+		if o != null and o.visible:
+			return true
+	return false
+
 func toast(text: String, is_error: bool = false) -> void:
 	if toast_label == null or _toast_panel == null:
 		return
+	_fit_toast_width()
 	toast_label.text = text
 	toast_label.add_theme_color_override("font_color", Color("FF8A80") if is_error else Color("A5D6A7"))
 	toast_label.visible = true

@@ -381,6 +381,7 @@ func _render_rooms() -> void:
 		return
 	for room in _rooms:
 		_rooms_box.add_child(_make_room_row(room as Dictionary))
+	ScrollFix.relax(_rooms_box)
 
 
 func _make_room_row(room: Dictionary) -> Control:
@@ -622,6 +623,7 @@ func _show_lobby(room: Dictionary) -> void:
 		("Все на месте. %s" % ("Начинайте." if is_host else "Ждём, начнёт хост."))
 		if all_in else ("Ждём остальных игроков (%d из %d)." % [taken, seats]),
 		false)
+	ScrollFix.relax(_lobby_players)
 
 
 func _do_start() -> void:
@@ -840,6 +842,7 @@ func _update_presence() -> void:
 		ms.add_theme_color_override("font_color", Color(1, 1, 1, 0.5))
 		row.add_child(ms)
 		_server_box.add_child(row)
+	ScrollFix.relax(_server_box)
 
 
 func _reason(res: Dictionary, fallback: String) -> String:
@@ -953,6 +956,9 @@ func _build() -> void:
 	root.custom_minimum_size = Vector2(496, 0)
 	root.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	root.add_theme_constant_override("separation", 10)
+	# Контейнер лобби не ловит касание: иначе жест упирается в него и
+	# список комнат/игроков не проскроллить пальцем.
+	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	scroll.add_child(root)
 
 	var head := HBoxContainer.new()
@@ -1007,6 +1013,9 @@ func _build() -> void:
 	_set_page(_page_auth)
 	_refresh_stuck()
 	_update_buttons()
+	# Страницы лобби, строки серверов и комнат — контейнеры, а не кнопки:
+	# без этого палец упирается в них и лобби не листается.
+	ScrollFix.relax(root)
 
 
 ## Периодически освежаем «кто на связи». Отдельный таймер, а не ожидание
@@ -1121,7 +1130,7 @@ func _build_rooms() -> VBoxContainer:
 	page.add_child(create_row)
 	_seats_option = OptionButton.new()
 	_seats_option.custom_minimum_size = Vector2(Settings.touch(110), Settings.touch(44))
-	_seats_option.add_theme_font_size_override("font_size", Settings.fs(15))
+	Settings.style_option(_seats_option, 15)
 	for n in range(2, 6):
 		_seats_option.add_item("мест: %d" % n)
 		_seats_option.set_item_id(_seats_option.get_item_count() - 1, n)

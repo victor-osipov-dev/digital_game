@@ -141,7 +141,7 @@ func _build_ui() -> void:
 
 	count_option = OptionButton.new()
 	count_option.custom_minimum_size = Vector2(Settings.touch(110), Settings.touch(50))
-	count_option.add_theme_font_size_override("font_size", Settings.fs(17))
+	Settings.style_option(count_option, 17)
 	for n in range(Settings.MIN_PLAYERS, Settings.MAX_PLAYERS + 1):
 		count_option.add_item(str(n))
 	count_option.select(Settings.player_count - Settings.MIN_PLAYERS)
@@ -210,6 +210,12 @@ func _build_ui() -> void:
 
 	_build_help_overlay()
 	_build_online()
+	# Контейнеры меню не ловят касание — иначе список настроек и кнопок
+	# не проскроллить пальцем (кнопки и поля при этом остаются кликабельными).
+	# Само окно лобби не трогаем: оно само себя гасит (mouse_filter = STOP).
+	menu_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ScrollFix.relax(menu_box)
+	ScrollFix.relax(help_overlay)
 	_sync_scroll_min()
 
 
@@ -234,7 +240,7 @@ func _make_option_row(label_text: String, names: PackedStringArray, current: int
 	var option := OptionButton.new()
 	option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	option.custom_minimum_size = Vector2(0, Settings.touch(42))
-	option.add_theme_font_size_override("font_size", Settings.fs(15))
+	Settings.style_option(option, 15)
 	for n in names:
 		option.add_item(n)
 	option.select(clampi(current, 0, names.size() - 1))
@@ -272,13 +278,17 @@ func _build_help_overlay() -> void:
 	help_overlay.visible = false
 	add_child(help_overlay)
 
-	var center := CenterContainer.new()
-	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	help_overlay.add_child(center)
+	# MarginContainer, а не CenterContainer: окно занимает весь экран,
+	# правила листаются на любом телефоне, «Закрыть» всегда под рукой.
+	var mg := MarginContainer.new()
+	mg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	mg.add_theme_constant_override("margin_left", 10)
+	mg.add_theme_constant_override("margin_right", 10)
+	mg.add_theme_constant_override("margin_top", 10)
+	mg.add_theme_constant_override("margin_bottom", 10)
+	help_overlay.add_child(mg)
 
 	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(520, 760)
-	panel.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	var psb := StyleBoxFlat.new()
 	psb.bg_color = Color("1B2029")
 	psb.set_corner_radius_all(14)
@@ -289,7 +299,7 @@ func _build_help_overlay() -> void:
 	psb.content_margin_top = 14.0
 	psb.content_margin_bottom = 14.0
 	panel.add_theme_stylebox_override("panel", psb)
-	center.add_child(panel)
+	mg.add_child(panel)
 
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 10)
@@ -305,12 +315,15 @@ func _build_help_overlay() -> void:
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.custom_minimum_size = Vector2(0, 560)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.custom_minimum_size = Vector2(0, Settings.touch(200))
 	box.add_child(scroll)
 
 	var rich := RichTextLabel.new()
 	rich.bbcode_enabled = true
 	rich.fit_content = true
+	# Иначе жест глотает сам RichTextLabel и до ScrollContainer не доходит.
+	rich.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	rich.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	rich.add_theme_font_size_override("normal_font_size", Settings.fs(15))
 	rich.add_theme_font_size_override("bold_font_size", Settings.fs(17))
