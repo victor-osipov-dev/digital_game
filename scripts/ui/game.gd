@@ -1125,8 +1125,8 @@ func _on_hint_pressed() -> void:
 	var action := String(plan.get("action", ""))
 	if action == "place":
 		_hint_ids = (plan.get("tiles", []) as Array).duplicate()
-		toast("Подсказка: выложите %d/%d %s — это +%d очков" % [
-			_hint_ids.size(), _hint_available(_hint_ids), _card_word(_hint_ids.size()),
+		toast("Подсказка: выложите %d %s — это +%d очков" % [
+			_hint_ids.size(), _card_word(_hint_ids.size()),
 			int(plan.get("points", 0))], false)
 	elif action == "draw":
 		toast("Подсказка: возьмите число из колоды", false)
@@ -1667,29 +1667,6 @@ func _hide_toast() -> void:
 func _on_toast_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed:
 		_hide_toast()
-
-## Сколько всего таких карточек в руке (тот же цвет и номинал, джокеры — вместе):
-## подсказка «выложите 1/5 карточку» читается понятнее, чем простое число.
-func _hint_available(ids: Array) -> int:
-	var n := ids.size()
-	if n == 0 or state == null:
-		return n
-	var ref: Tile = null
-	for t in state.hand():
-		if (t as Tile).id == int(ids[0]):
-			ref = t
-			break
-	if ref == null:
-		return n
-	var total := 0
-	for t in state.hand():
-		var t2: Tile = t
-		if t2.is_joker or ref.is_joker:
-			if t2.is_joker == ref.is_joker:
-				total += 1
-		elif t2.color == ref.color and t2.value == ref.value:
-			total += 1
-	return maxi(total, n)
 
 func _card_word(count: int) -> String:
 	var d := count % 10
