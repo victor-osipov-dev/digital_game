@@ -106,13 +106,18 @@ func label_of(entry: Dictionary) -> String:
 ## серверам при каждом открытии меню незачем.
 func probe(force := false) -> Dictionary:
 	if _probing:
+		# Проверка уже идёт (например, запущена open() и ещё не кончилась).
+		# Отдать кэш сейчас — соврать «все сервера мертвы» на пустом кэше:
+		# так и делал _load_rooms. Дожидаемся конца той же проверки.
+		while _probing:
+			await get_tree().process_frame
 		return _health
 	if not force and _fresh():
 		return _health
 	_probing = true
 	var result := await _probe_all()
-	_probing = false
 	_health = result
+	_probing = false
 	return _health
 
 ## Результат последней проверки: id -> сведения о сервере. Пусто, если

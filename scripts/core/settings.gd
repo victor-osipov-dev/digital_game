@@ -33,6 +33,20 @@ func fs(base: int) -> int:
 func touch(base: int) -> int:
 	return fs(base)
 
+
+## Оформляет OptionButton И его выпадающий список. Шрифт в свёрнутой
+## кнопке уже рос, а пункты списка оставались дефолтно-крошечными:
+## Данные по «размеру карточек» пальцем было не попасть. Делаем и списку
+## крупный шрифт, и высокие строки — высота строки от размера текста.
+func style_option(option: OptionButton, font_base: int) -> void:
+	option.add_theme_font_size_override("font_size", fs(font_base))
+	var popup := option.get_popup()
+	if popup == null:
+		return
+	popup.add_theme_font_size_override("font_size", fs(font_base + 1))
+	popup.add_theme_constant_override("item_height", touch(46))
+	popup.add_theme_constant_override("v_separation", touch(2))
+
 func tile_size() -> Vector2:
 	var idx := clampi(tile_step, 0, TILE_WIDTHS.size() - 1)
 	var w := float(TILE_WIDTHS[idx])
