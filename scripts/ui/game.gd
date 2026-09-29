@@ -36,6 +36,7 @@ var settings_overlay: ColorRect = null
 var turn_title_overlay: ColorRect = null
 var turn_title_label: Label = null
 var toast_label: Label = null
+var _toast_panel: PanelContainer = null
 var draw_dialog: ConfirmationDialog = null
 var menu_dialog: ConfirmationDialog = null
 var toast_tween: Tween = null
@@ -61,6 +62,7 @@ var _slot_grace_until: int = 0
 var _online: bool = false
 var _sending: bool = false
 var _wait_label: Label = null
+var _wait_panel: PanelContainer = null
 var _grace: float = 0.0
 var _paused: bool = false
 
@@ -173,8 +175,69 @@ func _build_ui() -> void:
 	menu_btn.pressed.connect(func(): menu_dialog.popup_centered())
 	top.add_child(menu_btn)
 
+	# Строка состояния хода («Ход соперника», «Нет связи…») — отдельная
+	# панель в потоке раскладки, а не абсолютная накладка: на телефоне
+	# старые координаты наезжали на строку имён игроков с числом карточек.
+	var wait_panel := PanelContainer.new()
+	var wsb := StyleBoxFlat.new()
+	wsb.bg_color = Color(0.10, 0.14, 0.21, 0.95)
+	wsb.border_color = Color(0.56, 0.73, 0.98, 0.45)
+	wsb.set_border_width_all(1)
+	wsb.set_corner_radius_all(8)
+	wsb.content_margin_left = 10.0
+	wsb.content_margin_right = 10.0
+	wsb.content_margin_top = 4.0
+	wsb.content_margin_bottom = 4.0
+	wait_panel.add_theme_stylebox_override("panel", wsb)
+	layout.add_child(wait_panel)
+	wait_panel.visible = false
+	_wait_panel = wait_panel
+	_wait_label = Label.new()
+	_wait_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_wait_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_wait_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_wait_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_wait_label.add_theme_font_size_override("font_size", Settings.fs(15))
+	_wait_label.add_theme_color_override("font_color", Color("90CAF9"))
+	_wait_label.visible = false
+	wait_panel.add_child(_wait_label)
+
+	# Подсказки и короткие сообщения — оверлей ПОВЕРХ поля: ничего не добавляют
+	# в раскладку и не сдвигают её, крупный текст с фоном читается поверх стола.
+	var toast_host := Control.new()
+	toast_host.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	toast_host.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(toast_host)
+	var toast_center := CenterContainer.new()
+	toast_center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	toast_center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	toast_host.add_child(toast_center)
+	var toast_panel := PanelContainer.new()
+	var tsb := StyleBoxFlat.new()
+	tsb.bg_color = Color(0.06, 0.08, 0.11, 0.94)
+	tsb.border_color = Color(0.55, 0.75, 0.62, 0.7)
+	tsb.set_border_width_all(2)
+	tsb.set_corner_radius_all(14)
+	tsb.content_margin_left = 18.0
+	tsb.content_margin_right = 18.0
+	tsb.content_margin_top = 12.0
+	tsb.content_margin_bottom = 12.0
+	toast_panel.add_theme_stylebox_override("panel", tsb)
+	toast_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	toast_center.add_child(toast_panel)
+	toast_panel.visible = false
+	_toast_panel = toast_panel
+	toast_label = Label.new()
+	toast_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	toast_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	toast_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	toast_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	toast_label.add_theme_font_size_override("font_size", Settings.fs(22))
+	toast_label.visible = false
+	toast_panel.add_child(toast_label)
+
 	var chips_scroll := ScrollContainer.new()
-	chips_scroll.custom_minimum_size = Vector2(0, 32)
+	chips_scroll.custom_minimum_size = Vector2(0, Settings.touch(34))
 	chips_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	layout.add_child(chips_scroll)
 	chips_box = HBoxContainer.new()
@@ -189,7 +252,7 @@ func _build_ui() -> void:
 	table_box = VBoxContainer.new()
 	table_box.add_theme_constant_override("separation", 6)
 	table_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	table_box.mouse_filter = Control.MOUSE_FILTER_STOP
+	table_box.mouse_filter = Control.MOUSE_FILTER_PASS
 	table_scroll.add_child(table_box)
 
 	hint_zone = DropLayer.new()
@@ -242,22 +305,6 @@ func _build_ui() -> void:
 	end_button.pressed.connect(_on_main_pressed)
 	_apply_accent_style(end_button, Color("2E7D32"), Color("388E3C"), Color("1B5E20"))
 	bottom.add_child(end_button)
-
-	toast_label = Label.new()
-	toast_label.anchor_left = 0.0
-	toast_label.anchor_right = 1.0
-	toast_label.anchor_top = 0.0
-	toast_label.anchor_bottom = 0.0
-	toast_label.offset_top = 100.0
-	toast_label.offset_bottom = 152.0
-	toast_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	toast_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	toast_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	toast_label.add_theme_font_size_override("font_size", Settings.fs(15))
-	toast_label.visible = false
-	add_child(toast_label)
-
-	_build_wait_label()
 
 	_build_pass_overlay()
 	_build_win_overlay()
@@ -392,29 +439,12 @@ func _build_pass_overlay() -> void:
 ## держится секундами и десятками секунд. Тост для этого не годится: он
 ## исчезает, и через пару секунд игрок снова не понимает, почему стол не
 ## реагирует на перетаскивание.
-func _build_wait_label() -> void:
-	_wait_label = Label.new()
-	_wait_label.anchor_left = 0.0
-	_wait_label.anchor_right = 1.0
-	_wait_label.anchor_top = 0.0
-	_wait_label.anchor_bottom = 0.0
-	_wait_label.offset_top = 84.0
-	_wait_label.offset_bottom = 116.0
-	_wait_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_wait_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_wait_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_wait_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_wait_label.add_theme_font_size_override("font_size", Settings.fs(15))
-	_wait_label.add_theme_color_override("font_color", Color("90CAF9"))
-	_wait_label.visible = false
-	add_child(_wait_label)
-
-
 func _show_wait(text: String) -> void:
 	if _wait_label == null:
 		return
 	_wait_label.text = text
 	_wait_label.visible = not text.is_empty()
+	_wait_panel.visible = _wait_label.visible
 
 func _build_win_overlay() -> void:
 	win_overlay = ColorRect.new()
@@ -1370,9 +1400,10 @@ func _update_chips() -> void:
 		sb.set_border_width_all(2 if is_now else 1)
 		sb.content_margin_left = 8.0
 		sb.content_margin_right = 8.0
-		sb.content_margin_top = 3.0
-		sb.content_margin_bottom = 3.0
+		sb.content_margin_top = 4.0
+		sb.content_margin_bottom = 4.0
 		chip.add_theme_stylebox_override("panel", sb)
+		chip.mouse_filter = Control.MOUSE_FILTER_PASS
 		var lab := Label.new()
 		lab.text = "%s · %d" % [state.player_name(i), state.hand_size(i)]
 		# В сетевой игре показываем и наше место, и «мы тут» — иначе
@@ -1386,7 +1417,7 @@ func _update_chips() -> void:
 			lab.text += " · ходит"
 		if _online and not state.is_connected_player(i):
 			lab.text += " · нет связи"
-		lab.add_theme_font_size_override("font_size", Settings.fs(12))
+		lab.add_theme_font_size_override("font_size", Settings.fs(14))
 		lab.add_theme_color_override("font_color", Color(1, 1, 1, 0.95) if is_now else Color(1, 1, 1, 0.6))
 		chip.add_child(lab)
 		chips_box.add_child(chip)
@@ -1463,13 +1494,18 @@ func _update_hint_zone_size() -> void:
 		hint_zone.custom_minimum_size.y = target
 
 func toast(text: String, is_error: bool = false) -> void:
+	if toast_label == null or _toast_panel == null:
+		return
 	toast_label.text = text
 	toast_label.add_theme_color_override("font_color", Color("FF8A80") if is_error else Color("A5D6A7"))
 	toast_label.visible = true
-	toast_label.modulate.a = 1.0
+	_toast_panel.visible = true
+	_toast_panel.modulate.a = 1.0
 	if toast_tween != null and toast_tween.is_running():
 		toast_tween.kill()
 	toast_tween = create_tween()
 	toast_tween.tween_interval(2.6)
-	toast_tween.tween_property(toast_label, "modulate:a", 0.0, 0.5)
-	toast_tween.tween_callback(func(): toast_label.visible = false)
+	toast_tween.tween_property(_toast_panel, "modulate:a", 0.0, 0.5)
+	toast_tween.tween_callback(func():
+		toast_label.visible = false
+		_toast_panel.visible = false)

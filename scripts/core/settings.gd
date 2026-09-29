@@ -13,8 +13,8 @@ const BOT_LEVEL_NAMES := ["Лёгкий", "Средний", "Сложный", "�
 var player_count: int = MIN_PLAYERS
 var player_names: PackedStringArray = PackedStringArray()
 var require_30: bool = true
-var text_scale: int = 1
-var tile_step: int = 3
+var text_scale: int = 2
+var tile_step: int = 5
 var bot_level: int = 1
 var player_is_bot: Array = []
 
@@ -80,8 +80,8 @@ func load_settings() -> void:
 	if cf.load(CFG_PATH) == OK:
 		player_count = clampi(int(cf.get_value("game", "player_count", MIN_PLAYERS)), MIN_PLAYERS, MAX_PLAYERS)
 		require_30 = bool(cf.get_value("game", "require_30", true))
-		text_scale = clampi(int(cf.get_value("game", "text_scale", 1)), 0, TEXT_SCALES.size() - 1)
-		tile_step = clampi(int(cf.get_value("game", "tile_step", 3)), 0, TILE_WIDTHS.size() - 1)
+		text_scale = clampi(int(cf.get_value("game", "text_scale", 2)), 0, TEXT_SCALES.size() - 1)
+		tile_step = clampi(int(cf.get_value("game", "tile_step", 5)), 0, TILE_WIDTHS.size() - 1)
 		bot_level = clampi(int(cf.get_value("game", "bot_level", 1)), 0, BOT_LEVEL_NAMES.size() - 1)
 		var stored = cf.get_value("game", "player_names", PackedStringArray())
 		if stored is PackedStringArray:
