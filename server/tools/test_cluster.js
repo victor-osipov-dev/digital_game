@@ -855,6 +855,9 @@ function planRowFromView(state, catalog) {
     // Хост партию тоже видит — она началась сама, без кнопки.
     const start = await frank.rpc({ t: 'game.rejoin' }, 'game.state');
     assert.strictEqual(start.t, 'game.state', JSON.stringify(start));
+    // В идущей партии для всех открыт отсчёт хода.
+    assert.ok(typeof start.state.turnLeft === 'number' && start.state.turnLeft >= 1
+      && start.state.turnLeft <= 60, `отсчёт хода должен идти: ${start.state.turnLeft}`);
     // Мягкий выход: место остаётся, а ответ называет комнату, в которой
     // игрока ждут (из неё клиент строит баннер «вы всё ещё в комнате»).
     const leave = await gina.rpc({ t: 'room.leave' }, ['room.left', 'game.error']);
@@ -900,6 +903,7 @@ function planRowFromView(state, catalog) {
     assert.strictEqual(waitView.t, 'game.state',
       `ожидание второго должно держать комнату: ${JSON.stringify(waitView)}`);
     assert.strictEqual(waitView.waiting, true, 'франку сообщено, что ждём второго игрока');
+    assert.strictEqual(waitView.state.turnLeft, null, 'в ожидании второго отсчёта нет');
     // Последний уходит с концами — для него комнаты больше нет.
     const drop2 = await frank.rpc({ t: 'room.drop' }, ['room.left', 'game.error']);
     assert.strictEqual(drop2.t, 'room.left', JSON.stringify(drop2));

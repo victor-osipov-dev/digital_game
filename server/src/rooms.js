@@ -45,6 +45,14 @@ class Room {
     // Таймер «дозабрать пустые места ботами» (ставится в лобби, чистится
     // при старте). Боты ходят по room._botTimer из хаба.
     this.startTimer = null;
+    // Отсчёт текущего хода: мс-дедлайн. null — отсчёта нет (пауза,
+    // ожидание второго игрока, партия кончена); ставится и гасится хабом,
+    // при каждом завершённом ходе сбрасывается — see hub._scheduleTurn.
+    this.turnDeadlineMs = null;
+    // Чей это дедлайн (g.current на момент установки): если текущий
+    // сменился без завершения хода, чужой дедлайн пересоздаётся.
+    this.turnDeadlineFor = null;
+    this._turnTimer = null;
   }
 
   seatOfUser(userId) {
@@ -80,9 +88,18 @@ class Room {
 
   pauseFor(seat) {
     this.paused.set(seat, { deadline: Date.now() + config.disconnectGraceMs, at: Date.now() });
+    // Пока ждём переподключения, ходить некому — отсчёт гасим. Возобновит
+    // его хаб, как только пауза снимется (maybeRunBots -> _scheduleTurn).
+    this.turnDeadlineMs = null;
   }
 
   clearPause(seat) { this.paused.delete(seat); }
+
+  /** Секунд до конца отсчёта текущего хода (null — отсчёта нет). */
+  turnLeft() {
+    if (this.turnDeadlineMs == null) return null;
+    return Math.max(0, Math.ceil((this.turnDeadlineMs - Date.now()) / 1000));
+  }
 
   /** Секунд до конца ожидания переподключения (0 = не ждём). */
   graceRemaining(seat) {
@@ -107,6 +124,7 @@ class Rooms {
     this.sweeper = null;
     for (const room of this.rooms.values()) {
       if (room.startTimer) { clearTimeout(room.startTimer); room.startTimer = null; }
+      if (room._turnTimer) { clearTimeout(room._turnTimer); room._turnTimer = null; }
     }
   }
 
@@ -463,6 +481,9 @@ class Rooms {
     }
     g.commit();
     room.touch();
+    // Ход кончился — отсчёт прежнего игрока больше не нужен: новый запустит
+    // хаб (maybeRunBots -> _scheduleTurn), когда дойдёт до рассылки.
+    room.turnDeadlineMs = null;
     this.db.addResult(room.players[seat].login, result.win === true);
     return { ok: true, room, seat, win: result.win === true };
   }
@@ -497,6 +518,7 @@ class Rooms {
     }
     g.commit();
     room.touch();
+    room.turnDeadlineMs = null;
     return { ok: true, room, seat };
   }
 
@@ -660,6 +682,10 @@ class Rooms {
       clearTimeout(room.startTimer);
       room.startTimer = null;
     }
+    if (room._turnTimer) {
+      clearTimeout(room._turnTimer);
+      room._turnTimer = null;
+    }
     this.rooms.delete(room.code);
     log.info(`комната ${room.code} удалена (${why})`);
   }
@@ -675,7 +701,11 @@ class Rooms {
       room.sockets.delete(seat);
       room.players[seat] = null;
       room.paused.delete(seat);
-      if (room.game) room.game.dropPlayer(seat);
+      if (room.game) {
+        room.game.dropPlayer(seat);
+        // Выбывший мог быть текущим: чужой дедлайн в отсчёте остался бы.
+        room.turnDeadlineMs = null;
+      }
     }
     this.byUser.delete(user.id);
     this._dropFromQuick(user.id);

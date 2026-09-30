@@ -3,7 +3,7 @@
 const { WebSocketServer } = require('ws');
 const { config } = require('./config');
 const log = require('./log');
-const { C2S, S2C, RID_FIELD, MAX_MESSAGE_BYTES } = require('./protocol');
+const { C2S, S2C, RID_FIELD, MAX_MESSAGE_BYTES, CATALOG_SIZE } = require('./protocol');
 const views = require('./views');
 const { planGame } = require('./engine/bot');
 
@@ -50,6 +50,7 @@ class Hub {
     if (this.wss) this.wss.close();
     for (const room of this.rooms.rooms.values()) {
       if (room._botTimer) { clearTimeout(room._botTimer); room._botTimer = null; }
+      if (room._turnTimer) { clearTimeout(room._turnTimer); room._turnTimer = null; }
     }
   }
 
@@ -120,7 +121,13 @@ class Hub {
     if (ctx.superseded) return;
     const room = this.rooms.onDisconnect(ctx.user);
     log.info(`${ctx.user.nick} отключился${room ? ` (комната ${room.code})` : ''}`);
-    if (room) this.broadcastRoom(room, null);
+    if (room) {
+      // Пауза (или выход в ожидание) уже гасит отсчёт хода — пересчитать
+      // его нужно и здесь, и до рассылки: клиент должен увидеть состояние
+      // с тем отсчётом, какое реально действует после ухода.
+      this.maybeRunBots(room);
+      this.broadcastRoom(room, null);
+    }
   }
 
   // ------------------------------------------------------------ сообщения
@@ -272,6 +279,10 @@ class Hub {
         const r = this.rooms.joinRoom(ctx.user, msg.code, msg.password);
         if (!r.ok) { this.reply(ctx, { t: S2C.GAME_ERROR, reason: r.reason }, rid); break; }
         this.attachSeat(ctx, r.room, r.seat);
+        // Отсчёт (и планирование ботов) пересчитываем ДО рассылки: иначе
+        // клиенты получат состояние с погашенным таймером и не запустят
+        // свой отсчёт.
+        this.maybeRunBots(r.room);
         if (r.playing) {
           // Вход в идущую партию: личным ответом уходит уже само состояние
           // партии (с рукой этого игрока), а не лобби. Иначе клиент показал
@@ -281,7 +292,6 @@ class Hub {
           this.reply(ctx, { t: S2C.ROOM_STATE, room: views.fullLobbyView(r.room, r.seat) }, rid);
         }
         this.broadcastRoom(r.room, r.seat);
-        this.maybeRunBots(r.room);
         break;
       }
       case C2S.ROOM_LEAVE: {
@@ -296,8 +306,8 @@ class Hub {
         if (r.soft && r.room) out.room = views.roomSummary(r.room, r.seat);
         this.reply(ctx, out, rid);
         if (room) {
-          this.broadcastRoom(room, null);
           this.maybeRunBots(room);
+          this.broadcastRoom(room, null);
         }
         break;
       }
@@ -308,8 +318,8 @@ class Hub {
         ctx.seat = -1;
         this.reply(ctx, { t: S2C.ROOM_LEFT }, rid);
         if (room) {
-          this.broadcastRoom(room, null);
           this.maybeRunBots(room);
+          this.broadcastRoom(room, null);
         }
         break;
       }
@@ -369,9 +379,46 @@ class Hub {
         if (!r) { this.reply(ctx, { t: S2C.GAME_ERROR, reason: 'Партия не найдена' }, rid); break; }
         ctx.roomCode = r.room.code;
         ctx.seat = r.seat;
+        this.maybeRunBots(r.room);
         this.pushGameState(r.room, r.seat, rid);
         this.broadcastRoom(r.room, r.seat);
-        this.maybeRunBots(r.room);
+        break;
+      }
+
+      case C2S.GAME_PEEK: {
+        // Превью хода («он перебирает, куда положить»): пересылаем
+        // остальным без проверки правил — это только картинка. Фишку
+        // клиент рисует по своему каталогу из hello, сюда уходит лишь
+        // номер, так что подделать цвет/значение нельзя. shape валидируем,
+        // чтобы чужой сокет не сыпал мусором в чужой экран.
+        const room = ctx.roomCode ? this.rooms.rooms.get(ctx.roomCode) : null;
+        if (!room || room.state !== 'playing') break;
+        const seat = ctx.seat;
+        if (!(seat >= 0 && seat < room.seats)) break;
+        const kind = msg.kind;
+        if (kind !== 'clear' && kind !== 'into' && kind !== 'new' && kind !== 'back') break;
+        if (!Number.isInteger(msg.tile) || msg.tile < 0 || msg.tile >= CATALOG_SIZE) break;
+        const peek = { t: S2C.GAME_PEEK, from: seat, tile: msg.tile, kind };
+        if (kind === 'into') {
+          if (!Number.isInteger(msg.row) || msg.row < 0 || msg.row > 10000) break;
+          if (!Number.isInteger(msg.index) || msg.index < 0 || msg.index > 64) break;
+          peek.row = msg.row;
+          peek.index = msg.index;
+        } else if (kind === 'new') {
+          if (!Number.isInteger(msg.at) || msg.at < 0 || msg.at > 10000) break;
+          peek.at = msg.at;
+        }
+        // Троттлинг: клиент шлёт только при смене цели, но и на всякий
+        // случай не даём сыпать превью чаще, чем раз в 40 мс.
+        const now = Date.now();
+        if (room._peekAt && now - (room._peekAt.get(seat) || 0) < 40) break;
+        if (!room._peekAt) room._peekAt = new Map();
+        room._peekAt.set(seat, now);
+        for (let s = 0; s < room.seats; s += 1) {
+          if (s === seat) continue;
+          const c = this.ctxOfSeat(room, s);
+          if (c) this.send(c, peek);
+        }
         break;
       }
 
@@ -472,13 +519,15 @@ class Hub {
 
   afterMove(r, rid) {
     const room = r.room;
+    // Дедлайн нового хода — до рассылки: клиенты должны получить состояние
+    // с уже запущенным отсчётом, а не с погашенным таймером.
+    this.maybeRunBots(room);
     this.pushGameState(room, r.seat, rid);
     this.broadcastRoom(room, r.seat);
     if (room.state === 'playing' && room.game.finished) {
       const w = room.game.players[room.game.winner];
       log.info(`комната ${room.code}: победа ${w ? w.name : '?'}`);
     }
-    this.maybeRunBots(room);
   }
 
   // ------------------------------------------------------------ боты
@@ -489,8 +538,10 @@ class Hub {
    * кнопка «начать», и автостарт по таймеру дают ровно одно событие.
    */
   onRoomPlay(room) {
-    this.broadcastRoom(room, null);
+    // Старт: сначала отсчёт (и планирование ботов), потом рассылка —
+    // первый кадр партии у всех клиентов уже с живым таймером.
     this.maybeRunBots(room);
+    this.broadcastRoom(room, null);
   }
 
   /**
@@ -499,8 +550,15 @@ class Hub {
    */
   maybeRunBots(room) {
     if (!room) return;
+    // Отсчёт хода живёт рядом с ботами: любое изменение состояния комнаты
+    // (ход, вход/выход, пауза, ожидание) проходит черезсюда и пересчитывает
+    // дедлайн вместе с таймером.
+    this._scheduleTurn(room);
     // Ждём второго живого игрока — боты молчат до прихода человека.
     if (room.waiting) return;
+    // И то же, когда живых осталось меньше двух: один человек за столом
+    // ботов — партия ждёт людей, а не ходит сама.
+    if (this.rooms.humanCount(room) < 2) return;
     if (this.rooms.rooms.get(room.code) !== room) return;
     if (room.state !== 'playing' || !room.game || room.game.finished) return;
     if (room.isPaused()) return;
@@ -515,10 +573,105 @@ class Hub {
       if (this.rooms.rooms.get(room.code) !== room) return;
       // Ждём второго живого — ход бота откладывается до прихода человека.
       if (room.waiting) return;
+      if (this.rooms.humanCount(room) < 2) return;
       if (room.isPaused()) { this.maybeRunBots(room); return; }
       this.playBotTurn(room);
     }, delay);
     if (room._botTimer.unref) room._botTimer.unref();
+  }
+
+  /**
+   * Отсчёт текущего хода. Дедлайн ставится, когда отсчёта нет (старт
+   * партии, возобновление после паузы, только что завершённый ход),
+   * иначе таймер просто перепланируется на уже известный дедлайн.
+   * Пока отсчёта быть не должно (пауза, ожидание второго, конец
+   * партии) — дедлайн гаснет и никто его не трогает.
+   */
+  _scheduleTurn(room) {
+    if (room._turnTimer) {
+      clearTimeout(room._turnTimer);
+      room._turnTimer = null;
+    }
+    const alive = this.rooms.rooms.get(room.code) === room
+      && room.state === 'playing' && room.game && !room.game.finished
+      && !room.waiting && !room.isPaused();
+    if (!alive) {
+      room.turnDeadlineMs = null;
+      return;
+    }
+    // Текущий мог смениться без завершения хода (выбыл, место занял бот):
+    // прежний дедлайн чужой, начинаем отсчёт для нового.
+    if (room.turnDeadlineMs == null || room.turnDeadlineFor !== room.game.current) {
+      room.turnDeadlineMs = Date.now() + config.turnSeconds * 1000;
+      room.turnDeadlineFor = room.game.current;
+    }
+    const delay = Math.max(50, room.turnDeadlineMs - Date.now() + 80);
+    room._turnTimer = setTimeout(() => {
+      room._turnTimer = null;
+      this._onTurnTimeout(room);
+    }, delay);
+    if (room._turnTimer.unref) room._turnTimer.unref();
+  }
+
+  /**
+   * Время хода вышло: сервер сам берёт фишку из колоды (на пустой колоде
+   * пропускает ход) и передаёт очередь дальше — партия не встаёт, даже
+   * если игрок отвлёкся. Зеркалит ботий fallback: beginTurn ->
+   * drawFromDeck -> (пусто? skipTurn) -> commit.
+   */
+  _onTurnTimeout(room) {
+    if (this.rooms.rooms.get(room.code) !== room) return;
+    if (room.state !== 'playing' || !room.game || room.game.finished
+      || room.waiting || room.isPaused()) {
+      room.turnDeadlineMs = null;
+      return;
+    }
+    // Дедлайн сбили или сменяли (возобновление, уход текущего) — ждём новый.
+    if (room.turnDeadlineMs == null || Date.now() < room.turnDeadlineMs - 5
+      || room.turnDeadlineFor !== room.game.current) {
+      room.turnDeadlineMs = null;
+      this._scheduleTurn(room);
+      return;
+    }
+    room.turnDeadlineMs = null;
+    const g = room.game;
+    const seat = g.current;
+    if (!g.players[seat]) return;
+    let drew = false;
+    try {
+      g.beginTurn();
+      const r = g.drawFromDeck();
+      drew = r.ok;
+      if (!r.ok) {
+        if (g.tilesLeftInDeck() === 0) {
+          g.skipTurn();
+        } else {
+          // Рисовать не вышло, а колода жива — не гадаем почему, а
+          // возвращаем отсчёт и даём команде время самой разобраться.
+          g.rollback();
+          log.warn(`комната ${room.code}: авто-ход не удался (${r.reason})`);
+          this.maybeRunBots(room);
+          return;
+        }
+      }
+      g.commit();
+      room.touch();
+    } catch (e) {
+      log.error(`комната ${room.code}: авто-ход упал: ${e.stack || e.message}`);
+      try { g.rollback(); } catch (_) { /* транзакции могло не быть */ }
+      return;
+    }
+    const ctx = this.ctxOfSeat(room, seat);
+    if (ctx) {
+      this.send(ctx, {
+        t: S2C.TOAST,
+        text: drew ? 'Время хода вышло — фишка взята из колоды'
+          : 'Время хода вышло — ход пропущен автоматически',
+      });
+    }
+    log.info(`комната ${room.code}: время хода игрока ${seat} вышло — авто-взятие из колоды`);
+    this.maybeRunBots(room);
+    this.broadcastRoom(room, null);
   }
 
   /**
@@ -543,6 +696,8 @@ class Hub {
         } else {
           g.commit();
           room.touch();
+          // Ход бота кончился — прежний отсчёт гасим до _scheduleTurn.
+          room.turnDeadlineMs = null;
           const rec = room.players[seat];
           if (rec && rec.login) this.db.addResult(rec.login, res.win === true);
           else if (res.win === true) log.info(`комната ${room.code}: бот ${player.name} победил`);
@@ -563,6 +718,7 @@ class Hub {
       }
       g.commit();
       room.touch();
+      room.turnDeadlineMs = null;
       this.afterBotMove(room);
     } catch (e) {
       log.error(`комната ${room.code}: бот упал: ${e.stack || e.message}`);
@@ -571,14 +727,14 @@ class Hub {
   }
 
   afterBotMove(room) {
-    this.broadcastRoom(room, null);
     this.maybeRunBots(room);
+    this.broadcastRoom(room, null);
   }
 
   drainExpired() {
     for (const room of this.rooms.expireDisconnects()) {
-      this.broadcastRoom(room, null);
       this.maybeRunBots(room);
+      this.broadcastRoom(room, null);
     }
   }
 
@@ -676,8 +832,8 @@ class Hub {
     }
     // Комнаты с истёкшим ожиданием переподключения.
     for (const room of this.rooms.expireDisconnects()) {
-      this.broadcastRoom(room, null);
       this.maybeRunBots(room);
+      this.broadcastRoom(room, null);
     }
     void now;
   }

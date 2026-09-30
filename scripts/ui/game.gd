@@ -8,6 +8,10 @@ const HINT_MIN_H := 100.0
 const DRAG_SCROLL_ZONE := 64.0
 const DRAG_SCROLL_OVERSHOOT := 40.0
 const DRAG_SCROLL_SPEED := 480.0
+# Превью хода шлём повторно, пока тянем, — иначе соперник не отличит
+# долгое «он думает тут» от брошенного призрака упавшего клиента.
+const PEEK_RESEND_MS := 2000
+const PEEK_EXPIRE_MS := 5000
 
 var state: GameState = null
 var row_blocks: Array = []
@@ -79,6 +83,26 @@ var _waiting: bool = false
 # сверху, сдвинутые переезжают, ушедшие улетают вверх призраком.
 var _anim_pending: bool = false
 
+# --- отсчёт хода (сетевая партия) ---------------------------------------
+#
+# Дедлайн в тиках из view.turnLeft, обновляется на каждый game.state;
+# между состояниями секунды считает сам клиент (_process). Панелька в
+# раскладке показывает, сколько осталось текущему игроку — всем видно.
+var _turn_deadline_ms: int = 0
+var _turn_timer_panel: PanelContainer = null
+var _turn_timer_label: Label = null
+
+# --- превью ходов соперника (game.peek) ----------------------------------
+#
+# Пока игрок перебирает варианты, сервер пересылает остальным, куда он
+# смотрит; здесь это рисуется призраком фишки над столом.
+var _peek_layer: Control = null
+var _peek_ghost: TileView = null
+var _peek_drag: Dictionary = {}
+var _last_peek: Dictionary = {}
+var _peek_resent_ms: int = 0
+var _peek_at_ms: int = 0
+
 func _ready() -> void:
 	_build_ui()
 	resized.connect(_on_resized)
@@ -93,6 +117,9 @@ func _ready() -> void:
 		Net.game_error.connect(_on_net_error)
 		Net.game_lost.connect(_on_net_lost)
 		Net.connection_changed.connect(_on_net_connection)
+		Net.game_peek.connect(_on_net_peek)
+		# TOAST от сервера (например, «время хода вышло») — обычным тостом.
+		Net.notice.connect(toast)
 		# Состояние уже могло прийти, пока сцена грузилась.
 		_apply_state(Net.pending_state(), 0.0, false)
 		_net_rejoin()
@@ -105,7 +132,10 @@ func _process(_delta: float) -> void:
 	if _drag_view != null and is_instance_valid(_drag_view):
 		_update_row_slot_hover()
 		_auto_scroll_drag(_delta)
+		_update_peek()
 	_update_hint_zone_size()
+	_update_turn_timer()
+	_expire_peek()
 
 func _build_ui() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -214,6 +244,37 @@ func _build_ui() -> void:
 	_wait_label.add_theme_color_override("font_color", Color("90CAF9"))
 	_wait_label.visible = false
 	wait_panel.add_child(_wait_label)
+
+	# Отсчёт текущего хода — отдельной строкой, а не внутри панели
+	# состояния: та показывается только когда есть что сообщить, а
+	# «сколько секунд осталось» нужно видеть и на своём ходу.
+	_turn_timer_panel = PanelContainer.new()
+	var tpb := StyleBoxFlat.new()
+	tpb.bg_color = Color(0.16, 0.12, 0.05, 0.95)
+	tpb.border_color = Color("FFD54F")
+	tpb.set_border_width_all(1)
+	tpb.set_corner_radius_all(8)
+	tpb.content_margin_left = 10.0
+	tpb.content_margin_right = 10.0
+	tpb.content_margin_top = 4.0
+	tpb.content_margin_bottom = 4.0
+	_turn_timer_panel.add_theme_stylebox_override("panel", tpb)
+	layout.add_child(_turn_timer_panel)
+	_turn_timer_panel.visible = false
+	_turn_timer_label = Label.new()
+	_turn_timer_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_turn_timer_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_turn_timer_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_turn_timer_label.add_theme_font_size_override("font_size", Settings.fs(15))
+	_turn_timer_label.add_theme_color_override("font_color", Color("FFD54F"))
+	_turn_timer_panel.add_child(_turn_timer_label)
+
+	# Превью хода соперника — призрак фишки над столом. Накладка вне
+	# раскладки: не двигает стол, не перехватывает касания.
+	_peek_layer = Control.new()
+	_peek_layer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_peek_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_peek_layer)
 
 	# Подсказки и короткие сообщения — оверлей ПОВЕРХ поля: ничего не добавляют
 	# в раскладку и не сдвигают её, крупный текст с фоном читается поверх стола.
@@ -780,6 +841,11 @@ func _net_unwatch() -> void:
 		Net.game_lost.disconnect(_on_net_lost)
 	if Net.connection_changed.is_connected(_on_net_connection):
 		Net.connection_changed.disconnect(_on_net_connection)
+	if Net.game_peek.is_connected(_on_net_peek):
+		Net.game_peek.disconnect(_on_net_peek)
+	if Net.notice.is_connected(toast):
+		Net.notice.disconnect(toast)
+	_clear_peek()
 
 
 ## Переспрашивает состояние после входа в сцену: пока грузились текстуры
@@ -848,6 +914,10 @@ func _wait_text(grace: float, paused: bool, waiting: bool) -> String:
 		return ""
 	if grace > 0.0:
 		return "Соперник не отвечает. Осталось ждать %d с." % int(ceil(grace))
+	# Отсчёт показывает отдельная строка таймера — дублировать её словами
+	# «Ход соперника» не нужно. Без отсчёта (старый сервер) строка остаётся.
+	if _online and _turn_deadline_ms > Time.get_ticks_msec():
+		return ""
 	return "Ход соперника"
 
 
@@ -857,6 +927,13 @@ func _apply_state(view: Dictionary, grace: float, paused: bool, waiting: bool = 
 	_grace = grace
 	_paused = paused
 	_waiting = waiting
+	# Превью чужого хода после нового состояния уже лож: строки могли
+	# сдвинуться, а перебирать перестали.
+	_clear_peek()
+	# Отсчёт сервера. Пришло null (пауза/ожидание/конец) — ключа в
+	# словаре нет вовсе, и дедлайн гаснет сам.
+	var turn_left := int(view.get("turnLeft", 0))
+	_turn_deadline_ms = (Time.get_ticks_msec() + turn_left * 1000) if turn_left > 0 else 0
 	state = ViewBuilder.build(view)
 	_show_wait(_wait_text(grace, paused, waiting))
 
@@ -967,6 +1044,33 @@ func _show_turn_title() -> void:
 	title_tween.tween_interval(0.7)
 	title_tween.tween_property(turn_title_overlay, "modulate:a", 0.0, 0.35)
 	title_tween.tween_callback(func(): turn_title_overlay.visible = false)
+
+# ---------------------------------------------------------------- отсчёт хода
+
+## Строка «Ваш ход — 42 с» / «Ход: Игрок — 31 с». Считает локально от
+## дедлайна, приехавшего в view.turnLeft; сама строка гаснет, когда
+## отсчёта быть не должно (пауза, ожидание, конец партии).
+func _update_turn_timer() -> void:
+	if _turn_timer_label == null:
+		return
+	if not _online or state == null or state.finished or _waiting or _paused \
+			or _turn_deadline_ms <= 0:
+		_turn_timer_panel.visible = false
+		return
+	var left := int(ceil(float(_turn_deadline_ms - Time.get_ticks_msec()) / 1000.0))
+	if left <= 0:
+		# Дедлайн прошёл: сервер сейчас пришлёт новое состояние (авто-ход),
+		# до него строку не показываем — цифра «0 с» ничего не объясняет.
+		_turn_timer_panel.visible = false
+		return
+	var who := "Ваш ход" if state.my_turn() else "Ход: %s" % state.current_player().pname
+	if not state.my_turn() and state.is_bot_player(state.current):
+		who += " (бот)"
+	_turn_timer_label.text = "%s — %d с" % [who, left]
+	_turn_timer_label.add_theme_color_override(
+		"font_color", Color("EF5350") if left <= 10 else Color("FFD54F"))
+	_turn_timer_panel.visible = true
+
 
 func _run_bot_turn() -> void:
 	_bot_seq += 1
@@ -1177,6 +1281,15 @@ func on_drag_started(view: TileView) -> void:
 	_slot_hover_pos = -1
 	_slot_hover_time = 0
 	_slot_grace_until = 0
+	# Что тянем — для превью сопернику (game.peek).
+	_peek_drag = {
+		"kind": "tile",
+		"tile_id": view.tile.id,
+		"from": view.src_kind,
+		"row_id": view.src_row_id,
+	}
+	_last_peek = {}
+	_peek_resent_ms = 0
 	# Пока тянем карточку, стол не должен сам ловить touch-скролл:
 	# ScrollContainer перехватывает жест в щели между плитками, карточка
 	# отстаёт от пальца, а ряды начинают уезжать. Своё листание по краям
@@ -1194,6 +1307,9 @@ func _end_drag() -> void:
 	_set_drag_scroll_locked(false)
 	_pan_pressed = false
 	_pan_press_on_tile = false
+	# Конец перебирания — сопернику больше нечего показывать.
+	_send_peek({ "kind": "clear" })
+	_peek_drag = {}
 
 func _set_drag_scroll_locked(locked: bool) -> void:
 	if table_scroll == null:
@@ -1332,6 +1448,174 @@ func _slot_position(global_pos: Vector2) -> int:
 		if is_instance_valid(slot) and slot.get_global_rect().grow(SLOT_HOVER_EDGE * 2.0).has_point(global_pos):
 			return int(slot.get_meta("slot_pos", -1))
 	return -1
+
+# -------------------------------------------------------------- превью хода
+
+## Цель под пальцем в терминах протокола game.peek. Зеркалит gui_can_drop:
+## превью показываем только там, куда фишка реально могла бы лечь, иначе
+## соперник увидит «он думает сюда» про заведомо невозможный вариант.
+func _peek_target(global_pos: Vector2) -> Dictionary:
+	var out := { "kind": "clear" }
+	if _peek_drag.is_empty() or state == null or state.finished:
+		return out
+	var from := String(_peek_drag.get("from", ""))
+	var tile_id := int(_peek_drag.get("tile_id", -1))
+	if hand_flow != null and hand_flow.get_global_rect().has_point(global_pos):
+		# Забирает в руку: чужой руки не видно, но саму фишку показать
+		# можно — призраком поверх её текущего места.
+		if from == "row":
+			var src := _find_tile(tile_id)
+			if src != null and state.can_take_back(src):
+				out = { "kind": "back" }
+	elif table_scroll != null and table_scroll.get_global_rect().has_point(global_pos):
+		var hit := _table_hit(global_pos)
+		var target: GameState.Row = hit["row"]
+		if target != null:
+			var ok := false
+			if from == "hand":
+				ok = state.can_place_into(target)
+			else:
+				var src_row := state.row_by_id(int(_peek_drag.get("row_id", -1)))
+				ok = src_row != null and (target == src_row or state.can_touch_row(target))
+			if ok:
+				out = { "kind": "into", "row": target.id, "index": int(hit["index"]) }
+		else:
+			var gap := _hover_slot_pos(global_pos)
+			if gap >= 0:
+				out = { "kind": "new", "at": gap }
+			elif _in_hint_zone(global_pos):
+				out = { "kind": "new", "at": row_blocks.size() }
+	return out
+
+
+## Шлём превью, только когда цель изменилась; живую цель повторяем раз в
+## PEEK_RESEND_MS — иначе призрак соперника протухнет, пока мы молчим,
+## думая над позицией, а упавший клиент оставит призрак навсегда.
+func _update_peek() -> void:
+	if not _online or _peek_drag.is_empty():
+		return
+	var target := _peek_target(get_global_mouse_position())
+	var now := Time.get_ticks_msec()
+	if target != _last_peek:
+		_send_peek(target)
+	elif String(target.get("kind", "clear")) != "clear" \
+			and now - _peek_resent_ms >= PEEK_RESEND_MS:
+		_send_peek(target)
+
+
+func _send_peek(target: Dictionary) -> void:
+	if not _online:
+		return
+	_last_peek = target
+	_peek_resent_ms = Time.get_ticks_msec()
+	if not Net.is_linked():
+		return
+	var payload := {
+		"tile": int(_peek_drag.get("tile_id", 0)),
+		"kind": String(target.get("kind", "clear")),
+	}
+	if target.has("row"):
+		payload["row"] = int(target["row"])
+	if target.has("index"):
+		payload["index"] = int(target["index"])
+	if target.has("at"):
+		payload["at"] = int(target["at"])
+	Net.peek_place(payload)
+
+
+## Соперник прислал превью: рисуем призрак фишки в целевой точке.
+func _on_net_peek(tile_id: int, kind: String, row: int, index: int, at: int) -> void:
+	_clear_peek()
+	if kind == "clear" or tile_id <= 0 or state == null or state.finished:
+		return
+	if _peek_layer == null:
+		return
+	var pos: Variant = _peek_position(kind, tile_id, row, index, at)
+	if pos == null:
+		return
+	var ghost := TileView.make(ViewBuilder.tile(tile_id), false, self)
+	ghost.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ghost.modulate = Color(1, 1, 1, 0.7)
+	_peek_layer.add_child(ghost)
+	ghost.global_position = pos as Vector2
+	_peek_ghost = ghost
+	_peek_at_ms = Time.get_ticks_msec()
+
+
+## Куда положить призрак. null — в текущем состоянии этой точки нет
+## (например, ряд уже разобрали): превью просто не показываем.
+func _peek_position(kind: String, tile_id: int, row: int, index: int, at: int) -> Variant:
+	match kind:
+		"into":
+			return _peek_into_pos(row, index)
+		"new":
+			return _peek_new_pos(at)
+		"back":
+			return _peek_back_pos(tile_id)
+	return null
+
+
+func _peek_into_pos(row_id: int, index: int) -> Variant:
+	var rb := _row_block_by_id(row_id)
+	if rb == null or rb.flow == null:
+		return null
+	var tile_views := rb.flow.tile_views
+	if tile_views.is_empty():
+		return rb.global_position
+	if index >= tile_views.size():
+		var last: TileView = tile_views[tile_views.size() - 1]
+		return last.global_position + Vector2(Settings.tile_size().x + 8.0, 0.0)
+	return (tile_views[index] as TileView).global_position
+
+
+func _peek_new_pos(at: int) -> Variant:
+	var n := row_blocks.size()
+	var slot := clampi(at, 0, n)
+	if slot < n:
+		return (row_blocks[slot] as RowBlock).global_position
+	if n > 0:
+		var last_row := row_blocks[n - 1] as RowBlock
+		return last_row.global_position + Vector2(0.0, last_row.size.y + 6.0)
+	if table_box != null:
+		return table_box.global_position
+	return null
+
+
+func _peek_back_pos(tile_id: int) -> Variant:
+	for block in row_blocks:
+		var rb := block as RowBlock
+		if rb == null or rb.flow == null:
+			continue
+		for v in rb.flow.tile_views:
+			var tv := v as TileView
+			if tv != null and tv.tile != null and tv.tile.id == tile_id:
+				return tv.global_position + Vector2(0.0, -4.0)
+	return null
+
+
+func _row_block_by_id(row_id: int) -> RowBlock:
+	for block in row_blocks:
+		var rb := block as RowBlock
+		if rb != null and rb.row_id == row_id:
+			return rb
+	return null
+
+
+func _clear_peek() -> void:
+	if _peek_ghost != null and is_instance_valid(_peek_ghost):
+		_peek_ghost.queue_free()
+	_peek_ghost = null
+	_peek_at_ms = 0
+
+
+## Превью протухает само: если соперник перестал повторять цель
+## (упал, вышел), призрак не должен висеть вечно.
+func _expire_peek() -> void:
+	if _peek_ghost != null and (
+			not is_instance_valid(_peek_ghost)
+			or Time.get_ticks_msec() - _peek_at_ms > PEEK_EXPIRE_MS):
+		_clear_peek()
+
 
 func gui_can_drop(data: Dictionary, global_pos: Vector2) -> bool:
 	if state == null or state.finished or _bot_active or _is_bot_turn():

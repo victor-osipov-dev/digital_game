@@ -33,6 +33,9 @@ const GAME_COMMIT := "game.commit"       # {ops:[...]} -> game.state | game.erro
 const GAME_DRAW := "game.draw"
 const GAME_SKIP := "game.skip"
 const GAME_REJOIN := "game.rejoin"
+# Превью хода: игрок перебирает, куда положить/убрать фишку. Без ответа:
+# сервер пересылает остальным соперникам. kind: clear | into | new | back.
+const GAME_PEEK := "game.peek"           # {tile, kind, row?, index?, at?}
 
 const PING := "ping"
 
@@ -47,6 +50,9 @@ const ROOM_LEFT := "room.left"
 const QUICK_STATE := "quick.state"
 const GAME_STATE := "game.state"
 const GAME_ERROR := "game.error"
+# Превью хода соперника: {from, tile, kind, row?, index?, at?} — без rid,
+# рассылка. Отправителю не приходит (он и так знает, что перебирает).
+const GAME_PEEK_S2C := "game.peek"
 const TOAST := "toast"
 const PONG := "pong"
 
@@ -114,6 +120,9 @@ static func ok_types(command: String) -> PackedStringArray:
 	match command:
 		GAME_COMMIT, GAME_DRAW, GAME_SKIP, GAME_REJOIN, ROOM_START:
 			return PackedStringArray([GAME_STATE, GAME_ERROR])
+		# Превью — fire-and-forget: ответа нет, личных сообщений не ждём.
+		GAME_PEEK:
+			return PackedStringArray()
 		ROOM_CREATE:
 			return PackedStringArray([ROOM_STATE, GAME_ERROR])
 		# ROOM_JOIN в идущую партию отвечает сразу game.state.

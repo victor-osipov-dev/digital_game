@@ -28,6 +28,8 @@ const { GameState } = require('../src/engine/game_state');
 const Rules = require('../src/engine/rules');
 const catalog = require('../src/engine/catalog');
 const views = require('../src/views');
+const { Hub } = require('../src/hub');
+const { C2S, S2C, CATALOG_SIZE } = require('../src/protocol');
 
 let passed = 0;
 const failures = [];
@@ -1487,6 +1489,319 @@ test('несуществующая комната — понятная ошиб�
   const r = rooms.joinRoom(userOf('host1'), 'ZZZZZ', null);
   assert.strictEqual(r.ok, false);
   assert.ok(r.reason.includes('не найдена'));
+});
+
+// ============================================================ таймер хода
+// Ход ограничен по времени: дедлайн ставит хаб (maybeRunBots ->
+// _scheduleTurn), по истечении сервер сам берёт фишку из колоды и
+// передаёт очередь дальше. Отсчёт виден всем через gameView.turnLeft.
+group('== Таймер хода ==');
+
+function newHub() {
+  return new Hub({
+    db,
+    accounts,
+    cluster: { push: async () => {}, registry: () => [] },
+    rooms,
+  });
+}
+
+function fakeSock(hub, room, seat, user) {
+  const msgs = [];
+  const sock = { readyState: 1, send: (payload) => msgs.push(JSON.parse(payload)) };
+  const ctx = {
+    socket: sock,
+    ip: '127.0.0.1',
+    user,
+    roomCode: room.code,
+    seat,
+    alive: true,
+    observer: false,
+    authFails: 0,
+    authWindowStart: Date.now(),
+  };
+  hub.sockets.set(sock, ctx);
+  room.sockets.set(seat, sock);
+  return { sock, ctx, msgs };
+}
+
+function playingRoom(host, guest, seats = 2) {
+  const room = rooms.createRoom(userOf(host), { seats, require30: false }).room;
+  assert.ok(rooms.joinRoom(userOf(guest), room.code, null).ok, 'второй игрок садится');
+  // Двумя местами комната полна и стартует сама; больше мест добираем
+  // вручную — при старте пустые места займут боты.
+  if (seats > 2) assert.ok(rooms.startGame(userOf(host)).ok, 'старт партии');
+  assert.strictEqual(room.state, 'playing', 'комната дошла до партии');
+  return room;
+}
+
+for (let i = 1; i <= 18; i += 1) accounts.register(`tm${i}`, 'secret123', `Таймер${i}`);
+for (let i = 1; i <= 10; i += 1) accounts.register(`pk${i}`, 'secret123', `Превью${i}`);
+
+test('старт партии открывает отсчёт хода', () => {
+  const hub = newHub();
+  const room = playingRoom('tm1', 'tm2');
+  hub.maybeRunBots(room);
+  assert.notStrictEqual(room.turnDeadlineMs, null, 'дедлайн должен быть поставлен');
+  assert.strictEqual(room.turnDeadlineFor, room.game.current, 'дедлайн — для текущего игрока');
+  const left = room.turnLeft();
+  assert.ok(left >= 1 && left <= config.turnSeconds, `остаток ${left} с в пределах ${config.turnSeconds}`);
+  const v = views.gameView(room, 0);
+  assert.strictEqual(typeof v.turnLeft, 'number', 'вид несёт остаток секунд');
+  assert.ok(v.turnLeft >= left - 1 && v.turnLeft <= config.turnSeconds, `в виде: ${v.turnLeft}`);
+  hub.stop();
+});
+
+test('повторные пересчёты не двигают дедлайн', () => {
+  const hub = newHub();
+  const room = playingRoom('tm3', 'tm4');
+  hub.maybeRunBots(room);
+  const dl = room.turnDeadlineMs;
+  hub.maybeRunBots(room);
+  hub.maybeRunBots(room);
+  assert.strictEqual(room.turnDeadlineMs, dl, 'дедлайн остался прежним');
+  hub.stop();
+});
+
+test('пауза гасит отсчёт, возобновление возвращает его', () => {
+  const hub = newHub();
+  const room = playingRoom('tm5', 'tm6');
+  hub.maybeRunBots(room);
+  assert.notStrictEqual(room.turnDeadlineMs, null);
+  room.pauseFor(0);
+  assert.strictEqual(room.turnDeadlineMs, null, 'на паузе отсчёта нет');
+  hub.maybeRunBots(room);
+  assert.strictEqual(room.turnDeadlineMs, null, 'пауза не даёт поставить дедлайн заново');
+  room.clearPause(0);
+  hub.maybeRunBots(room);
+  assert.notStrictEqual(room.turnDeadlineMs, null, 'после паузы отсчёт возобновляется');
+  hub.stop();
+});
+
+test('флаг ожидания гасит и отсчёт, и ботов', () => {
+  const hub = newHub();
+  const room = playingRoom('tm12', 'tm13', 4);
+  const botSeat = room.game.players.findIndex((p) => p.isBot);
+  assert.ok(botSeat >= 0, 'нужно ботье место');
+  room.game.current = botSeat;
+  room.waiting = true;
+  hub.maybeRunBots(room);
+  assert.strictEqual(room.turnDeadlineMs, null, 'в ожидании отсчёта нет');
+  assert.ok(!room._botTimer, 'в ожидании боты молчат');
+  hub.stop();
+});
+
+test('боты не ходят, пока живых людей меньше двух', () => {
+  const hub = newHub();
+  const room = playingRoom('tm7', 'tm8', 4);
+  assert.strictEqual(rooms.humanCount(room), 2, 'за столом двое живых');
+  const botSeat = room.game.players.findIndex((p) => p.isBot);
+  assert.ok(botSeat >= 0, 'нужно ботье место');
+
+  // Два живых: ход бота планируется.
+  room.game.current = botSeat;
+  hub.maybeRunBots(room);
+  assert.notStrictEqual(room._botTimer, null, 'при двух живых ход бота должен планироваться');
+  clearTimeout(room._botTimer);
+  room._botTimer = null;
+
+  // Место одного из людей ушло боту — живых остался один: боты молчат,
+  // а отсчёт хода у оставшегося человека остаётся.
+  rooms._botifySeat(room, 0);
+  assert.strictEqual(rooms.humanCount(room), 1, 'живых остался один');
+  hub.maybeRunBots(room);
+  assert.ok(!room._botTimer, 'при одном живом боты не ходят');
+  assert.notStrictEqual(room.turnDeadlineMs, null, 'отсчёт хода при этом не гаснет');
+  hub.stop();
+});
+
+test('время хода вышло: сервер берёт фишку из колоды сам', () => {
+  const hub = newHub();
+  const room = playingRoom('tm9', 'tm10');
+  const a = fakeSock(hub, room, 0, userOf('tm9'));
+  const b = fakeSock(hub, room, 1, userOf('tm10'));
+  hub.maybeRunBots(room);
+  room.turnDeadlineMs = Date.now() - 10; // просрочили вручную
+  const before = room.game.current;
+  const handBefore = room.game.handSize(before);
+  hub._onTurnTimeout(room);
+  assert.notStrictEqual(room.game.current, before, 'ход должен передаться дальше');
+  assert.strictEqual(room.game.handSize(before), handBefore + 1, 'фишка взята из колоды');
+  assert.notStrictEqual(room.turnDeadlineMs, null, 'новый отсчёт запущен');
+  assert.strictEqual(room.turnDeadlineFor, room.game.current, 'дедлайн — для нового текущего');
+  const toasts = (f) => f.msgs.filter((m) => m.t === S2C.TOAST);
+  const target = before === 0 ? a : b;
+  const other = before === 0 ? b : a;
+  assert.strictEqual(toasts(target).length, 1, 'тост ушёл тому, чьё время вышло');
+  assert.ok(toasts(target)[0].text.includes('из колоды'), toasts(target)[0].text);
+  assert.strictEqual(toasts(other).length, 0, 'соперник тост не получает');
+  hub.stop();
+});
+
+test('колода пуста: время вышло — ход пропускается', () => {
+  const hub = newHub();
+  const room = playingRoom('tm11', 'tm14');
+  const a = fakeSock(hub, room, 0, userOf('tm11'));
+  const b = fakeSock(hub, room, 1, userOf('tm14'));
+  const g = room.game;
+  while (g.tilesLeftInDeck() > 0) g.deck.draw();
+  hub.maybeRunBots(room);
+  room.turnDeadlineMs = Date.now() - 10;
+  const before = g.current;
+  const handBefore = g.handSize(before);
+  hub._onTurnTimeout(room);
+  assert.strictEqual(g.handSize(before), handBefore, 'рука не изменилась');
+  assert.notStrictEqual(g.current, before, 'очередь передана без взятия');
+  assert.notStrictEqual(room.turnDeadlineMs, null, 'отсчёт продолжается');
+  const toasts = (f) => f.msgs.filter((m) => m.t === S2C.TOAST);
+  const target = before === 0 ? a : b;
+  assert.strictEqual(toasts(target).length, 1);
+  assert.ok(toasts(target)[0].text.includes('пропущен'), toasts(target)[0].text);
+  hub.stop();
+});
+
+test('на паузе просроченный таймер ничего не делает', () => {
+  const hub = newHub();
+  const room = playingRoom('tm15', 'tm16');
+  hub.maybeRunBots(room);
+  room.pauseFor(0);
+  room.turnDeadlineMs = Date.now() - 10; // чужой просроченный дедлайн
+  const before = room.game.current;
+  const handBefore = room.game.handSize(before);
+  hub._onTurnTimeout(room);
+  assert.strictEqual(room.game.current, before, 'на паузе ход не должен передаваться');
+  assert.strictEqual(room.game.handSize(before), handBefore, 'фишка не берётся');
+  assert.strictEqual(room.turnDeadlineMs, null, 'дедлайн остаётся погашенным');
+  hub.stop();
+});
+
+test('рассылка после завершённого хода несёт живой отсчёт', () => {
+  const hub = newHub();
+  const room = playingRoom('tm17', 'tm18');
+  const u0 = userOf('tm17');
+  const u1 = userOf('tm18');
+  const a = fakeSock(hub, room, 0, u0);
+  const b = fakeSock(hub, room, 1, u1);
+  const r = rooms.drawFor(room.game.current === 0 ? u0 : u1);
+  assert.ok(r.ok, r.reason);
+  // После хода отсчёт погашен — но рассылка обязана уйти уже с новым:
+  // именно в таком порядке afterMove отдаёт состояние клиентам.
+  assert.strictEqual(room.turnDeadlineMs, null, 'до рассылки отсчёт погашен');
+  hub.afterMove(r, undefined);
+  const last = (f) => [...f.msgs].reverse().find((m) => m.t === S2C.GAME_STATE);
+  assert.ok(last(a) && last(b), 'оба игрока получили состояние');
+  const tl = last(a).state.turnLeft;
+  assert.strictEqual(typeof tl, 'number', `в рассылке должен быть живой отсчёт: ${tl}`);
+  assert.ok(tl >= 1 && tl <= config.turnSeconds, `остаток ${tl} с в пределах`);
+  hub.stop();
+});
+
+// =========================================================== превью ходов
+// game.peek: клиент, перебирая варианты, шлёт призрак фишки; хаб
+// пересылает его остальным сидам без проверки правил (это картинка),
+// с троттлингом 40 мс и валидацией формы сообщения.
+group('== Превью ходов (peek) ==');
+
+test('превью уходит сопернику и не возвращается автору', () => {
+  const hub = newHub();
+  const room = playingRoom('pk1', 'pk2');
+  const a = fakeSock(hub, room, 0, userOf('pk1'));
+  const b = fakeSock(hub, room, 1, userOf('pk2'));
+  hub.onMessage(a.ctx, Buffer.from(JSON.stringify({
+    t: C2S.GAME_PEEK, tile: 7, kind: 'into', row: 3, index: 2,
+  })));
+  assert.strictEqual(a.msgs.filter((m) => m.t === S2C.GAME_PEEK).length, 0,
+    'автор своего превью не видит');
+  const got = b.msgs.filter((m) => m.t === S2C.GAME_PEEK);
+  assert.strictEqual(got.length, 1, 'соперник получил превью');
+  assert.deepStrictEqual(got[0],
+    { t: S2C.GAME_PEEK, from: 0, tile: 7, kind: 'into', row: 3, index: 2 });
+  hub.stop();
+});
+
+test('превью видов new/clear/back несёт только своё', () => {
+  const hub = newHub();
+  const room = playingRoom('pk3', 'pk4');
+  const a = fakeSock(hub, room, 0, userOf('pk3'));
+  const b = fakeSock(hub, room, 1, userOf('pk4'));
+  const send = (payload) => {
+    room._peekAt = new Map(); // троттлинг гасим между сообщениями — своя проверка ниже
+    hub.onMessage(a.ctx, Buffer.from(JSON.stringify({ t: C2S.GAME_PEEK, ...payload })));
+  };
+  send({ tile: 11, kind: 'new', at: 2 });
+  send({ tile: 12, kind: 'clear' });
+  send({ tile: 13, kind: 'back' });
+  const got = b.msgs.filter((m) => m.t === S2C.GAME_PEEK);
+  assert.strictEqual(got.length, 3, `пришло: ${JSON.stringify(got)}`);
+  assert.deepStrictEqual(got[0], { t: S2C.GAME_PEEK, from: 0, tile: 11, kind: 'new', at: 2 });
+  assert.deepStrictEqual(got[1], { t: S2C.GAME_PEEK, from: 0, tile: 12, kind: 'clear' });
+  assert.deepStrictEqual(got[2], { t: S2C.GAME_PEEK, from: 0, tile: 13, kind: 'back' });
+  assert.ok(!('row' in got[0]) && !('index' in got[0]), 'новый ряд несёт только позицию');
+  hub.stop();
+});
+
+test('мусор в превью отбрасывается молча', () => {
+  const hub = newHub();
+  const room = playingRoom('pk5', 'pk6');
+  const a = fakeSock(hub, room, 0, userOf('pk5'));
+  const b = fakeSock(hub, room, 1, userOf('pk6'));
+  const bad = [
+    { tile: 5, kind: 'bogus' },
+    { tile: -1, kind: 'clear' },
+    { tile: CATALOG_SIZE, kind: 'clear' },
+    { tile: 1.5, kind: 'clear' },
+    { tile: '7', kind: 'clear' },
+    { tile: 5, kind: 'into', row: 0 }, // без index
+    { tile: 5, kind: 'into', row: -1, index: 0 },
+    { tile: 5, kind: 'into', row: 0, index: 65 },
+    { tile: 5, kind: 'into', row: 'x', index: 0 },
+    { tile: 5, kind: 'new' }, // без at
+    { tile: 5, kind: 'new', at: 10001 },
+  ];
+  for (const payload of bad) {
+    hub.onMessage(a.ctx, Buffer.from(JSON.stringify({ t: C2S.GAME_PEEK, ...payload })));
+  }
+  assert.strictEqual(b.msgs.filter((m) => m.t === S2C.GAME_PEEK).length, 0,
+    'ничего из мусора не должно было пройти');
+  // А валидное проходит — доказывает, что молчание выше из-за проверок.
+  hub.onMessage(a.ctx, Buffer.from(JSON.stringify({ t: C2S.GAME_PEEK, tile: 5, kind: 'clear' })));
+  assert.strictEqual(b.msgs.filter((m) => m.t === S2C.GAME_PEEK).length, 1,
+    'валидное превью проходит');
+  hub.stop();
+});
+
+test('превью чаще раза в 40 мс не проходит (троттлинг)', () => {
+  const hub = newHub();
+  const room = playingRoom('pk7', 'pk8');
+  const a = fakeSock(hub, room, 0, userOf('pk7'));
+  const b = fakeSock(hub, room, 1, userOf('pk8'));
+  const one = () => hub.onMessage(a.ctx,
+    Buffer.from(JSON.stringify({ t: C2S.GAME_PEEK, tile: 9, kind: 'clear' })));
+  one();
+  assert.strictEqual(b.msgs.filter((m) => m.t === S2C.GAME_PEEK).length, 1, 'первое прошло');
+  room._peekAt.set(0, Date.now()); // свежая метка — как будто отправка была только что
+  one();
+  assert.strictEqual(b.msgs.filter((m) => m.t === S2C.GAME_PEEK).length, 1,
+    'второе подряд отброшено');
+  hub.stop();
+});
+
+test('превью от сокета вне комнаты игнорируется', () => {
+  const hub = newHub();
+  const room = playingRoom('pk9', 'pk10');
+  const b = fakeSock(hub, room, 1, userOf('pk10'));
+  const msgs = [];
+  const sock = { readyState: 1, send: (payload) => msgs.push(JSON.parse(payload)) };
+  const ctx = {
+    socket: sock, ip: '127.0.0.1', user: userOf('pk9'), roomCode: null, seat: undefined,
+    alive: true, observer: false, authFails: 0, authWindowStart: Date.now(),
+  };
+  hub.sockets.set(sock, ctx);
+  hub.onMessage(ctx, Buffer.from(JSON.stringify({ t: C2S.GAME_PEEK, tile: 3, kind: 'clear' })));
+  assert.strictEqual(msgs.length, 0, 'молчаливое игнорирование, без ответов');
+  assert.strictEqual(b.msgs.filter((m) => m.t === S2C.GAME_PEEK).length, 0,
+    'соперник ничего не получил');
+  hub.stop();
 });
 
 // ================================================================ итог

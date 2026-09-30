@@ -44,6 +44,10 @@ const C2S = {
   GAME_DRAW: 'game.draw',         // {}         -> game.state | game.error
   GAME_SKIP: 'game.skip',         // {}         -> game.state | game.error
   GAME_REJOIN: 'game.rejoin',     // {} -> game.state   (переподключение)
+  // Превью хода: игрок перебирает, куда положить/убрать фишку. Без ответа:
+  // сервер пересылает остальным соперникам, чтобы те видели «он думает
+  // тут». kind: clear | into | new | back.
+  GAME_PEEK: 'game.peek',         // {tile, kind, row?, index?, at?}
 
   PING: 'ping',                   // {} -> pong
 };
@@ -59,6 +63,9 @@ const S2C = {
   QUICK_STATE: 'quick.state',
   GAME_STATE: 'game.state',
   GAME_ERROR: 'game.error',
+  // Превью хода соперника: {from, tile, kind, row?, index?, at?} — без rid,
+  // рассылка. Отправителю не приходит (он и так знает, что перебирает).
+  GAME_PEEK: 'game.peek',
   TOAST: 'toast',
   PONG: 'pong',
 };

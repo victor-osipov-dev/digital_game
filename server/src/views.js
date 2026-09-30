@@ -100,6 +100,9 @@ function gameView(room, seat) {
     deckCount: g.tilesLeftInDeck(),
     current: g.current,
     myTurn: g.current === seat && !g.finished,
+    // Сколько секунд осталось на текущий ход (null — отсчёта нет:
+    // пауза, ожидание второго игрока, партия окончена).
+    turnLeft: g.finished ? null : room.turnLeft(),
     firstTurn: g.firstTurn,
     // свои ходы подсвечиваем отдельно от чужих
     turnPlaced: g.current === seat ? g.turnPlacedIds.slice() : [],
