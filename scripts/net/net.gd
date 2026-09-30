@@ -53,6 +53,9 @@ signal game_lost(reason: String)
 ## clear — убрать, into — в ряд row на позицию index, new — новый ряд
 ## на позицию at, back — забирает в руку.
 signal game_peek(tile: int, kind: String, row: int, index: int, at: int)
+## Черновик стола соперника: весь его стол, пока он раскладывает. Рисуем
+## его вместо базового стола, выложенные в этот ход фишки — серыми.
+signal game_draft(from: int, rows: Array)
 signal notice(text: String)
 
 var servers: Servers
@@ -380,6 +383,10 @@ func _dispatch(msg: Dictionary) -> void:
 		NetProtocol.GAME_PEEK_S2C:
 			game_peek.emit(int(msg.get("tile", 0)), String(msg.get("kind", "clear")),
 				int(msg.get("row", -1)), int(msg.get("index", 0)), int(msg.get("at", 0)))
+		NetProtocol.GAME_DRAFT_S2C:
+			var rows = msg.get("rows", [])
+			if rows is Array:
+				game_draft.emit(int(msg.get("from", -1)), rows)
 		NetProtocol.ROOM_STATE:
 			# Вернулись в комнату — «застрявшей» больше нет.
 			_set_pending_room({})
@@ -699,3 +706,10 @@ func rejoin_game() -> Dictionary:
 ## сервер просто пересылает остальным соперникам.
 func peek_place(payload: Dictionary) -> bool:
 	return notify(NetProtocol.GAME_PEEK, payload)
+
+
+## Черновик стола: весь наш стол после локальной раскладки. Fire-and-forget:
+## сервер пересылает остальным, чтобы те видели все выложенные фишки
+## (серыми) ещё до коммита хода.
+func draft_table(rows: Array) -> bool:
+	return notify(NetProtocol.GAME_DRAFT, {"rows": rows})

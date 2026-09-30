@@ -12,6 +12,12 @@ const DRAG_SCROLL_SPEED := 480.0
 # долгое «он думает тут» от брошенного призрака упавшего клиента.
 const PEEK_RESEND_MS := 2000
 const PEEK_EXPIRE_MS := 5000
+# Черновик стола шлём повторно, пока ход не завершён, — иначе соперник
+# с потерянным пакетом или вошедший посреди хода увидит пустой стол.
+const DRAFT_RESEND_MS := 3000
+# Страховка: черновик не должен пережить упавшего/молчащего автора —
+# завершение хода приходит game.state и гасит его и так.
+const DRAFT_EXPIRE_MS := 15000
 
 var state: GameState = null
 var row_blocks: Array = []
@@ -103,6 +109,21 @@ var _last_peek: Dictionary = {}
 var _peek_resent_ms: int = 0
 var _peek_at_ms: int = 0
 
+# --- черновик стола (game.draft) ------------------------------------------
+#
+# Соперник шлёт ВЕСЬ свой стол после каждого локального изменения: пока
+# он раскладывает, показываем его вместо базового, выложенные в этот ход
+# фишки — серыми. Принятая сторона:
+var _draft_rows: Array = []          # ряды соперника [{id, tiles}, ...]
+var _draft_from: int = -1            # сид автора, -1 — черновика нет
+var _draft_grey_ids: Dictionary = {} # id фишек, которые показываем серыми
+var _draft_at_ms: int = 0            # когда пришёл последний пакет
+# Отправная сторона (своё окно): таблица последнего отправленного стола —
+# чтобы шлём только при изменении, а не на каждом кадре.
+var _last_draft_json: String = ""
+var _draft_sent_ms: int = 0
+var _draft_tick_ms: int = 0
+
 func _ready() -> void:
 	_build_ui()
 	resized.connect(_on_resized)
@@ -118,6 +139,7 @@ func _ready() -> void:
 		Net.game_lost.connect(_on_net_lost)
 		Net.connection_changed.connect(_on_net_connection)
 		Net.game_peek.connect(_on_net_peek)
+		Net.game_draft.connect(_on_net_draft)
 		# TOAST от сервера (например, «время хода вышло») — обычным тостом.
 		Net.notice.connect(toast)
 		# Состояние уже могло прийти, пока сцена грузилась.
@@ -136,6 +158,13 @@ func _process(_delta: float) -> void:
 	_update_hint_zone_size()
 	_update_turn_timer()
 	_expire_peek()
+	_expire_draft()
+	# Раз в секунду — шанс повторить висящий черновик (только если он уже
+	# был отправлен: чистый стол отправлять нечего).
+	var now := Time.get_ticks_msec()
+	if now - _draft_tick_ms >= 1000:
+		_draft_tick_ms = now
+		_maybe_send_draft()
 
 func _build_ui() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -928,8 +957,14 @@ func _apply_state(view: Dictionary, grace: float, paused: bool, waiting: bool = 
 	_paused = paused
 	_waiting = waiting
 	# Превью чужого хода после нового состояния уже лож: строки могли
-	# сдвинуться, а перебирать перестали.
+	# сдвинуться, а перебирать перестали. Черновик стола тоже гаснет —
+	# ход завершён, серверный стол уже финальный.
 	_clear_peek()
+	_clear_draft()
+	# Отправная сторона черновика: с новым состоянием начинаем с чистого
+	# листа, иначе следующий ход не отправился бы «как в первый раз».
+	_last_draft_json = ""
+	_draft_sent_ms = 0
 	# Отсчёт сервера. Пришло null (пауза/ожидание/конец) — ключа в
 	# словаре нет вовсе, и дедлайн гаснет сам.
 	var turn_left := int(view.get("turnLeft", 0))
@@ -1617,6 +1652,100 @@ func _expire_peek() -> void:
 		_clear_peek()
 
 
+## Соперник прислал весь свой стол: показываем его вместо базового, а
+## выложенные в этот ход фишки (нет в серверном столе) — серыми.
+func _on_net_draft(from: int, rows: Array) -> void:
+	if state == null or state.finished or from < 0:
+		return
+	# Черновик чужого хода имеет смысл только пока этот игрок и ходит:
+	# иначе гонка с game.state показала бы чужую раскладку поверх нашей.
+	if state.current != from:
+		return
+	var base := {}
+	for row in state.table:
+		var r := row as GameState.Row
+		if r != null:
+			for t in r.tiles:
+				base[(t as Tile).id] = true
+	var grey := {}
+	for d in rows:
+		if not (d is Dictionary):
+			continue
+		for tid in (d.get("tiles", []) as Array):
+			var id := int(tid)
+			if id > 0 and not base.has(id):
+				grey[id] = true
+	_draft_from = from
+	_draft_rows = rows
+	_draft_grey_ids = grey
+	_draft_at_ms = Time.get_ticks_msec()
+	refresh()
+
+
+## Гасим черновик. Без перерисовки: нас вызывают и в _apply_state, где
+## состояние вот-вот подменится и перерисует вызывающая сторона.
+func _clear_draft() -> void:
+	_draft_from = -1
+	_draft_rows = []
+	_draft_grey_ids = {}
+	_draft_at_ms = 0
+
+
+func _draft_active() -> bool:
+	return _draft_from >= 0 and state != null and not state.finished \
+		and state.current == _draft_from
+
+
+## Черновик протухает сам: автор шлёт повтор каждые DRAFT_RESEND_MS, пока
+## думает; замолчал (упал, отвалился) — стол возвращается к серверному.
+func _expire_draft() -> void:
+	if _draft_from >= 0 and (
+			not _draft_active()
+			or Time.get_ticks_msec() - _draft_at_ms > DRAFT_EXPIRE_MS):
+		_clear_draft()
+		if state != null:
+			refresh()
+
+
+## Наш стол для отправки. ВАЖНО: id рядов уходят локальные, без обнуления
+## новых (в отличие от set_table_ops для commit) — по ним же соперник
+## рисует призрак game.peek в только что созданный ряд.
+func _build_draft_rows() -> Array:
+	var rows: Array = []
+	for row in state.table:
+		var r := row as GameState.Row
+		if r == null or r.tiles.is_empty():
+			continue
+		var ids: Array = []
+		for t in r.tiles:
+			ids.append((t as Tile).id)
+		rows.append({"id": r.id, "tiles": ids})
+	return rows
+
+
+## Черновик своего стола: шлём после каждого изменения и повторяем, пока
+## ход не завершён — иначе соперник с потерянным пакетом или вошедший
+## посреди хода увидит пустой стол.
+func _maybe_send_draft() -> void:
+	if not _online or state == null or state.finished:
+		return
+	if not state.my_turn() or not Net.is_linked() or _sending:
+		return
+	var rows := _build_draft_rows()
+	var json := JSON.stringify(rows)
+	var now := Time.get_ticks_msec()
+	if json == _last_draft_json:
+		# Стол не менялся: повтор нужен только висящему черновику.
+		if _last_draft_json.is_empty() or now - _draft_sent_ms < DRAFT_RESEND_MS:
+			return
+	elif _last_draft_json.is_empty() and not state.turn_dirty:
+		# Чистый стол с начала хода: отправлять нечего.
+		return
+	_last_draft_json = json
+	_draft_sent_ms = now
+	Net.draft_table(rows)
+
+
 func gui_can_drop(data: Dictionary, global_pos: Vector2) -> bool:
 	if state == null or state.finished or _bot_active or _is_bot_turn():
 		return false
@@ -1712,6 +1841,8 @@ func get_tile_marks(tile_id: int) -> Dictionary:
 			break
 	if state.last_turn_tile_ids.has(tile_id):
 		m["last"] = true
+	if _draft_grey_ids.has(tile_id):
+		m["draft"] = true
 	if _hint_ids.has(tile_id):
 		m["hint"] = true
 	return m
@@ -1719,6 +1850,9 @@ func get_tile_marks(tile_id: int) -> Dictionary:
 func refresh() -> void:
 	if state == null:
 		return
+	# Локальный стол изменился (перетащили, отменили, чекпоинт) —
+	# отдаём соперникам весь стол целиком, чтобы они видели все фишки.
+	_maybe_send_draft()
 	# Снимаем старые позиции ДО пересборки: _update_table и set_tiles
 	# уничтожают текущие view, и после них снимать будет нечего.
 	var shots: Array = []
@@ -1903,21 +2037,45 @@ func _update_table() -> void:
 			child.free()
 	row_blocks.clear()
 	var draggable := _can_act()
-	for row in state.table:
-		var r := row as GameState.Row
-		if r == null or r.tiles.is_empty():
-			continue
+	for e in _table_rows():
 		var block := RowBlock.new()
 		block.setup(
-			r.id,
-			r.tiles,
-			invalid_row_ids.has(r.id),
+			int(e["id"]),
+			e["tiles"],
+			bool(e["invalid"]),
 			draggable,
 			self
 		)
 		table_box.add_child(block)
 		row_blocks.append(block)
 	table_box.move_child(hint_zone, table_box.get_child_count() - 1)
+
+
+## Что рисуем на столе: черновик соперника, пока он висит, иначе — наше
+## состояние. Вид: [{id, tiles: Array[Tile], invalid}, ...].
+func _table_rows() -> Array:
+	var out: Array = []
+	if _draft_active():
+		for d in _draft_rows:
+			if not (d is Dictionary):
+				continue
+			var tiles: Array = []
+			for tid in (d.get("tiles", []) as Array):
+				tiles.append(ViewBuilder.tile(int(tid)))
+			if tiles.is_empty():
+				continue
+			out.append({"id": int(d.get("id", 0)), "tiles": tiles, "invalid": false})
+		return out
+	for row in state.table:
+		var r := row as GameState.Row
+		if r == null or r.tiles.is_empty():
+			continue
+		out.append({
+			"id": r.id,
+			"tiles": r.tiles,
+			"invalid": invalid_row_ids.has(r.id),
+		})
+	return out
 
 func _update_hand() -> void:
 	var bot_turn := _is_bot_turn()

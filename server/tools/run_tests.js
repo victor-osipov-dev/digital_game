@@ -1804,6 +1804,138 @@ test('превью от сокета вне комнаты игнорирует�
   hub.stop();
 });
 
+// ========================================================= черновик стола
+// game.draft: игрок шлёт ВЕСЬ свой стол после каждой локальной раскладки,
+// хаб пересылает остальным сидам — чтобы соперники видели все выложенные
+// фишки (серыми) ещё до commit. Рисует ровно текущий игрок, форма rows
+// валидируется, троттлинг тот же 40 мс, что у peek.
+group('== Черновик стола (game.draft) ==');
+
+for (let i = 1; i <= 8; i += 1) accounts.register(`dr${i}`, 'secret123', `Черновик${i}`);
+
+test('черновик уходит сопернику целиком и не возвращается автору', () => {
+  const hub = newHub();
+  const room = playingRoom('dr1', 'dr2');
+  room.game.current = 0;
+  const a = fakeSock(hub, room, 0, userOf('dr1'));
+  const b = fakeSock(hub, room, 1, userOf('dr2'));
+  const rows = [{ id: 1, tiles: [3, 7] }, { id: 0, tiles: [12, 45] }];
+  hub.onMessage(a.ctx, Buffer.from(JSON.stringify({ t: C2S.GAME_DRAFT, rows })));
+  assert.strictEqual(a.msgs.filter((m) => m.t === S2C.GAME_DRAFT).length, 0,
+    'автор своего черновика не видит');
+  const got = b.msgs.filter((m) => m.t === S2C.GAME_DRAFT);
+  assert.strictEqual(got.length, 1, 'соперник получил черновик');
+  assert.deepStrictEqual(got[0], { t: S2C.GAME_DRAFT, from: 0, rows });
+  hub.stop();
+});
+
+test('черновик принимается только от текущего игрока', () => {
+  const hub = newHub();
+  const room = playingRoom('dr3', 'dr4');
+  const a = fakeSock(hub, room, 0, userOf('dr3'));
+  const b = fakeSock(hub, room, 1, userOf('dr4'));
+  room.game.current = 1;
+  // Ходит соперник: черновик от seat0 — гонка или враньё, рисовать его
+  // нельзя, столы перепутались бы у всех.
+  hub.onMessage(a.ctx, Buffer.from(JSON.stringify({
+    t: C2S.GAME_DRAFT, rows: [{ id: 1, tiles: [5] }],
+  })));
+  assert.strictEqual(b.msgs.filter((m) => m.t === S2C.GAME_DRAFT).length, 0,
+    'от не-текущего игрока не проходит');
+  // Ходит seat0 — то же сообщение проходит.
+  room.game.current = 0;
+  hub.onMessage(a.ctx, Buffer.from(JSON.stringify({
+    t: C2S.GAME_DRAFT, rows: [{ id: 1, tiles: [5] }],
+  })));
+  assert.strictEqual(b.msgs.filter((m) => m.t === S2C.GAME_DRAFT).length, 1,
+    'от текущего игрока проходит');
+  hub.stop();
+});
+
+test('черновик чаще раза в 40 мс не проходит (троттлинг)', () => {
+  const hub = newHub();
+  const room = playingRoom('dr5', 'dr6');
+  room.game.current = 0;
+  const a = fakeSock(hub, room, 0, userOf('dr5'));
+  const b = fakeSock(hub, room, 1, userOf('dr6'));
+  const one = () => hub.onMessage(a.ctx, Buffer.from(JSON.stringify({
+    t: C2S.GAME_DRAFT, rows: [{ id: 1, tiles: [9] }],
+  })));
+  one();
+  assert.strictEqual(b.msgs.filter((m) => m.t === S2C.GAME_DRAFT).length, 1,
+    'первое прошло');
+  room._draftAt.set(0, Date.now()); // свежая метка — как будто отправка была только что
+  one();
+  assert.strictEqual(b.msgs.filter((m) => m.t === S2C.GAME_DRAFT).length, 1,
+    'второе подряд отброшено');
+  hub.stop();
+});
+
+test('мусор в черновике отбрасывается молча', () => {
+  const hub = newHub();
+  const room = playingRoom('dr7', 'dr8');
+  room.game.current = 0;
+  const a = fakeSock(hub, room, 0, userOf('dr7'));
+  const b = fakeSock(hub, room, 1, userOf('dr8'));
+  const manyRows = Array.from({ length: 65 }, (_, i) => ({ id: i, tiles: [1] }));
+  const manyTiles = [{
+    id: 1,
+    tiles: Array.from({ length: 201 }, (_, i) => i % CATALOG_SIZE),
+  }];
+  const bad = [
+    {},
+    { rows: {} },
+    { rows: 'x' },
+    { rows: [null] },
+    { rows: ['row'] },
+    { rows: [{ id: 'x', tiles: [1] }] },
+    { rows: [{ id: -1, tiles: [1] }] },
+    { rows: [{ id: 10001, tiles: [1] }] },
+    { rows: [{ id: 1, tiles: 'x' }] },
+    { rows: [{ id: 1, tiles: [-1] }] },
+    { rows: [{ id: 1, tiles: [CATALOG_SIZE] }] },
+    { rows: [{ id: 1, tiles: [1.5] }] },
+    { rows: [{ id: 1, tiles: ['7'] }] },
+    { rows: manyRows },
+    { rows: manyTiles },
+  ];
+  for (const payload of bad) {
+    hub.onMessage(a.ctx, Buffer.from(JSON.stringify({ t: C2S.GAME_DRAFT, ...payload })));
+  }
+  assert.strictEqual(b.msgs.filter((m) => m.t === S2C.GAME_DRAFT).length, 0,
+    'ничего из мусора не должно было пройти');
+  // А валидное проходит — доказывает, что молчание выше из-за проверок.
+  hub.onMessage(a.ctx, Buffer.from(JSON.stringify({
+    t: C2S.GAME_DRAFT, rows: [{ id: 2, tiles: [7, 7] }],
+  })));
+  assert.strictEqual(b.msgs.filter((m) => m.t === S2C.GAME_DRAFT).length, 1,
+    'валидный черновик проходит');
+  hub.stop();
+});
+
+test('черновик вне партии игнорируется', () => {
+  const hub = newHub();
+  // Лобби: партия ещё не началась.
+  const lobby = rooms.createRoom(userOf('dr1'), { seats: 2, require30: false }).room;
+  const s0 = fakeSock(hub, lobby, 0, userOf('dr1'));
+  hub.onMessage(s0.ctx, Buffer.from(JSON.stringify({
+    t: C2S.GAME_DRAFT, rows: [{ id: 1, tiles: [1] }],
+  })));
+  assert.strictEqual(s0.msgs.length, 0, 'в лобби молчаливое игнорирование');
+  // Сокет вообще вне комнаты.
+  const ctx = {
+    socket: { readyState: 1, send: () => {} }, ip: '127.0.0.1', user: userOf('dr2'),
+    roomCode: null, seat: undefined, alive: true, observer: false,
+    authFails: 0, authWindowStart: Date.now(),
+  };
+  hub.sockets.set(ctx.socket, ctx);
+  hub.onMessage(ctx, Buffer.from(JSON.stringify({
+    t: C2S.GAME_DRAFT, rows: [{ id: 1, tiles: [1] }],
+  })));
+  assert.ok(true, 'молчаливое игнорирование, без падений');
+  hub.stop();
+});
+
 // ================================================================ итог
 
 console.log('');

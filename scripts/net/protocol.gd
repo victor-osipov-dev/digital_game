@@ -36,6 +36,10 @@ const GAME_REJOIN := "game.rejoin"
 # Превью хода: игрок перебирает, куда положить/убрать фишку. Без ответа:
 # сервер пересылает остальным соперникам. kind: clear | into | new | back.
 const GAME_PEEK := "game.peek"           # {tile, kind, row?, index?, at?}
+# Черновик стола: ВЕСЬ стол автора после каждой локальной раскладки, чтобы
+# соперники видели все выложенные фишки (серыми) ещё до commit. Без ответа.
+# Формат rows совпадает с rows в op "set_table" у game.commit.
+const GAME_DRAFT := "game.draft"         # {rows:[{id, tiles:[...]}, ...]}
 
 const PING := "ping"
 
@@ -53,6 +57,9 @@ const GAME_ERROR := "game.error"
 # Превью хода соперника: {from, tile, kind, row?, index?, at?} — без rid,
 # рассылка. Отправителю не приходит (он и так знает, что перебирает).
 const GAME_PEEK_S2C := "game.peek"
+# Черновик стола соперника: {from, rows} — без rid, рассылка. Рисуется
+# вместо базового стола, пока автор не завершит ход (game.state гасит).
+const GAME_DRAFT_S2C := "game.draft"
 const TOAST := "toast"
 const PONG := "pong"
 
@@ -120,8 +127,9 @@ static func ok_types(command: String) -> PackedStringArray:
 	match command:
 		GAME_COMMIT, GAME_DRAW, GAME_SKIP, GAME_REJOIN, ROOM_START:
 			return PackedStringArray([GAME_STATE, GAME_ERROR])
-		# Превью — fire-and-forget: ответа нет, личных сообщений не ждём.
-		GAME_PEEK:
+		# Превью и черновик — fire-and-forget: ответа нет, личных сообщений
+		# не ждём.
+		GAME_PEEK, GAME_DRAFT:
 			return PackedStringArray()
 		ROOM_CREATE:
 			return PackedStringArray([ROOM_STATE, GAME_ERROR])

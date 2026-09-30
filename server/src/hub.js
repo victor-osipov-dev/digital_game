@@ -18,6 +18,34 @@ const { planGame } = require('./engine/bot');
 const OBSERVER_ALLOWED = [C2S.ROOMS_LIST, C2S.SERVERS_LIST, C2S.PING];
 
 /**
+ * Валидация rows черновика стола (game.draft).
+ *
+ * Это картинка, а не ход: правила и состав рук не проверяем, но сюда
+ * лезет чужой сокет, поэтому вся геометрия нормализуется в жёстких
+ * пределах — иначе можно сыпать мусором и раздуть рассылку. Возвращает
+ * нормализованный массив или null, если формат не годится.
+ */
+function cleanDraftRows(rows) {
+  if (!Array.isArray(rows) || rows.length > 64) return null;
+  const out = [];
+  let total = 0;
+  for (const r of rows) {
+    if (!r || typeof r !== 'object') return null;
+    if (!Number.isInteger(r.id) || r.id < 0 || r.id > 10000) return null;
+    if (!Array.isArray(r.tiles)) return null;
+    total += r.tiles.length;
+    if (total > 200) return null;
+    const tiles = [];
+    for (const t of r.tiles) {
+      if (!Number.isInteger(t) || t < 0 || t >= CATALOG_SIZE) return null;
+      tiles.push(t);
+    }
+    out.push({ id: r.id, tiles });
+  }
+  return out;
+}
+
+/**
  * Хаб: держит сокеты, гоняет сообщения между клиентом и Rooms/Accounts.
  *
  * Правило безопасности: наружу уходит только то, что собрал views.js.
@@ -415,9 +443,36 @@ class Hub {
         if (!room._peekAt) room._peekAt = new Map();
         room._peekAt.set(seat, now);
         for (let s = 0; s < room.seats; s += 1) {
-          if (s === seat) continue;
+          if (s === seat) continue;            // автору не шлём
           const c = this.ctxOfSeat(room, s);
           if (c) this.send(c, peek);
+        }
+        break;
+      }
+
+      case C2S.GAME_DRAFT: {
+        // Черновик стола: автор шлёт ВЕСЬ свой стол после каждой локальной
+        // раскладки, чтобы соперники видели все выложенные фишки (серыми)
+        // ещё до commit. Как и peek — это только картинка, но рисует её
+        // ровно текущий игрок: черновик не в свой ход соврал бы про стол.
+        const room = ctx.roomCode ? this.rooms.rooms.get(ctx.roomCode) : null;
+        if (!room || room.state !== 'playing') break;
+        const seat = ctx.seat;
+        if (!(seat >= 0 && seat < room.seats)) break;
+        if (!room.game || room.game.current !== seat) break;
+        const rows = cleanDraftRows(msg.rows);
+        if (!rows) break;
+        // Троттлинг — тот же 40 мс, что у peek: клиент шлёт только при
+        // изменении стола, но и на всякий случай не даём сыпать чаще.
+        const now = Date.now();
+        if (room._draftAt && now - (room._draftAt.get(seat) || 0) < 40) break;
+        if (!room._draftAt) room._draftAt = new Map();
+        room._draftAt.set(seat, now);
+        const draft = { t: S2C.GAME_DRAFT, from: seat, rows };
+        for (let s = 0; s < room.seats; s += 1) {
+          if (s === seat) continue;            // автору не шлём
+          const c = this.ctxOfSeat(room, s);
+          if (c) this.send(c, draft);
         }
         break;
       }

@@ -9,6 +9,7 @@ var controller: Object = null
 var mark_self: bool = false
 var mark_last: bool = false
 var mark_hint: bool = false
+var mark_draft: bool = false
 var face_down: bool = false
 
 static func make(p_tile: Tile, p_draggable: bool, p_controller: Object, p_face_down: bool = false) -> TileView:
@@ -45,6 +46,7 @@ func _build() -> void:
 	mark_self = bool(marks.get("self", false))
 	mark_last = bool(marks.get("last", false))
 	mark_hint = bool(marks.get("hint", false))
+	mark_draft = bool(marks.get("draft", false))
 
 	sb.bg_color = Color(Tile.color_hex(tile.color))
 	if mark_hint:
@@ -55,6 +57,12 @@ func _build() -> void:
 		# было видно, куда ушли карты соперника.
 		sb.border_color = Color("43A047")
 		sb.set_border_width_all(maxi(bw + 3, 5))
+	elif mark_draft:
+		# Соперник только раскладывает (черновик game.draft): фишка ещё
+		# не на сервере, поэтому серым — «лежит, но ещё не факт».
+		sb.bg_color = Color(0.55, 0.55, 0.58)
+		sb.border_color = Color(1, 1, 1, 0.18)
+		sb.set_border_width_all(bw)
 	else:
 		sb.border_color = Color(1, 1, 1, 0.35 if tile.is_joker else 0.18)
 		sb.set_border_width_all(maxi(bw, 2) if tile.is_joker else bw)
