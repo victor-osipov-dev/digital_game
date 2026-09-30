@@ -44,7 +44,7 @@ signal room_closed()
 # вход в аккаунт при живом месте). Возврат — только явный, игрок решает.
 signal pending_room_changed(room: Dictionary)
 signal quick_state(queue: Dictionary)
-signal game_state(state: Dictionary, grace: float, paused: bool)
+signal game_state(state: Dictionary, grace: float, paused: bool, waiting: bool)
 ## Ход отклонён. hard = true означает «сервер уже откатил наш стол», и
 ## присланное следом game_state нужно применить.
 signal game_error(reason: String, hard: bool, errors: Array)
@@ -369,7 +369,7 @@ func _dispatch(msg: Dictionary) -> void:
 				# словарь, а сцена может пережить следующее обновление.
 				_last_state = view
 			game_state.emit(view, float(msg.get("grace", 0.0)),
-				bool(msg.get("paused", false)))
+				bool(msg.get("paused", false)), bool(msg.get("waiting", false)))
 		NetProtocol.GAME_ERROR:
 			game_error.emit(String(msg.get("reason", "ошибка")), bool(msg.get("hard", false)),
 				msg.get("errors", []))

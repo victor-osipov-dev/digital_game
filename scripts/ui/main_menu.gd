@@ -25,7 +25,7 @@ func _sync_scroll_min() -> void:
 # Сама механика (вернуться / покинуть с концами) — в онлайн-лобби. Здесь
 # напоминание про активную комнату и две явные кнопки: без них игроку,
 # вышедшему из партии или из лобби комнаты, некуда было бы ткнуться.
-func _refresh_online_note() -> void:
+func _refresh_online_note(_room := {}) -> void:
 	if _online_note == null:
 		return
 	var pending := Net.pending_room()

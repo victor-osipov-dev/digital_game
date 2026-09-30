@@ -499,6 +499,9 @@ class Hub {
    */
   maybeRunBots(room) {
     if (!room) return;
+    // Ждём второго живого игрока — боты молчат до прихода человека.
+    if (room.waiting) return;
+    if (this.rooms.rooms.get(room.code) !== room) return;
     if (room.state !== 'playing' || !room.game || room.game.finished) return;
     if (room.isPaused()) return;
     if (room._botTimer) return;
@@ -510,6 +513,8 @@ class Hub {
       room._botTimer = null;
       if (room.state !== 'playing' || !room.game || room.game.finished) return;
       if (this.rooms.rooms.get(room.code) !== room) return;
+      // Ждём второго живого — ход бота откладывается до прихода человека.
+      if (room.waiting) return;
       if (room.isPaused()) { this.maybeRunBots(room); return; }
       this.playBotTurn(room);
     }, delay);
@@ -628,6 +633,7 @@ class Hub {
         state: views.gameView(room, s),
         grace: s >= 0 && room.paused.has(s) ? room.graceRemaining(s) : 0,
         paused: room.isPaused(),
+        waiting: !!room.waiting,
       }, rid);
     }
   }

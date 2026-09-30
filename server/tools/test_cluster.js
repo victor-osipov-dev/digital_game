@@ -889,14 +889,23 @@ function planRowFromView(state, catalog) {
     gina.send = back.send.bind(back);
   });
 
-  await test('room.drop освобождает место с концами, партия закрывается', async () => {
+  await test('room.drop освобождает место с концами: один ждёт, последний закрывает', async () => {
     // Полный выход: ответ без поля room (нечего вспоминать), место свободно.
     const drop = await gina.rpc({ t: 'room.drop' }, ['room.left', 'game.error']);
     assert.strictEqual(drop.t, 'room.left', JSON.stringify(drop));
     assert.ok(!('room' in drop), 'полный выход не должен оставлять комнату ждущей');
-    // Партия из двух игроков без одного — закрывается, вернуться нельзя.
-    const rejoin = await frank.rpc({ t: 'game.rejoin' }, ['game.state', 'game.error']);
-    assert.strictEqual(rejoin.t, 'game.error', 'партию с одним игроком закрыли не сразу');
+    // Один живой остался — партия НЕ закрывается: франк ждёт второго
+    // и может вернуться в неё.
+    const waitView = await frank.rpc({ t: 'game.rejoin' }, ['game.state', 'game.error']);
+    assert.strictEqual(waitView.t, 'game.state',
+      `ожидание второго должно держать комнату: ${JSON.stringify(waitView)}`);
+    assert.strictEqual(waitView.waiting, true, 'франку сообщено, что ждём второго игрока');
+    // Последний уходит с концами — для него комнаты больше нет.
+    const drop2 = await frank.rpc({ t: 'room.drop' }, ['room.left', 'game.error']);
+    assert.strictEqual(drop2.t, 'room.left', JSON.stringify(drop2));
+    const after = await frank.rpc({ t: 'game.rejoin' }, ['game.state', 'game.error']);
+    assert.strictEqual(after.t, 'game.error',
+      'после ухода последнего комната должна быть удалена');
   });
 
   // ------------------------------------------------------------ секрет

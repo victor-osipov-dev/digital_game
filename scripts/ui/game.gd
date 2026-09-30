@@ -68,6 +68,16 @@ var _wait_label: Label = null
 var _wait_panel: PanelContainer = null
 var _grace: float = 0.0
 var _paused: bool = false
+var _waiting: bool = false
+
+# --- анимация чужих ходов ------------------------------------------------
+#
+# Сетевое состояние приходит целиком и сразу, а увидеть хочется, КАК
+# соперник расставлял фишки. Поэтому перед перерисовкой, заказанной
+# состоянием с сервера, запоминаем, где каждая показанная фишка стояла
+# (снимок), а после раскладки двигаем новые твины: новые фишки прилетают
+# сверху, сдвинутые переезжают, ушедшие улетают вверх призраком.
+var _anim_pending: bool = false
 
 func _ready() -> void:
 	_build_ui()
@@ -729,7 +739,9 @@ func _can_act() -> bool:
 	if state == null or state.finished or _bot_active or _is_bot_turn():
 		return false
 	if _online:
-		return state.my_turn() and not _sending
+		# Ожидание второго игрока: сервер всё равно не примет ход, но
+		# и кнопки не должны выглядеть рабочими.
+		return state.my_turn() and not _sending and not _waiting
 	return true
 
 
@@ -781,10 +793,10 @@ func _net_rejoin() -> void:
 	var res := await Net.rejoin_game()
 	_sending = false
 	if String(res.get("t", "")) == NetProtocol.GAME_STATE:
-		# Вернулись в партию: «застрявшей» комнаты больше нет.
+		# Вернулись в партию: «застрявшей комнаты» больше нет.
 		Net.clear_pending_room()
 		_on_state_received(res.get("state", {}), float(res.get("grace", 0.0)),
-			bool(res.get("paused", false)))
+			bool(res.get("paused", false)), bool(res.get("waiting", false)))
 		return
 	# Партия не найдена (сервер перезапустили) либо место уже потеряно.
 	Net.clear_pending_room()
@@ -793,15 +805,19 @@ func _net_rejoin() -> void:
 	get_tree().change_scene_to_file("res://scenes/main_menu.tscn")
 
 
-func _on_net_state(view: Dictionary, grace: float, paused: bool) -> void:
-	_on_state_received(view, grace, paused)
+func _on_net_state(view: Dictionary, grace: float, paused: bool, waiting: bool) -> void:
+	_on_state_received(view, grace, paused, waiting)
 
 
-func _on_state_received(view: Dictionary, grace: float, paused: bool) -> void:
+func _on_state_received(view: Dictionary, grace: float, paused: bool, waiting: bool) -> void:
 	_sending = false
 	_hint_ids.clear()
 	invalid_row_ids.clear()
-	_apply_state(view, grace, paused)
+	# Состояние с сервера — единственный источник «прилетающих» фишкок.
+	# Локальные перерисовки (перетаскивание, подсказки) анимировать нельзя:
+	# там ничего не «прилетает», фишка уже лежит на месте.
+	_anim_pending = true
+	_apply_state(view, grace, paused, waiting)
 	# Чужой ход — показываем, кто ходит. Наш собственный ход требует
 	# действия игрока, и подсказка с названием мешала бы.
 	if state != null and state.finished:
@@ -813,11 +829,15 @@ func _on_state_received(view: Dictionary, grace: float, paused: bool) -> void:
 	pass_overlay.visible = false
 	if state != null and not state.my_turn():
 		_show_turn_title()
-	_show_wait(_wait_text(grace, paused))
+	_show_wait(_wait_text(grace, paused, waiting))
 	refresh()
 
 
-func _wait_text(grace: float, paused: bool) -> String:
+func _wait_text(grace: float, paused: bool, waiting: bool) -> String:
+	if waiting:
+		# Второго игрока нет, и это важнее чьего-либо хода: кнопки всё
+		# равно заблокированы сервером, а надпись объясняет, почему.
+		return "Ждём второго игрока: партия на паузе."
 	if paused:
 		return "Игра на паузе: кто-то отвалился. Ждём возвращения."
 	if state != null and (state.finished or state.my_turn()):
@@ -831,13 +851,14 @@ func _wait_text(grace: float, paused: bool) -> String:
 	return "Ход соперника"
 
 
-func _apply_state(view: Dictionary, grace: float, paused: bool) -> void:
+func _apply_state(view: Dictionary, grace: float, paused: bool, waiting: bool = false) -> void:
 	if view.is_empty():
 		return
 	_grace = grace
 	_paused = paused
+	_waiting = waiting
 	state = ViewBuilder.build(view)
-	_show_wait(_wait_text(grace, paused))
+	_show_wait(_wait_text(grace, paused, waiting))
 
 
 func _on_net_error(reason: String, hard: bool, errors: Array) -> void:
@@ -901,7 +922,7 @@ func _send_and_wait(send: Callable, args: Array = []) -> void:
 		# устаревшем состоянии («я всё ещё хожу» — как после взятия
 		# карточки или передачи хода).
 		_on_state_received(res.get("state", {}), float(res.get("grace", 0.0)),
-			bool(res.get("paused", false)))
+			bool(res.get("paused", false)), bool(res.get("waiting", false)))
 	elif String(res.get("t", "")) == NetProtocol.GAME_ERROR:
 		# Отказ пришёл персонально нам: рассылки с ним нет, и молчание
 		# выглядело бы как зависание.
@@ -1414,6 +1435,12 @@ func get_tile_marks(tile_id: int) -> Dictionary:
 func refresh() -> void:
 	if state == null:
 		return
+	# Снимаем старые позиции ДО пересборки: _update_table и set_tiles
+	# уничтожают текущие view, и после них снимать будет нечего.
+	var shots: Array = []
+	if _anim_pending:
+		shots = _capture_tiles()
+	_anim_pending = false
 	_drag_view = null
 	_slot_hover_pos = -1
 	_slot_hover_time = 0
@@ -1425,6 +1452,124 @@ func refresh() -> void:
 	_update_hand()
 	_update_buttons()
 	_update_hint_zone_size()
+	if not shots.is_empty():
+		_play_place_anim(shots)
+
+## Все показанные сейчас фишки: id, сама фишка и положение на экране.
+func _capture_tiles() -> Array:
+	var out: Array = []
+	_capture_flow(hand_flow, out)
+	for rb in row_blocks:
+		var block := rb as RowBlock
+		if block != null:
+			_capture_flow(block.flow, out)
+	return out
+
+func _capture_flow(flow: FlowTiles, out: Array) -> void:
+	if flow == null:
+		return
+	for v in flow.tile_views:
+		var tv := v as TileView
+		if tv != null and tv.tile != null:
+			out.append({ "id": tv.tile.id, "tile": tv.tile, "gpos": tv.global_position })
+
+## Разница старого и нового состояния в живых view: id -> TileView.
+func _collect_live(cur: Dictionary) -> void:
+	_collect_flow(hand_flow, cur)
+	for rb in row_blocks:
+		var block := rb as RowBlock
+		if block != null:
+			_collect_flow(block.flow, cur)
+
+func _collect_flow(flow: FlowTiles, cur: Dictionary) -> void:
+	if flow == null:
+		return
+	for v in flow.tile_views:
+		var tv := v as TileView
+		if tv != null and tv.tile != null:
+			cur[tv.tile.id] = tv
+
+## Слушает раскладку кадр — только тогда у свежесобранных контейнеров
+## есть координаты. Пустой снимок (вход в сцену) ничего не анимирует.
+func _play_place_anim(shots: Array) -> void:
+	# Рассылка могла застать сцену уже за бортом (смена сцены ещё/уже
+	# едет): вне дерева ждать кадр не на чем — просто не анимируем.
+	if not is_inside_tree():
+		return
+	await get_tree().process_frame
+	if not is_inside_tree() or shots.is_empty():
+		return
+	var prev := {}
+	for s in shots:
+		prev[int(s["id"])] = s
+	var cur := {}
+	_collect_live(cur)
+	var step := 0
+	for id in cur.keys():
+		var tv: TileView = cur[id]
+		if prev.has(id):
+			var gpos: Vector2 = prev[id]["gpos"]
+			prev.erase(id)
+			if gpos.distance_to(tv.global_position) > 2.0:
+				_slide_tile(tv, gpos)
+		else:
+			_fly_in_tile(tv, step)
+			step += 1
+	# Остались только ушедшие фишки.
+	for id in prev.keys():
+		var s: Dictionary = prev[id]
+		_fly_out_tile(s["tile"], s["gpos"])
+
+## Новая фишка: прилетает сверху — от края экрана в свой слот.
+func _fly_in_tile(tv: TileView, step: int) -> void:
+	var parent := tv.get_parent()
+	if parent == null:
+		return
+	var final_local := tv.position
+	var top_y := get_viewport().get_visible_rect().position.y - tv.size.y * 1.5
+	var start_global := Vector2(tv.global_position.x, top_y)
+	tv.position = parent.get_global_transform().affine_inverse() * start_global
+	tv.modulate.a = 0.0
+	var delay := minf(step * 0.05, 0.4)
+	var tw := create_tween()
+	tw.bind_node(tv)
+	tw.set_parallel(true)
+	tw.tween_property(tv, "position", final_local, 0.35) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT).set_delay(delay)
+	tw.tween_property(tv, "modulate:a", 1.0, 0.25) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT).set_delay(delay)
+
+## Фишка сменила место: переезжает из старого положения в новое.
+func _slide_tile(tv: TileView, from_global: Vector2) -> void:
+	var parent := tv.get_parent()
+	if parent == null:
+		return
+	var final_local := tv.position
+	tv.position = parent.get_global_transform().affine_inverse() * from_global
+	var tw := create_tween()
+	tw.bind_node(tv)
+	tw.tween_property(tv, "position", final_local, 0.3) \
+		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+
+## Ушедшая фишка: призрак взлетает вверх и гаснет — под ней уже пусто.
+func _fly_out_tile(tile: Tile, gpos: Vector2) -> void:
+	var ghost := TileView.make(tile, false, null, false)
+	add_child(ghost)
+	ghost.top_level = true
+	ghost.position = gpos
+	ghost.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var tw := create_tween()
+	tw.bind_node(ghost)
+	tw.set_parallel(true)
+	tw.tween_property(ghost, "position:y", gpos.y - Settings.tile_size().y * 1.8, 0.4) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tw.tween_property(ghost, "modulate:a", 0.0, 0.35) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tw.tween_callback(_on_ghost_done.bind(ghost))
+
+func _on_ghost_done(ghost: Control) -> void:
+	if is_instance_valid(ghost):
+		ghost.queue_free()
 
 func _update_chips() -> void:
 	for child in chips_box.get_children():

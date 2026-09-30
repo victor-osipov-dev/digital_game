@@ -36,6 +36,10 @@ class Room {
     this.lastActivityMs = Date.now();
     // seat -> {deadline, at}
     this.paused = new Map();
+    // Ожидание второго живого игрока: в партии остался один человек.
+    // Пока true — никто не ходит, боты молчат, место ушедшего свободно
+    // и может занять как вернувшийся, так и новый игрок.
+    this.waiting = false;
     this.sockets = new Map(); // seat -> socket
     this.fromQuick = !!opts.fromQuick;
     // Таймер «дозабрать пустые места ботами» (ставится в лобби, чистится
@@ -154,9 +158,15 @@ class Rooms {
         seat = bots[0];
       }
       this._seatHumanIntoPlaying(room, user, seat);
+      // Второй живой пришёл (или вернулся) — ожидание кончилось,
+      // хабу остаётся расслать состояние и запустить ботов.
+      if (room.waiting && this.humanCount(room) >= 2) {
+        room.waiting = false;
+        log.info(`комната ${room.code}: ${user.nick} занял место ${seat} — ожидание второго снято`);
+      }
       return { ok: true, room, seat, playing: true };
     }
-const seat = room.freeSeat();
+    const seat = room.freeSeat();
     if (seat === -1) return { ok: false, reason: 'В комнате нет свободных мест' };
     this._seatPlayer(room, user, seat);
     if (room.isFull()) this._launchIfFull(room);
@@ -368,9 +378,11 @@ const seat = room.freeSeat();
     for (const room of this.rooms.values()) {
       if (room.state === 'lobby') {
         if (room.isFull()) continue;
-      } else if (room.state !== 'playing' || !this._hasBotSeat(room)) {
-        // Идущую партию без свободных бот-мест в список не показываем: туда
-        // уже никто не войдёт.
+      } else if (room.state !== 'playing'
+          || (room.freeSeat() === -1 && !this._hasBotSeat(room))) {
+        // В идущую партию показываем только то, куда ещё можно войти:
+        // пустое место (ждущая второго комната) или место бота. Партия
+        // без единого свободного места в список не попадает.
         continue;
       }
       out.push(views.roomSummary(room, -1));
@@ -489,11 +501,13 @@ const seat = room.freeSeat();
   }
 
   _blocked(room, seat) {
+    if (room.waiting) return true;
     if (room.isPaused()) return true;
     return false;
   }
 
   _blockedReason(room, seat) {
+    if (room.waiting) return 'Ждём второго игрока';
     const waits = [];
     for (const [s, d] of room.paused) {
       if (d.deadline > Date.now()) waits.push(`${room.players[s].nick} (${Math.ceil((d.deadline - Date.now()) / 1000)} с)`);
@@ -568,7 +582,12 @@ const seat = room.freeSeat();
     return { room, seat };
   }
 
-  /** Время ожидания переподключения вышло — место занимает бот. */
+  /**
+   * Время ожидания переподключения вышло. Дальше — по числу живых людей
+   * за столом: двое и больше — место занимает бот и партия продолжается;
+   * один — включается ожидание второго, а место ушедшего освобождается;
+   * ноль — комнате конец.
+   */
   expireDisconnects() {
     const now = Date.now();
     const touched = [];
@@ -577,12 +596,72 @@ const seat = room.freeSeat();
       for (const [seat, d] of Array.from(room.paused.entries())) {
         if (d.deadline > now) continue;
         room.paused.delete(seat);
-        this._botifySeat(room, seat);
-        log.info(`комната ${room.code}: место ${seat} занято ботом (игрок не вернулся)`);
+        const p = room.players[seat];
+        if (!p) continue;
+        // О конца партии судить нечего: результат уже подведён, место
+        // боту — просто чтобы «пустых» фишек не осталось в представлении.
+        if (room.game && room.game.finished) {
+          this._botifySeat(room, seat);
+          log.info(`комната ${room.code}: место ${seat} занято ботом (партия окончена)`);
+          touched.push(room);
+          continue;
+        }
+        const others = this.humanCount(room) - (p && !p.isBot ? 1 : 0);
+        if (others === 0) {
+          // Уходить «с концами» имеет право последний живой — за ним
+          // держаться больше некому, комната удаляется.
+          this._deleteRoom(room, 'остался один и ушёл');
+          touched.push(room);
+          break;
+        }
+        if (others >= 2) {
+          this._botifySeat(room, seat);
+          log.info(`комната ${room.code}: место ${seat} занято ботом (игрок не вернулся)`);
+          touched.push(room);
+          continue;
+        }
+        // Остался один живой: ждём второго. Место ушедшего освобождаем —
+        // держать его сверх срока нельзя, иначе комната с одним
+        // свободным местом, занятым бы ушедшим, останется непроходимой.
+        this._freeExpiredSeat(room, seat);
+        room.waiting = true;
+        log.info(`комната ${room.code}: остался один игрок — ждём второго (место ${seat} свободно)`);
         touched.push(room);
       }
     }
     return touched;
+  }
+
+  /** Освободить место по превышению срока: аккаунт отвязывается, место пустеет. */
+  _freeExpiredSeat(room, seat) {
+    const p = room.players[seat];
+    if (!p) return;
+    if (p.userId !== null && p.userId !== undefined) {
+      this.byUser.delete(p.userId);
+      this._dropFromQuick(p.userId);
+    }
+    room.players[seat] = null;
+    room.sockets.delete(seat);
+    room.touch();
+  }
+
+  /** Удалить комнату и отвязать всех, кто в ней ещё числится. */
+  _deleteRoom(room, why) {
+    for (const p of room.players) {
+      if (p && p.userId !== null && p.userId !== undefined) {
+        this.byUser.delete(p.userId);
+        this._dropFromQuick(p.userId);
+      }
+    }
+    // Сокетов в комнате больше нет: иначе рассылка после уборки поедет
+    // живым людям в уже несуществующую партию.
+    room.sockets.clear();
+    if (room.startTimer) {
+      clearTimeout(room.startTimer);
+      room.startTimer = null;
+    }
+    this.rooms.delete(room.code);
+    log.info(`комната ${room.code} удалена (${why})`);
   }
 
   /** Явный ПОЛНЫЙ выход из комнаты: место освобождается сразу, в любом
@@ -618,14 +697,21 @@ const seat = room.freeSeat();
 
   _cleanupRoom(room) {
     if (room.state === 'playing') {
-      // Партия продолжается без ушедших. Убираем комнату, когда играть
-      // больше некому или все выбыли.
-      const alive = room.game.players.filter((p) => !p.dropped).length;
-      if (alive < 2) {
-        this.rooms.delete(room.code);
-        log.info(`комната ${room.code} закрыта, играть некому`);
-      } else if (room.game.finished) {
-        this.rooms.delete(room.code);
+      if (room.game && room.game.finished) {
+        this._deleteRoom(room, 'партия окончена');
+        return;
+      }
+      const humans = this.humanCount(room);
+      if (humans === 0) {
+        this._deleteRoom(room, 'играть некому');
+        return;
+      }
+      if (humans === 1 && !room.waiting) {
+        // Последний вышел из двух — второй остался один: не закрываем
+        // за ним, а включаем ожидание. Полная комната при этом не
+        // потерялась: ушедшее место освободилось (выход полный).
+        room.waiting = true;
+        log.info(`комната ${room.code}: один игрок — ждём второго`);
       }
       return;
     }

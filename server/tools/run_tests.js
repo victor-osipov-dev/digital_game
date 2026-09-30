@@ -1301,25 +1301,95 @@ test('переподключение снимает паузу', () => {
   assert.ok(!room3.isPaused());
 });
 
-test('по истечении срока ожидания место занимает бот, партия продолжается', () => {
+test('по истечении срока вдвоём — место освобождается, включается ожидание второго', () => {
   rooms.onDisconnect(u1);
   // перематываем дедлайн в прошлое
   const d = room3.paused.get(1);
   d.deadline = Date.now() - 1;
   const touched = rooms.expireDisconnects();
   assert.ok(touched.includes(room3), 'комната должна попасть в список обновлений');
-  assert.strictEqual(room3.game.players[1].isBot, true, 'опустевшее место занял бот');
-  assert.strictEqual(room3.state, 'playing', 'партия продолжается без него');
-  assert.strictEqual(room3.filled(), 2, 'место в комнате осталось занятым (ботом)');
+  assert.strictEqual(room3.players[1], null, 'место ушедшего свободно — занял бы его новый');
+  assert.strictEqual(room3.game.players[1].isBot, false, 'бота не ставим: живых остался один');
+  assert.strictEqual(room3.waiting, true, 'ждём второго игрока');
+  assert.strictEqual(room3.state, 'playing', 'партия не удаляется, пока за ней кто-то есть');
+  assert.strictEqual(room3.filled(), 1, 'живой один');
+  assert.ok(!rooms.byUser.has(u1.id), 'ушедший с превышением срока отвязан от комнаты');
 });
 
-test('после ботификации ход переходит боту', () => {
-  const game = room3.game;
-  const before = game.current;
-  game.advance();
-  assert.strictEqual(game.current, 1, 'выбывшего заменяет бот, и ход уходит ему');
-  assert.strictEqual(game.players[1].isBot, true);
-  assert.ok(before === 0);
+test('в ожидании второго ход любого заблокирован понятной причиной', () => {
+  const r = rooms.commitTurn(userOf('host1'),
+    [{ op: 'place', tile: room3.game.players[0].handIds[0], to: 'n0', index: 0 }]);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.reason.includes('второго'), r.reason);
+});
+
+test('второй игрок входит в ждущую комнату — ожидание снимается', () => {
+  const w1 = accounts.register('wait1', 'secret123', 'Ждун1');
+  assert.ok(w1.ok, w1.reason);
+  const j = rooms.joinRoom(userOf('wait1'), room3.code, null);
+  assert.ok(j.ok, j.reason);
+  assert.strictEqual(j.playing, true, 'комната уже играет — ответ должен быть партией');
+  assert.strictEqual(room3.waiting, false, 'второй пришёл — ждать больше не кого');
+  assert.strictEqual(room3.filled(), 2);
+  assert.strictEqual(room3.state, 'playing');
+  assert.ok(!room3.isPaused(), 'паузы нет — можно ходить');
+});
+
+test('троим место выбывшего занимает бот, партия продолжается', () => {
+  for (const [login, nick] of [['trio2', 'Трой2'], ['trio3', 'Трой3'], ['trio4', 'Трой4']]) {
+    assert.ok(accounts.register(login, 'secret123', nick).ok);
+  }
+  const rb = rooms.createRoom(userOf('trio2'), { seats: 3, require30: false }).room;
+  assert.ok(rooms.joinRoom(userOf('trio3'), rb.code, null).ok);
+  assert.ok(rooms.joinRoom(userOf('trio4'), rb.code, null).ok);
+  assert.strictEqual(rb.state, 'playing', 'комната на троих заполнилась и стартовала');
+  const u4 = userOf('trio4');
+  rooms.onDisconnect(u4);
+  const d = rb.paused.get(2);
+  d.deadline = Date.now() - 1;
+  const touched = rooms.expireDisconnects();
+  assert.ok(touched.includes(rb), 'комната должна попасть в список обновлений');
+  assert.strictEqual(rb.game.players[2].isBot, true, 'двое живых — место занимает бот');
+  assert.strictEqual(rb.waiting, false, 'ждать нечего: людей двое');
+  assert.strictEqual(rb.filled(), 3, 'место остаётся занятым (ботом)');
+});
+
+test('ушли оба — комната удаляется вместе с последним живым', () => {
+  assert.ok(accounts.register('gone1', 'secret123', 'Уход1').ok);
+  assert.ok(accounts.register('gone2', 'secret123', 'Уход2').ok);
+  const rc = rooms.createRoom(userOf('gone1'), { seats: 2, require30: false }).room;
+  assert.ok(rooms.joinRoom(userOf('gone2'), rc.code, null).ok);
+  assert.strictEqual(rc.state, 'playing');
+  rooms.onDisconnect(userOf('gone1'));
+  rooms.onDisconnect(userOf('gone2'));
+  rc.paused.get(0).deadline = Date.now() - 1;
+  rc.paused.get(1).deadline = Date.now() - 1;
+  rooms.expireDisconnects();
+  // Первый истёк — ожидание; второй, последний, истёк — уборка.
+  assert.ok(!rooms.rooms.has(rc.code), 'с последним ушедшим комната должна исчезнуть');
+  assert.ok(!rooms.byUser.has(userOf('gone1').id), 'gone1 отвязан');
+  assert.ok(!rooms.byUser.has(userOf('gone2').id), 'gone2 отвязан');
+});
+
+test('полный выход из двоих — не удаление, а ожидание второго', () => {
+  assert.ok(accounts.register('exit1', 'secret123', 'Выход1').ok);
+  assert.ok(accounts.register('exit2', 'secret123', 'Выход2').ok);
+  const re = rooms.createRoom(userOf('exit1'), { seats: 2, require30: false }).room;
+  assert.ok(rooms.joinRoom(userOf('exit2'), re.code, null).ok);
+  rooms.leaveGame(userOf('exit1'));
+  assert.ok(rooms.rooms.has(re.code), 'остался один живой — комната ждёт, а не закрывается');
+  assert.strictEqual(re.waiting, true, 'ждём второго');
+  assert.strictEqual(re.filled(), 1);
+  assert.ok(re.game.players[0].dropped, 'вышедший помечен выбывшим — его место не занято');
+  // Новый человек садится на свободное место и берёт запись себе.
+  assert.ok(accounts.register('exit3', 'secret123', 'Выход3').ok);
+  assert.ok(rooms.joinRoom(userOf('exit3'), re.code, null).ok);
+  assert.strictEqual(re.waiting, false, 'второй пришёл — ждать больше не кого');
+  assert.ok(!re.game.players[0].dropped, 'запись игрока очищена — новый игрок ходит');
+  rooms.leaveGame(userOf('exit2'));
+  assert.ok(rooms.rooms.has(re.code) && re.waiting, 'ещё один живой — комната снова ждёт');
+  rooms.leaveGame(userOf('exit3'));
+  assert.ok(!rooms.rooms.has(re.code), 'ушёл и последний — комната удалена');
 });
 
 test('в лобби обрыв освобождает место сразу', () => {

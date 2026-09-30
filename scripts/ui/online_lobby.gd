@@ -185,7 +185,7 @@ func _reconcile_room_after_reconnect() -> void:
 		_goto_rooms()
 		_set_note(_rooms_note, "Комната %s закрылась, пока вы были офлайн" % code, true)
 
-func _on_net_game_state(_view: Dictionary, _grace: float, _paused: bool) -> void:
+func _on_net_game_state(_view: Dictionary, _grace: float, _paused: bool, _waiting: bool) -> void:
 	# Партия началась — уходим в неё, сами её не рисуем. Сидим на странице
 	# комнат, а не в лобби комнаты? Тогда это не наша рассылка (мягко
 	# вышедшего игрока сервер из партии выписал, состояния ему не шлют).
@@ -197,6 +197,10 @@ func _on_net_game_state(_view: Dictionary, _grace: float, _paused: bool) -> void
 		# pending как «партия идёт» — вернуться в неё всё ещё можно.
 		if not _lobby_room_code.is_empty():
 			Net.park_room({"code": _lobby_room_code, "state": "playing"})
+		return
+	# Смена сцены уже заказана (room_state тоже уводит в партию) —
+	# повторный вызов осиротил бы первый экземпляр сцены.
+	if _started:
 		return
 	_started = true
 	Net.plan_game(true)
@@ -689,7 +693,7 @@ func _do_leave_room() -> void:
 ## Баннер «вы всё ещё в комнате». Показывается на странице комнат, когда
 ## сервер сообщил, что игрок числится в комнате/партии (мягкий выход,
 ## вход в аккаунт при живом месте), а сам возвращать его не стал.
-func _refresh_stuck() -> void:
+func _refresh_stuck(_room := {}) -> void:
 	if _stuck_box == null:
 		return
 	var pending := Net.pending_room()
