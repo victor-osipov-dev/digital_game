@@ -53,12 +53,12 @@ func _boot() -> void:
 
 	var scroll: ScrollContainer = menu.get("menu_scroll")
 	check(scroll != null, "menu_scroll собран")
+	var hits := [0]
 
 	# --- 1) тап по чекбоксу: отыгрышь доходит до GUI -------------------
 	var cb: CheckBox = menu.get("check_30")
 	check(cb != null, "чекбокс «Первый ход» есть")
 	if cb != null:
-		var hits := [0]
 		cb.pressed.connect(func(): hits[0] += 1)
 		var was := cb.button_pressed
 		await _tap(cb.get_global_rect().get_center())
@@ -124,6 +124,63 @@ func _boot() -> void:
 		check(scroll.scroll_vertical > before2,
 			"драг с поля ввода прокрутил меню (%d → %d)" % [before2, scroll.scroll_vertical])
 
+	# --- 7) тап пальцем (ScreenTouch) тоже кликает ---------------------
+	if cb != null and scroll != null:
+		_center_in(scroll, cb)
+		await process_frame
+		var h3: int = hits[0]
+		var was3 := cb.button_pressed
+		var p3 := cb.get_global_rect().get_center()
+		_touch_press(p3)
+		_touch_release(p3)
+		for i in range(2):
+			await process_frame
+		check(hits[0] == h3 + 1, "тап пальцем по чекбоксу кликает (hits=%d)" % hits[0])
+		check(cb.button_pressed != was3, "чекбокс от тач-тапа переключился")
+
+		# --- 8) драг пальцем (ScreenDrag) листает, клик подавлен --------
+		_center_in(scroll, cb)
+		scroll.scroll_vertical = maxi(0, scroll.scroll_vertical - 40)
+		await process_frame
+		var b3 := scroll.scroll_vertical
+		var h4: int = hits[0]
+		var s4 := cb.button_pressed
+		var p4 := cb.get_global_rect().get_center()
+		_touch_press(p4)
+		_touch_drag(p4, p4 + Vector2(0, -45))
+		_touch_drag(p4 + Vector2(0, -45), p4 + Vector2(0, -60))
+		_touch_release(p4 + Vector2(0, -60))
+		for i in range(2):
+			await process_frame
+		check(scroll.scroll_vertical > b3,
+			"драг пальцем прокрутил меню (%d → %d)" % [b3, scroll.scroll_vertical])
+		check(hits[0] == h4, "после тач-драга клик подавлен (hits=%d)" % hits[0])
+		check(cb.button_pressed == s4, "чекбокс от тач-драга не дёрнулся")
+
+		# --- 9) тач и эмуляция мыши — один жест, один сдвиг -------------
+		# На телефоне касание приходит двумя потоками (ScreenTouch/ScreenDrag
+		# и эмуляция мыши). Двигаем оба: прокрутка обязана сдвинуться ровно
+		# один раз, дубликат от мыши — проигнорирован.
+		_center_in(scroll, cb)
+		scroll.scroll_vertical = maxi(0, scroll.scroll_vertical - 40)
+		await process_frame
+		var b4 := scroll.scroll_vertical
+		var h5: int = hits[0]
+		var p5 := cb.get_global_rect().get_center()
+		_touch_press(p5)
+		_press(p5)
+		_touch_drag(p5, p5 + Vector2(0, -20))
+		_motion(p5 + Vector2(0, -20))
+		_touch_drag(p5 + Vector2(0, -20), p5 + Vector2(0, -30))
+		_motion(p5 + Vector2(0, -30))
+		_touch_release(p5 + Vector2(0, -30))
+		_release(p5 + Vector2(0, -30))
+		for i in range(2):
+			await process_frame
+		check(scroll.scroll_vertical == b4 + 10,
+			"тач+мышь: сдвиг один (%d → %d, ждали %d)" % [b4, scroll.scroll_vertical, b4 + 10])
+		check(hits[0] == h5, "дубль потоков не нажал чекбокс (hits=%d)" % hits[0])
+
 	# Настройки возвращаем как были: тап по чекбоксу пишет конфиг.
 	settings.require_30 = saved_req
 	settings.text_scale = saved_scale
@@ -171,6 +228,30 @@ func _motion(pos: Vector2) -> void:
 	ev.position = pos
 	ev.global_position = pos
 	ev.button_mask = MOUSE_BUTTON_MASK_LEFT
+	root.push_input(ev)
+
+
+func _touch_press(pos: Vector2) -> void:
+	var ev := InputEventScreenTouch.new()
+	ev.index = 0
+	ev.pressed = true
+	ev.position = pos
+	root.push_input(ev)
+
+
+func _touch_release(pos: Vector2) -> void:
+	var ev := InputEventScreenTouch.new()
+	ev.index = 0
+	ev.pressed = false
+	ev.position = pos
+	root.push_input(ev)
+
+
+func _touch_drag(frm: Vector2, to: Vector2) -> void:
+	var ev := InputEventScreenDrag.new()
+	ev.index = 0
+	ev.position = to
+	ev.relative = to - frm
 	root.push_input(ev)
 
 

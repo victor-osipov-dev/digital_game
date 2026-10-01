@@ -20,6 +20,13 @@ extends RefCounted
 ##  - всё остальное (карточки, ряды, drop-цели, касания без скролл-предка)
 ##    не трогаем: эти жесты решают сами game._input и нативный ScrollContainer.
 ##
+## На телефоне касание приходит двумя потоками: как InputEventScreenTouch/
+## ScreenDrag и как эмуляция мыши (emulate_mouse_from_touch включён по
+## умолчанию). Жест ведём строго по одному потоку — тому, каким начался,
+## — иначе прокрутка посчиталась бы вдвое; координаты пробуем и в
+## пространстве события, и в глобальном (см. game.gd: панорама стола на
+## Android работает только через get_global_mouse_position()).
+##
 ## Вызывается из _input сцены и возвращает true, если событие поглощено.
 
 ## Сколько пикселей должна пройти рука, прежде чем жест станет прокруткой.
@@ -31,6 +38,8 @@ var _ctrl: Control = null
 var _scroll: ScrollContainer = null
 var _from := Vector2.ZERO
 var _prev := Vector2.ZERO
+var _touch_stream := false
+var _use_global := false
 var _replay_pending := false
 var _replay_ctrl: Control = null
 var _replay_from := Vector2.ZERO
@@ -47,28 +56,45 @@ func input(host: Node, event: InputEvent) -> bool:
 		var mb := event as InputEventMouseButton
 		if mb.button_index == MOUSE_BUTTON_LEFT:
 			if mb.pressed:
-				consumed = _begin(host, mb.position)
-			else:
+				consumed = _press(host, mb.position, false)
+			elif _pressed:
 				consumed = _finish()
-	elif event is InputEventMouseMotion and _pressed:
-		var mm := event as InputEventMouseMotion
-		if (mm.button_mask & MOUSE_BUTTON_MASK_LEFT) == 0:
-			# Кнопку отпустили вне окна — жест бросаем, тап не засчитываем.
-			_drop()
-		else:
-			consumed = _drag(mm.position)
+	elif event is InputEventScreenTouch:
+		var st := event as InputEventScreenTouch
+		if st.pressed:
+			consumed = _press(host, st.position, true)
+		elif _pressed:
+			consumed = _finish()
+	elif _pressed and event is InputEventMouseMotion and not _touch_stream:
+		consumed = _drag(host, (event as InputEventMouseMotion).position)
+	elif _pressed and event is InputEventScreenDrag and _touch_stream:
+		consumed = _drag(host, (event as InputEventScreenDrag).position)
 	if consumed:
 		host.get_viewport().set_input_as_handled()
 	return consumed
 
 
-func _begin(host: Node, pos: Vector2) -> bool:
+func _press(host: Node, pos: Vector2, from_touch: bool) -> bool:
+	if _pressed:
+		# Второй поток того же касания (тач и его эмуляция мыши, либо
+		# второй палец): жест уже наш, дубль просто съедаем — иначе
+		# перезахват сбил бы поток и прокрутка пошла бы вдвое.
+		return true
 	# Новое касание отменяет непрошедший отложенный тап: его доставим
 	# своим кадром, чтобы не склеивать два жеста.
 	_replay_pending = false
-	if _pressed:
-		_drop()
+	var gpos := Vector2.ZERO
 	var ctrl := _hit(host.get_viewport(), pos)
+	var use_global := false
+	if ctrl == null or not ScrollFix.keeps(ctrl):
+		# На Android координаты события могут прийти в системе экрана, а
+		# не вьюпорта — повторяем тем же способом, каким панорамирует
+		# стол: глобальные координаты хоста.
+		var c := host as CanvasItem
+		if c != null:
+			gpos = c.get_global_mouse_position()
+			ctrl = _hit(host.get_viewport(), gpos)
+			use_global = ctrl != null
 	if ctrl == null or not ScrollFix.keeps(ctrl):
 		return false
 	var scroll := _scroll_parent(ctrl)
@@ -78,12 +104,18 @@ func _begin(host: Node, pos: Vector2) -> bool:
 	_moved = false
 	_ctrl = ctrl
 	_scroll = scroll
-	_from = pos
-	_prev = pos
+	_touch_stream = from_touch
+	_use_global = use_global
+	_from = gpos if use_global else pos
+	_prev = _from
 	return true
 
 
-func _drag(pos: Vector2) -> bool:
+func _drag(host: Node, pos: Vector2) -> bool:
+	if _use_global:
+		var c := host as CanvasItem
+		if c != null:
+			pos = c.get_global_mouse_position()
 	var total := pos - _from
 	if not _moved:
 		_prev = pos
