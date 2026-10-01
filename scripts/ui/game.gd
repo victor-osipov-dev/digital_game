@@ -65,6 +65,7 @@ var _slot_grace_until: int = 0
 var _pan_pressed: bool = false
 var _pan_pos: Vector2 = Vector2.ZERO
 var _pan_press_on_tile: bool = false
+var _scroll_drag := ScrollDrag.new()
 
 # --- сетевой режим -------------------------------------------------------
 #
@@ -196,8 +197,12 @@ func _build_ui() -> void:
 	layout.add_theme_constant_override("separation", 8)
 	margin.add_child(layout)
 
-	var top := HBoxContainer.new()
-	top.add_theme_constant_override("separation", 6)
+	# Верхняя строка — в потоке, а не в одном ряду: при гигантском
+	# шесть кнопок с крупным текстом не влезают в 576, и строка
+	# переезжает на вторую линию, а не уезжает за правый край.
+	var top := FlowContainer.new()
+	top.add_theme_constant_override("h_separation", 6)
+	top.add_theme_constant_override("v_separation", 6)
 	layout.add_child(top)
 
 	deck_button = Button.new()
@@ -302,6 +307,7 @@ func _build_ui() -> void:
 	_turn_timer_label = Label.new()
 	_turn_timer_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_turn_timer_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_turn_timer_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_turn_timer_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_turn_timer_label.add_theme_font_size_override("font_size", Settings.fs(15))
 	_turn_timer_label.add_theme_color_override("font_color", Color("FFD54F"))
@@ -491,7 +497,7 @@ func _style_dialog(dialog: ConfirmationDialog) -> void:
 	for b in [dialog.get_ok_button(), dialog.get_cancel_button()]:
 		if b != null:
 			b.add_theme_font_size_override("font_size", Settings.fs(16))
-			b.custom_minimum_size = Vector2(Settings.touch(120), Settings.touch(52))
+			b.custom_minimum_size = Vector2(Settings.touch_w(120), Settings.touch(52))
 
 func _make_top_button(text_value: String, tip: String, handler: Callable) -> Button:
 	var btn := Button.new()
@@ -548,6 +554,7 @@ func _build_pass_overlay() -> void:
 	pass_title = Label.new()
 	pass_title.text = "Передайте устройство игроку"
 	pass_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	pass_title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	pass_title.add_theme_font_size_override("font_size", Settings.fs(18))
 	pass_title.add_theme_color_override("font_color", Color(1, 1, 1, 0.7))
 	box.add_child(pass_title)
@@ -555,13 +562,14 @@ func _build_pass_overlay() -> void:
 	pass_name = Label.new()
 	pass_name.text = ""
 	pass_name.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	pass_name.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	pass_name.add_theme_font_size_override("font_size", Settings.fs(34))
 	pass_name.add_theme_color_override("font_color", Color("90CAF9"))
 	box.add_child(pass_name)
 
 	pass_ready_button = Button.new()
 	pass_ready_button.text = "Готов(-а)"
-	pass_ready_button.custom_minimum_size = Vector2(Settings.touch(220), Settings.touch(60))
+	pass_ready_button.custom_minimum_size = Vector2(Settings.touch_w(220), Settings.touch(60))
 	pass_ready_button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	pass_ready_button.add_theme_font_size_override("font_size", Settings.fs(20))
 	pass_ready_button.pressed.connect(_on_pass_ready)
@@ -597,6 +605,7 @@ func _build_win_overlay() -> void:
 	win_title = Label.new()
 	win_title.text = ""
 	win_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	win_title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	win_title.add_theme_font_size_override("font_size", Settings.fs(32))
 	win_title.add_theme_color_override("font_color", Color("FFD54F"))
 	box.add_child(win_title)
@@ -608,7 +617,7 @@ func _build_win_overlay() -> void:
 
 	var again_btn := Button.new()
 	again_btn.text = "Заново"
-	again_btn.custom_minimum_size = Vector2(Settings.touch(180), Settings.touch(60))
+	again_btn.custom_minimum_size = Vector2(Settings.touch_w(180), Settings.touch(60))
 	again_btn.add_theme_font_size_override("font_size", Settings.fs(19))
 	again_btn.pressed.connect(_new_match)
 	_apply_accent_style(again_btn, Color("2E7D32"), Color("388E3C"), Color("1B5E20"))
@@ -617,7 +626,7 @@ func _build_win_overlay() -> void:
 
 	var to_menu_btn := Button.new()
 	to_menu_btn.text = "В меню"
-	to_menu_btn.custom_minimum_size = Vector2(Settings.touch(180), Settings.touch(60))
+	to_menu_btn.custom_minimum_size = Vector2(Settings.touch_w(180), Settings.touch(60))
 	to_menu_btn.add_theme_font_size_override("font_size", Settings.fs(19))
 	to_menu_btn.pressed.connect(_on_leave_to_menu)
 	btn_box.add_child(to_menu_btn)
@@ -2279,6 +2288,11 @@ func _fit_toast_width() -> void:
 ## от касания) гасим, прокрутку двигаем сами. Сами карточки не трогаем —
 ## с них перетаскивание по-прежнему работает как раньше.
 func _input(event: InputEvent) -> void:
+	# Листание, начатое на кнопке/поле ввода внутри скролл-предка
+	# (наложения партии). Поглощённые события до пан-разбора стола
+	# не доходят — жесты не мешают друг другу. См. ScrollDrag.
+	if _scroll_drag.input(self, event):
+		return
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
 		if mb.button_index != MOUSE_BUTTON_LEFT:

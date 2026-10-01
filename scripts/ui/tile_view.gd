@@ -68,7 +68,11 @@ func _build() -> void:
 		sb.set_border_width_all(maxi(bw, 2) if tile.is_joker else bw)
 	add_theme_stylebox_override("panel", sb)
 
-	var fsize := maxi(8, Settings.fs(int(round(ts.y * 0.4))))
+	# Число масштабируется и по фишке, и по шкале текста, но потолок —
+	# сама фишка: шире карточки цифра быть не может ни при какой
+	# настройке (0.82 оставляет запас под самый широкий глиф «88»).
+	var tile_base := int(round(ts.y * 0.4))
+	var fsize := clampi(Settings.fs(tile_base), 8, int((ts.x - 6.0) * 0.82))
 	var label := Label.new()
 	label.text = "★" if tile.is_joker else str(tile.value)
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER

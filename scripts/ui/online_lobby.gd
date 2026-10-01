@@ -435,6 +435,7 @@ func _make_room_row(room: Dictionary) -> Control:
 	var lab := Label.new()
 	lab.text = text
 	lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	lab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	lab.add_theme_font_size_override("font_size", Settings.fs(14))
 	lab.add_theme_color_override("font_color", Color(1, 1, 1, 0.9))
 	lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -442,7 +443,7 @@ func _make_room_row(room: Dictionary) -> Control:
 
 	var join := Button.new()
 	join.text = "Войти"
-	join.custom_minimum_size = Vector2(Settings.touch(84), Settings.touch(38))
+	join.custom_minimum_size = Vector2(Settings.touch_w(84), Settings.touch(38))
 	join.add_theme_font_size_override("font_size", Settings.fs(14))
 	join.pressed.connect(_do_join.bind(String(room.get("code", "")), String(room.get("server", ""))))
 	box.add_child(join)
@@ -927,6 +928,10 @@ func _header(text: String, size: int = 17) -> Label:
 	var lab := Label.new()
 	lab.text = text
 	lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	# Заголовки — обычные подписи и длинные пояснения («Сервер
+	# выбирается случайно…»). Без переноса пояснение задавало ширину
+	# всей страницы лобби и уезжало за правый край на крупных шкалах.
+	lab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	lab.add_theme_font_size_override("font_size", Settings.fs(size))
 	lab.add_theme_color_override("font_color", Color(1, 1, 1, 0.9))
 	return lab
@@ -1009,7 +1014,7 @@ func _build() -> void:
 	head_space.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	head.add_child(head_space)
 	_back_btn = _button("Назад", 14)
-	_back_btn.custom_minimum_size = Vector2(Settings.touch(110), Settings.touch(40))
+	_back_btn.custom_minimum_size = Vector2(Settings.touch_w(110), Settings.touch(40))
 	_back_btn.pressed.connect(close)
 	head.add_child(_back_btn)
 
@@ -1169,7 +1174,7 @@ func _build_rooms() -> VBoxContainer:
 	create_row.add_theme_constant_override("separation", 8)
 	page.add_child(create_row)
 	_seats_option = OptionButton.new()
-	_seats_option.custom_minimum_size = Vector2(Settings.touch(110), Settings.touch(44))
+	_seats_option.custom_minimum_size = Vector2(Settings.touch_w(110), Settings.touch(44))
 	Settings.style_option(_seats_option, 15)
 	for n in range(2, 6):
 		_seats_option.add_item("мест: %d" % n)
@@ -1210,7 +1215,7 @@ func _build_rooms() -> VBoxContainer:
 	_rooms_note.add_theme_font_size_override("font_size", Settings.fs(13))
 	head.add_child(_rooms_note)
 	_refresh_btn = _button("Обновить", 13)
-	_refresh_btn.custom_minimum_size = Vector2(Settings.touch(120), Settings.touch(40))
+	_refresh_btn.custom_minimum_size = Vector2(Settings.touch_w(120), Settings.touch(40))
 	_refresh_btn.pressed.connect(_refresh_rooms)
 	head.add_child(_refresh_btn)
 

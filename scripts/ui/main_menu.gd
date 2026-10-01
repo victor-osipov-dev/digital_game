@@ -17,6 +17,7 @@ var _online_note: Label = null
 var _room_actions: HBoxContainer = null
 var _return_room_btn: Button = null
 var _drop_room_btn: Button = null
+var _scroll_drag := ScrollDrag.new()
 
 func _sync_scroll_min() -> void:
 	if menu_scroll == null or menu_box == null:
@@ -54,6 +55,13 @@ func _ready() -> void:
 	# молчит при свежем входе, поэтому сразу читаем текущее состояние.
 	Net.pending_room_changed.connect(_refresh_online_note)
 	_refresh_online_note()
+
+
+## Листание, начатое пальцем на кнопке, чекбоксе или поле ввода внутри
+## прокручиваемой страницы (меню, лобби, наложения). См. ScrollDrag.
+func _input(event: InputEvent) -> void:
+	if _scroll_drag.input(self, event):
+		return
 
 func _build_ui() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -144,7 +152,7 @@ func _build_ui() -> void:
 	count_row.add_child(count_label)
 
 	count_option = OptionButton.new()
-	count_option.custom_minimum_size = Vector2(Settings.touch(110), Settings.touch(50))
+	count_option.custom_minimum_size = Vector2(Settings.touch_w(110), Settings.touch(50))
 	Settings.style_option(count_option, 17)
 	for n in range(Settings.MIN_PLAYERS, Settings.MAX_PLAYERS + 1):
 		count_option.add_item(str(n))
@@ -163,7 +171,10 @@ func _build_ui() -> void:
 	box.add_child(names_box)
 
 	check_30 = CheckBox.new()
-	check_30.text = "Первый ход игры: минимум 30 очков"
+	# Подпись та же, что и в сетевом лобби: чекбокс не переносится, а
+	# его ширина — ширина всей колонки меню; длиннее — на гигантском
+	# строка уезжала за правый край экрана.
+	check_30.text = "Первый ход: минимум 30 очков"
 	check_30.button_pressed = Settings.require_30
 	check_30.add_theme_font_size_override("font_size", Settings.fs(15))
 	check_30.add_theme_color_override("font_color", Color(1, 1, 1, 0.9))
@@ -406,7 +417,7 @@ func _build_stats_overlay() -> void:
 
 	var close_btn := Button.new()
 	close_btn.text = "Закрыть"
-	close_btn.custom_minimum_size = Vector2(Settings.touch(200), Settings.touch(52))
+	close_btn.custom_minimum_size = Vector2(Settings.touch_w(200), Settings.touch(52))
 	close_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	close_btn.add_theme_font_size_override("font_size", Settings.fs(17))
 	close_btn.pressed.connect(func(): stats_overlay.visible = false)

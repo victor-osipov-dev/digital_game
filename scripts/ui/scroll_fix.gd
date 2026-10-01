@@ -22,11 +22,13 @@ const KEEP := [
 static func relax(node: Node) -> void:
 	for child in node.get_children():
 		var c := child as Control
-		if c != null and c.mouse_filter == Control.MOUSE_FILTER_STOP and not _must_keep(c):
+		if c != null and c.mouse_filter == Control.MOUSE_FILTER_STOP and not keeps(c):
 			c.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		relax(child)
 
-static func _must_keep(c: Control) -> bool:
+## Контролы, которым нужно собственное касание: ими пользуются. Те же
+## считаются кандидатами на жест ScrollDrag — листание, начатое на кнопке.
+static func keeps(c: Control) -> bool:
 	for k in KEEP:
 		if c.is_class(k):
 			return true

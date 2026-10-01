@@ -4,8 +4,13 @@ const CFG_PATH := "user://settings.cfg"
 const MIN_PLAYERS := 2
 const MAX_PLAYERS := 5
 
-const TEXT_SCALES := [1.7, 2.0, 2.4, 2.9]
+## Лестница масштабов: средний — ровно прежний (×1.0, вёрстка под
+## него родная), гигантский — ×2, чтобы весь текст был заметно крупным.
+## Потолоков у текста нет, зато есть пол FS_MIN: на «Маленьком»
+## мелкие базы не опускаются ниже читаемого минимума.
+const TEXT_SCALES := [0.85, 1.0, 1.3, 2.0]
 const TEXT_SCALE_NAMES := ["Маленький", "Средний", "Большой", "Гигантский"]
+const FS_MIN := 12
 const TILE_WIDTHS := [32, 40, 48, 60, 66, 72]
 const TILE_SIZE_NAMES := ["Крошечный", "Маленький", "Средний", "Крупный", "Большой", "Максимум"]
 const BOT_LEVEL_NAMES := ["Лёгкий", "Средний", "Сложный", "Невозможный"]
@@ -26,15 +31,31 @@ func _ready() -> void:
 	if OS.get_name() == "Android":
 		DisplayServer.screen_set_orientation(DisplayServer.SCREEN_SENSOR)
 
+## Размер шрифта: база × шкала, но не ниже читаемого минимума —
+## на «Маленьком» fs(12)/fs(13) не превращаются в крошку.
 func fs(base: int) -> int:
 	var idx := clampi(text_scale, 0, TEXT_SCALES.size() - 1)
-	return maxi(1, int(round(base * TEXT_SCALES[idx])))
+	return maxi(FS_MIN, int(round(base * TEXT_SCALES[idx])))
 
 ## Размер интерактивного контроля (кнопки, поля ввода, переключатели).
 ## Растёт вместе с выбранным размером текста, чтобы пальцем было легко:
 ## большой шрифт бессмыслен, если кнопки по нему остались крошечными.
+## Пола нет — это не текст, а размеры вроде отступов (touch(2)).
 func touch(base: int) -> int:
-	return fs(base)
+	var idx := clampi(text_scale, 0, TEXT_SCALES.size() - 1)
+	return maxi(1, int(round(base * TEXT_SCALES[idx])))
+
+## Ширина контрола с потолком по ширине окна. Текстовая шкала растит
+## ширины так же, как шрифт, а пары кнопок («Заново» + «В меню») и
+## ряды лобби на гигантском так не влезают в 576 — ширина держим в
+## 44% окна: две таких кнопки с зазором всегда уместятся.
+func touch_w(base: int) -> int:
+	var w := touch(base)
+	var vw := 576.0
+	var vp := get_viewport()
+	if vp != null:
+		vw = vp.get_visible_rect().size.x
+	return mini(w, int(vw * 0.44))
 
 
 ## Оформляет OptionButton И его выпадающий список. Шрифт в свёрнутой

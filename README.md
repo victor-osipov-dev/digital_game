@@ -842,6 +842,8 @@ godot --headless --path . --script res://tests/test_draft.gd
 godot --headless --path . --script res://tests/test_online.gd       #  23: по живым серверам
 godot --headless --path . --script res://tests/check_layout.gd
 godot --headless --path . --script res://tests/check_api.gd
+godot --headless --path . --script res://tests/check_textscale.gd   # рамки и шкалы текста, числа в фишках
+godot --headless --path . --script res://tests/check_scroll_drag.gd # листание с кнопок и полей ввода
 ```
 
 ### Правила, касающиеся самих тестов
@@ -906,6 +908,12 @@ godot --headless --path . --script res://tests/check_api.gd
   (`ScrollFix.relax`), а кнопки, поля, `RichTextLabel` в скролле и
   drop-цели остаются `STOP`. `relax()` **нельзя** вызывать там, где есть
   drop-цели: `DropLayer` обязан ловить касание.
+  А кнопка или поле ввода **внутри** скролла — не тупик: жест, начатый на
+  `KEEP`-контроле с скролл-предком, разбирает `ScrollDrag` в `_input`
+  сцены раньше GUI. Дальше порога (10 px) это прокрутка — клик при этом
+  подавлен; короткий тап отыгрывается событиями press+release, и кнопка
+  срабатывает как обычно. Карточки, ряды и прочие drop-цели `ScrollDrag`
+  не трогает — ими дальше решают `Game._input` и нативный `ScrollContainer`.
 * **Drop-цель нельзя разжаловать в `PASS`/`IGNORE`:** жест с неё уходит в
   `ScrollContainer`, и карточки перестают в неё вставать. Для стола
   прокрутка по фону рядов разобрана вручную в `Game._input`: жест ловится
