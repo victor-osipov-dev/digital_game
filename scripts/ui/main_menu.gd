@@ -518,7 +518,11 @@ func _on_start_pressed() -> void:
 	# иначе «Начать игру» после мягкого выхода из онлайн-партии снова
 	# тащило бы нас в неё.
 	Net.plan_game(false)
-	get_tree().change_scene_to_file("res://scenes/game.tscn")
+	# Кнопка могла достаться уже удалённому меню (сцену сменили по сети,
+	# а отложенный сигнал дошёл позже): у отсоединённого узла get_tree()
+	# вернул бы null.
+	if is_inside_tree():
+		get_tree().change_scene_to_file("res://scenes/game.tscn")
 
 
 ## Сетевое меню — последний ребёнок этого узла, поэтому рисуется поверх

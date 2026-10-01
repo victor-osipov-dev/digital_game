@@ -93,6 +93,22 @@ func _ready() -> void:
 	_build()
 
 
+## Смена сцены с проверкой, что нас ещё есть в дереве.
+##
+## Каждый вызовок сюда достигается после await — ответа сервера,
+## таймера или кадра. За это время сцену уже могли сменить: игрок
+## вышел в меню, связь отвалилась и нас выкинуло, окно закрылось. У
+## отсоединённого узла get_tree() возвращает null, и прямой вызов
+## change_scene_to_file на нём падал с «Cannot call method
+## 'change_scene_to_file' on a null value». Менять сцену тут уже
+## нечем и незачем — тихо уходим.
+func _go_scene(path: String) -> bool:
+	if not is_inside_tree():
+		return false
+	get_tree().change_scene_to_file(path)
+	return true
+
+
 func open() -> void:
 	_build()
 	visible = true
@@ -204,7 +220,7 @@ func _on_net_game_state(_view: Dictionary, _grace: float, _paused: bool, _waitin
 		return
 	_started = true
 	Net.plan_game(true)
-	get_tree().change_scene_to_file("res://scenes/game.tscn")
+	_go_scene("res://scenes/game.tscn")
 
 
 func _enter() -> void:
@@ -519,7 +535,7 @@ func _enter_from_join(res: Dictionary) -> bool:
 			# исключает из неё наше место.
 			_started = true
 			Net.plan_game(true)
-			get_tree().change_scene_to_file("res://scenes/game.tscn")
+			_go_scene("res://scenes/game.tscn")
 			return true
 	return false
 
@@ -687,7 +703,7 @@ func _do_start() -> void:
 		# лобби после нажатия «Начать партию». Сцену меняем здесь же.
 		_started = true
 		Net.plan_game(true)
-		get_tree().change_scene_to_file("res://scenes/game.tscn")
+		_go_scene("res://scenes/game.tscn")
 		return
 	_set_note(_lobby_note, _reason(res, "Не удалось начать партию"), true)
 
@@ -734,7 +750,7 @@ func _do_return_room() -> void:
 			_set_note(_rooms_note, "Нет связи с сервером: вернуться в партию пока нельзя", true)
 			return
 		Net.plan_game(true)
-		get_tree().change_scene_to_file("res://scenes/game.tscn")
+		_go_scene("res://scenes/game.tscn")
 		return
 	if not String(pending.get("code", "")).is_empty():
 		await _do_join(String(pending.get("code", "")), "")

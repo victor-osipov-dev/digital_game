@@ -478,6 +478,19 @@ func _build_ui() -> void:
 	_style_dialog(menu_dialog)
 	add_child(menu_dialog)
 
+## Смена сцены с проверкой, что нас ещё есть в дереве.
+##
+## Оба вызова отсюда — после await или по сетевому сигналу: за это
+## время партию могли уже закрыть (игрок вышел в меню, связь отвалилась
+## и клиент уже ушёл в main_menu). У отсоединённого узла get_tree()
+## возвращает null, и прямой вызов change_scene_to_file падал с
+## «Cannot call method 'change_scene_to_file' on a null value».
+func _go_menu() -> void:
+	if not is_inside_tree():
+		return
+	get_tree().change_scene_to_file("res://scenes/main_menu.tscn")
+
+
 func _on_leave_to_menu() -> void:
 	# Из сетевой партии выход — это мягкий выход из комнаты на сервере:
 	# место и партия держатся за игроком, и главное меню предложит
@@ -490,7 +503,7 @@ func _on_leave_to_menu() -> void:
 			Net.drop_room()
 		else:
 			Net.leave_room()
-	get_tree().change_scene_to_file("res://scenes/main_menu.tscn")
+	_go_menu()
 
 func _style_dialog(dialog: ConfirmationDialog) -> void:
 	# Диалог с двумя выборами («Выйти»/«Отмена») при большом тексте не
@@ -944,7 +957,7 @@ func _net_rejoin() -> void:
 	Net.clear_pending_room()
 	toast(String(res.get("reason", "партия недоступна")), true)
 	_net_unwatch()
-	get_tree().change_scene_to_file("res://scenes/main_menu.tscn")
+	_go_menu()
 
 
 func _on_net_state(view: Dictionary, grace: float, paused: bool, waiting: bool) -> void:
@@ -1060,7 +1073,7 @@ func _on_net_lost(reason: String) -> void:
 	_net_unwatch()
 	toast(reason, true)
 	await get_tree().create_timer(1.6).timeout
-	get_tree().change_scene_to_file("res://scenes/main_menu.tscn")
+	_go_menu()
 
 
 func _on_net_connection(connected: bool, detail: String) -> void:
