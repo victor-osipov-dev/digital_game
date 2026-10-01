@@ -39,6 +39,11 @@ func _boot() -> void:
 	var saved_scale: int = settings.text_scale
 	var saved_req: bool = settings.require_30
 	settings.text_scale = 1
+	# События шлём через Input.parse_input_event — как реальный ввод: так
+	# get_global_mouse_position() в ScrollDrag не отстаёт от события
+	# (push_input минует Input и координату не обновляет). Без аккумуляции
+	# движения не склеиваются в одно событие — пороги и сдвиги точные.
+	Input.set_use_accumulated_input(false)
 
 	root.size = Vector2i(576, 1024)
 	var packed := load("res://scenes/main_menu.tscn") as PackedScene
@@ -170,9 +175,7 @@ func _boot() -> void:
 		_touch_press(p5)
 		_press(p5)
 		_touch_drag(p5, p5 + Vector2(0, -20))
-		_motion(p5 + Vector2(0, -20))
 		_touch_drag(p5 + Vector2(0, -20), p5 + Vector2(0, -30))
-		_motion(p5 + Vector2(0, -30))
 		_touch_release(p5 + Vector2(0, -30))
 		_release(p5 + Vector2(0, -30))
 		for i in range(2):
@@ -211,7 +214,7 @@ func _press(pos: Vector2) -> void:
 	ev.position = pos
 	ev.global_position = pos
 	ev.button_mask = MOUSE_BUTTON_MASK_LEFT
-	root.push_input(ev)
+	Input.parse_input_event(ev)
 
 
 func _release(pos: Vector2) -> void:
@@ -220,7 +223,7 @@ func _release(pos: Vector2) -> void:
 	ev.pressed = false
 	ev.position = pos
 	ev.global_position = pos
-	root.push_input(ev)
+	Input.parse_input_event(ev)
 
 
 func _motion(pos: Vector2) -> void:
@@ -228,7 +231,7 @@ func _motion(pos: Vector2) -> void:
 	ev.position = pos
 	ev.global_position = pos
 	ev.button_mask = MOUSE_BUTTON_MASK_LEFT
-	root.push_input(ev)
+	Input.parse_input_event(ev)
 
 
 func _touch_press(pos: Vector2) -> void:
@@ -236,7 +239,7 @@ func _touch_press(pos: Vector2) -> void:
 	ev.index = 0
 	ev.pressed = true
 	ev.position = pos
-	root.push_input(ev)
+	Input.parse_input_event(ev)
 
 
 func _touch_release(pos: Vector2) -> void:
@@ -244,7 +247,7 @@ func _touch_release(pos: Vector2) -> void:
 	ev.index = 0
 	ev.pressed = false
 	ev.position = pos
-	root.push_input(ev)
+	Input.parse_input_event(ev)
 
 
 func _touch_drag(frm: Vector2, to: Vector2) -> void:
@@ -252,7 +255,7 @@ func _touch_drag(frm: Vector2, to: Vector2) -> void:
 	ev.index = 0
 	ev.position = to
 	ev.relative = to - frm
-	root.push_input(ev)
+	Input.parse_input_event(ev)
 
 
 # ---------------------------------------------------------------- поиск

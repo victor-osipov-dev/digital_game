@@ -23,14 +23,21 @@ extends RefCounted
 ## На телефоне касание приходит двумя потоками: как InputEventScreenTouch/
 ## ScreenDrag и как эмуляция мыши (emulate_mouse_from_touch включён по
 ## умолчанию). Жест ведём строго по одному потоку — тому, каким начался,
-## — иначе прокрутка посчиталась бы вдвое; координаты пробуем и в
-## пространстве события, и в глобальном (см. game.gd: панорама стола на
-## Android работает только через get_global_mouse_position()).
+## — иначе прокрутка посчиталась бы вдвое. Координаты события сверяются
+## с глобальными: пространства разошлись (событие пришло в координатах
+## экрана, а контролы лежат в координатах вьюпорта) — жест ведётся по
+## глобальной координате, как панорама стола в Game._input. Иначе hit по
+## событию попал бы в соседнее поле ввода (они идут столбиком), и тап по
+## третьему полю отыгрывался бы на первом.
 ##
 ## Вызывается из _input сцены и возвращает true, если событие поглощено.
 
 ## Сколько пикселей должна пройти рука, прежде чем жест станет прокруткой.
 const DRAG_THRESHOLD := 10.0
+
+## До какого пиксельного зазора координаты события и глобальные считаются
+## одной системой (погрешность float).
+const COORD_EPSILON := 0.5
 
 var _pressed := false
 var _moved := false
@@ -83,18 +90,22 @@ func _press(host: Node, pos: Vector2, from_touch: bool) -> bool:
 	# Новое касание отменяет непрошедший отложенный тап: его доставим
 	# своим кадром, чтобы не склеивать два жеста.
 	_replay_pending = false
-	var gpos := Vector2.ZERO
-	var ctrl := _hit(host.get_viewport(), pos)
+	var p := pos
 	var use_global := false
-	if ctrl == null or not ScrollFix.keeps(ctrl):
-		# На Android координаты события могут прийти в системе экрана, а
-		# не вьюпорта — повторяем тем же способом, каким панорамирует
-		# стол: глобальные координаты хоста.
-		var c := host as CanvasItem
-		if c != null:
-			gpos = c.get_global_mouse_position()
-			ctrl = _hit(host.get_viewport(), gpos)
-			use_global = ctrl != null
+	var c := host as CanvasItem
+	if c != null:
+		var gpos := c.get_global_mouse_position()
+		if pos.distance_to(gpos) > COORD_EPSILON:
+			# Пространства разошлись: событие в чужой системе координат.
+			# Событию не верим — hit по нему попал бы в ДРУГОЕ поле ввода
+			# (поля идут столбиком). Жест ведём по глобальной координате;
+			# если она не попадает на скролл-контрол — это не наш жест
+			# (та же кнопка вне скролла), оставляем нативному GUI.
+			if not _valid_at(host, gpos):
+				return false
+			p = gpos
+			use_global = true
+	var ctrl := _hit(host.get_viewport(), p)
 	if ctrl == null or not ScrollFix.keeps(ctrl):
 		return false
 	var scroll := _scroll_parent(ctrl)
@@ -106,9 +117,17 @@ func _press(host: Node, pos: Vector2, from_touch: bool) -> bool:
 	_scroll = scroll
 	_touch_stream = from_touch
 	_use_global = use_global
-	_from = gpos if use_global else pos
-	_prev = _from
+	_from = p
+	_prev = p
 	return true
+
+
+## Попадает ли точка на KEEP-контрол внутри скролл-предка.
+static func _valid_at(host: Node, p: Vector2) -> bool:
+	var ctrl := _hit(host.get_viewport(), p)
+	if ctrl == null or not ScrollFix.keeps(ctrl):
+		return false
+	return _scroll_parent(ctrl) != null
 
 
 func _drag(host: Node, pos: Vector2) -> bool:

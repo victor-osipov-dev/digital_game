@@ -1,5 +1,10 @@
 extends Control
 
+# preload, а не class_name: имя из глобального списка классов берётся из
+# кэша редактора, а на новом файле кэш отстаёт — см. ошибку
+# «Identifier "ScrollDrag" not declared».
+const ScrollDragClass := preload("res://scripts/ui/scroll_drag.gd")
+
 var count_option: OptionButton = null
 var names_box: VBoxContainer = null
 var name_edits: Array = []
@@ -17,7 +22,7 @@ var _online_note: Label = null
 var _room_actions: HBoxContainer = null
 var _return_room_btn: Button = null
 var _drop_room_btn: Button = null
-var _scroll_drag := ScrollDrag.new()
+var _scroll_drag := ScrollDragClass.new()
 
 func _sync_scroll_min() -> void:
 	if menu_scroll == null or menu_box == null:

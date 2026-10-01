@@ -8,6 +8,10 @@ const HINT_MIN_H := 100.0
 const DRAG_SCROLL_ZONE := 64.0
 const DRAG_SCROLL_OVERSHOOT := 40.0
 const DRAG_SCROLL_SPEED := 480.0
+# preload, а не class_name: глобальный список классов читается из кэша
+# редактора и на новом файле отстаёт — см. «Identifier "ScrollDrag" not
+# declared in the current scope».
+const ScrollDragClass := preload("res://scripts/ui/scroll_drag.gd")
 # Превью хода шлём повторно, пока тянем, — иначе соперник не отличит
 # долгое «он думает тут» от брошенного призрака упавшего клиента.
 const PEEK_RESEND_MS := 2000
@@ -65,7 +69,7 @@ var _slot_grace_until: int = 0
 var _pan_pressed: bool = false
 var _pan_pos: Vector2 = Vector2.ZERO
 var _pan_press_on_tile: bool = false
-var _scroll_drag := ScrollDrag.new()
+var _scroll_drag := ScrollDragClass.new()
 
 # --- сетевой режим -------------------------------------------------------
 #
