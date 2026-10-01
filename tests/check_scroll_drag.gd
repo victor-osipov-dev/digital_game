@@ -10,6 +10,10 @@ extends SceneTree
 #   2) зажатие и волочение пальца по тому же контролу прокручивает
 #      страницу — и не щёлкает контроль (палец хотел листать);
 #   3) после драга контрол остаётся рабочим: следующий тап кликает.
+#   4) в растянутом окне (телефон 1080x2400 при базе 576x1024) тап
+#      доходит именно до того контрола, по которому пришёл: отыгрыш
+#      отдаёт координату вьюпорта, и растяжение не должно уводить
+#      точку на 445 пикселей выше, в соседний чекбокс.
 #
 #  godot --headless --path . --script res://tests/check_scroll_drag.gd
 # ==============================================================
@@ -184,6 +188,44 @@ func _boot() -> void:
 			"тач+мышь: сдвиг один (%d → %d, ждали %d)" % [b4, scroll.scroll_vertical, b4 + 10])
 		check(hits[0] == h5, "дубль потоков не нажал чекбокс (hits=%d)" % hits[0])
 
+	# --- 10) растянутое окно: тап не уезжает в соседний контрол -----
+	# На телефоне окно 1080x2400 при базе 576x1024, коэффициент 1.875.
+	# Отыгрыш тапа отдаёт координату вьюпорта, и push_input обязан
+	# принять её как локальную — иначе точка делится на коэффициент,
+	# тап по нижней кнопке попадает в чекбокс над ней (на телефоне
+	# «Статистика» переключала «Первый ход: минимум 30 очков»).
+	# Проверка последняя: смена размера окна пересобирает раскладку.
+	if cb != null and scroll != null:
+		var stats := _find_button(menu, "Статистика")
+		check(stats != null, "кнопка «Статистика» есть")
+		if stats != null:
+			root.size = Vector2i(1080, 2400)
+			scroll.custom_minimum_size = Vector2(scroll.custom_minimum_size.x, 300.0)
+			for i in range(4):
+				await process_frame
+			_center_in(scroll, stats)
+			await process_frame
+			var stats_hits := [0]
+			var other_hits: Array = []
+			for b in _find_buttons(menu):
+				var who: Button = b
+				b.pressed.connect(func():
+					if who == stats:
+						stats_hits[0] += 1
+					else:
+						other_hits.append(who.text))
+			var was_cb := cb.button_pressed
+			await _tap(stats.get_global_rect().get_center())
+			check(stats_hits[0] == 1,
+				"в растянутом окне тап по «Статистика» кликает её (hits=%d)"
+					% stats_hits[0])
+			check(other_hits.is_empty(),
+				"в растянутом окне тап не задел соседние кнопки (%s)"
+					% str(other_hits))
+			check(cb.button_pressed == was_cb,
+				"в растянутом окне тап не переключил чекбокс «Первый ход»")
+		root.size = Vector2i(576, 1024)
+
 	# Настройки возвращаем как были: тап по чекбоксу пишет конфиг.
 	settings.require_30 = saved_req
 	settings.text_scale = saved_scale
@@ -207,29 +249,49 @@ func _tap(pos: Vector2) -> void:
 		await process_frame
 
 
+# Жесты задаём в координатах вьюпорта (как get_global_rect()), а
+# parse_input_event ждёт координаты ОКНА — движок сам делит их на
+# коэффициент растяжения. На телефоне так же: OS отдаёт 540x1895,
+# событие приходит с (288, 953). Переводим, иначе в растянутом окне
+# тест бьёт мимо всех контролов.
+func _to_window(pos: Vector2) -> Vector2:
+	var base := root.content_scale_size
+	var win := Vector2(root.size)
+	if base.x <= 0 or base.y <= 0:
+		return pos
+	# При aspect=expand масштаб единый для обеих осей (меньшее из двух
+	# отношений), иначе вьюпорт вытягивается по широкой стороне: 1080x2400
+	# при базе 576x1024 даёт коэффициент 1.875, а не 2.34 по вертикали.
+	var k := minf(win.x / base.x, win.y / base.y)
+	return pos * k
+
+
 func _press(pos: Vector2) -> void:
+	var w := _to_window(pos)
 	var ev := InputEventMouseButton.new()
 	ev.button_index = MOUSE_BUTTON_LEFT
 	ev.pressed = true
-	ev.position = pos
-	ev.global_position = pos
+	ev.position = w
+	ev.global_position = w
 	ev.button_mask = MOUSE_BUTTON_MASK_LEFT
 	Input.parse_input_event(ev)
 
 
 func _release(pos: Vector2) -> void:
+	var w := _to_window(pos)
 	var ev := InputEventMouseButton.new()
 	ev.button_index = MOUSE_BUTTON_LEFT
 	ev.pressed = false
-	ev.position = pos
-	ev.global_position = pos
+	ev.position = w
+	ev.global_position = w
 	Input.parse_input_event(ev)
 
 
 func _motion(pos: Vector2) -> void:
+	var w := _to_window(pos)
 	var ev := InputEventMouseMotion.new()
-	ev.position = pos
-	ev.global_position = pos
+	ev.position = w
+	ev.global_position = w
 	ev.button_mask = MOUSE_BUTTON_MASK_LEFT
 	Input.parse_input_event(ev)
 
@@ -238,7 +300,7 @@ func _touch_press(pos: Vector2) -> void:
 	var ev := InputEventScreenTouch.new()
 	ev.index = 0
 	ev.pressed = true
-	ev.position = pos
+	ev.position = _to_window(pos)
 	Input.parse_input_event(ev)
 
 
@@ -246,19 +308,44 @@ func _touch_release(pos: Vector2) -> void:
 	var ev := InputEventScreenTouch.new()
 	ev.index = 0
 	ev.pressed = false
-	ev.position = pos
+	ev.position = _to_window(pos)
 	Input.parse_input_event(ev)
 
 
 func _touch_drag(frm: Vector2, to: Vector2) -> void:
+	var wf := _to_window(frm)
+	var wt := _to_window(to)
 	var ev := InputEventScreenDrag.new()
 	ev.index = 0
-	ev.position = to
-	ev.relative = to - frm
+	ev.position = wt
+	ev.relative = wt - wf
 	Input.parse_input_event(ev)
 
 
 # ---------------------------------------------------------------- поиск
+
+# Кнопка с текстом (для проверки попадания отыгрыша в растянутом окне).
+func _find_button(node: Node, text: String) -> Button:
+	var b := node as Button
+	if b != null and b.text == text and b.is_visible_in_tree():
+		return b
+	for child in node.get_children():
+		var found := _find_button(child, text)
+		if found != null:
+			return found
+	return null
+
+
+# Все видимые кнопки — чтобы увидеть, кому вообще ушёл тап.
+func _find_buttons(node: Node) -> Array:
+	var out: Array = []
+	var b := node as Button
+	if b != null and b.is_visible_in_tree():
+		out.append(b)
+	for child in node.get_children():
+		out.append_array(_find_buttons(child))
+	return out
+
 
 func _find_edit(node: Node) -> LineEdit:
 	# Только видимые: лобби и наложения в дереве есть, но скрыты.
