@@ -211,7 +211,7 @@ func _build_ui() -> void:
 
 	deck_button = Button.new()
 	deck_button.custom_minimum_size = Vector2(92, Settings.touch(52))
-	deck_button.add_theme_font_size_override("font_size", Settings.fs(14))
+	deck_button.add_theme_font_size_override("font_size", Settings.fs(16))
 	deck_button.pressed.connect(_on_deck_pressed)
 	var deck_sb := StyleBoxFlat.new()
 	deck_sb.bg_color = Color("2F3B4C")
@@ -261,7 +261,7 @@ func _build_ui() -> void:
 	var menu_btn := Button.new()
 	menu_btn.text = "Меню"
 	menu_btn.custom_minimum_size = Vector2(68, Settings.touch(46))
-	menu_btn.add_theme_font_size_override("font_size", Settings.fs(14))
+	menu_btn.add_theme_font_size_override("font_size", Settings.fs(16))
 	menu_btn.pressed.connect(func(): menu_dialog.popup_centered())
 	top.add_child(menu_btn)
 
@@ -402,7 +402,10 @@ func _build_ui() -> void:
 	hlab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	hlab.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	hlab.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	hlab.add_theme_font_size_override("font_size", Settings.fs(14))
+	# Подпись переносится: без неё её ширина на гигантской шкале (597 px)
+	# становилась шириной всего стола и уводила верхний ряд за край.
+	hlab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hlab.add_theme_font_size_override("font_size", Settings.fs(16))
 	hlab.add_theme_color_override("font_color", Color(1, 1, 1, 0.55))
 	hint_zone.add_child(hlab)
 	table_box.add_child(hint_zone)
@@ -508,7 +511,7 @@ func _make_top_button(text_value: String, tip: String, handler: Callable) -> But
 	btn.text = text_value
 	btn.tooltip_text = tip
 	btn.custom_minimum_size = Vector2(60, Settings.touch(46))
-	btn.add_theme_font_size_override("font_size", Settings.fs(13))
+	btn.add_theme_font_size_override("font_size", Settings.fs(15))
 	btn.pressed.connect(handler)
 	return btn
 
@@ -1543,7 +1546,7 @@ func _show_row_slot(pos: int) -> void:
 	lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	lab.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	lab.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	lab.add_theme_font_size_override("font_size", Settings.fs(13))
+	lab.add_theme_font_size_override("font_size", Settings.fs(15))
 	lab.add_theme_color_override("font_color", Color(1, 1, 1, 0.5))
 	slot.add_child(lab)
 	slot.set_meta("slot_pos", pos)
@@ -2166,7 +2169,7 @@ func _update_chips() -> void:
 			lab.text += " · ходит"
 		if _online and not state.is_connected_player(i):
 			lab.text += " · нет связи"
-		lab.add_theme_font_size_override("font_size", Settings.fs(14))
+		lab.add_theme_font_size_override("font_size", Settings.fs(16))
 		lab.add_theme_color_override("font_color", Color(1, 1, 1, 0.95) if is_now else Color(1, 1, 1, 0.6))
 		chip.add_child(lab)
 		chips_box.add_child(chip)

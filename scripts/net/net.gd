@@ -246,6 +246,19 @@ func session_login() -> String:
 func session_nick() -> String:
 	return _session.nick
 
+## Сохранённый пароль — чтобы страница входа подставляла его сама.
+## Пустая строка означает «не запомнен», и тогда поле остаётся пустым.
+func session_password() -> String:
+	return _session.password
+
+## Запоминает пароль на устройстве. Вызывается при успешном входе и
+## при регистрации: вводить его заново каждый раз не нужно.
+func remember_password(password: String) -> void:
+	if password.is_empty() or password == _session.password:
+		return
+	_session.password = password
+	_session.save()
+
 ## Токен сессии. Нужен не только для resume: им же клиент доказывает
 ## право смотреть список комнат на ДРУГОМ сервере, к которому не
 ## подключён. Сессия общая для всего кластера, поэтому токен подходит
@@ -569,6 +582,9 @@ func resume() -> Dictionary:
 func login(login_name: String, password: String) -> Dictionary:
 	if not await _await_greet():
 		return { "ok": false, "reason": "нет связи с сервером" }
+	# Запоминаем ДО ответа сервера: даже если вход не прошёл, вводить
+	# пароль заново не придётся, а _apply_auth допишет логин и токен.
+	remember_password(password)
 	var res := await request(NetProtocol.LOGIN, { "login": login_name, "password": password })
 	return _finish_auth(res)
 
@@ -576,6 +592,7 @@ func login(login_name: String, password: String) -> Dictionary:
 func register(login_name: String, password: String, nick: String) -> Dictionary:
 	if not await _await_greet():
 		return { "ok": false, "reason": "нет связи с сервером" }
+	remember_password(password)
 	var res := await request(NetProtocol.REGISTER,
 		{ "login": login_name, "password": password, "nick": nick })
 	return _finish_auth(res)
@@ -617,6 +634,9 @@ func change_password(old_password: String, new_password: String) -> Dictionary:
 		var token := String(res.get("token", ""))
 		if not token.is_empty():
 			_session.token = token
+		# Смена пароля меняет и запомненный, иначе при следующем входе
+		# мы подставили бы уже неверный.
+		_session.password = new_password
 		_session.save()
 	return res
 

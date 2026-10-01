@@ -13,6 +13,10 @@ extends SceneTree
 #  Тест гоняет _after_auth с подставленными ответами, без сети:
 #  список комнат подкладывается, чтобы _goto_rooms не ходил на сервер.
 #
+#  Тут же проверяется запоминание пароля на устройстве: он лежит
+#  в user://session.json рядом с токеном (не в настройках игры),
+#  подставляется в поле на странице входа и стирается при выходе.
+#
 #  Запуск:
 #     godot --headless --path . --script res://tests/check_auth_flow.gd
 # ==============================================================
@@ -110,3 +114,55 @@ func _checks() -> void:
 	# 5. Успешная регистрация тоже открывает комнаты.
 	lobby.call("_after_auth", { "ok": true, "user": {} }, "Аккаунт создан")
 	check(_page_visible("_page_rooms"), "successful register switches to rooms page")
+	_check_password_remembered()
+
+
+## Пароль помнится на устройстве: пишется в сессию при наборе в поле,
+## переживает перезапуск и подставляется обратно; при выходе стирается.
+func _check_password_remembered() -> void:
+	var net := root.get_node_or_null("Net")
+	var pass_edit = inst.get("_pass_edit")
+	if net == null or pass_edit == null:
+		check(false, "Net и поле пароля на месте")
+		return
+	var session_path := "user://session.json"
+	var backup := ""
+	if FileAccess.file_exists(session_path):
+		backup = FileAccess.get_file_as_string(session_path)
+	# Образец пароля, не настоящий: в выводе теста секретов быть не должно.
+	const SECRET := "pass-7Hq2"
+	net.call("remember_password", SECRET)
+	check(net.call("session_password") == SECRET, "пароль запомнен в сессии")
+
+	# Переживает перезапуск: читаем файл заново, как это делает игра.
+	var session_script = load("res://scripts/net/session.gd")
+	var session = session_script.call("load_from_disk")
+	check(String(session.get("password")) == SECRET,
+		"пароль пережил перезапуск (лежит в session.json)")
+
+	# Набор в поле тоже запоминает: сигнал text_changed ведёт в Net.
+	pass_edit.text = ""
+	pass_edit.text = SECRET
+	check(net.call("session_password") == SECRET, "набор в поле запомнил пароль")
+
+	# Подставляется обратно при возврате на страницу входа.
+	pass_edit.text = ""
+	inst.call("_enter_auth")
+	check(String(pass_edit.text) == SECRET, "пароль подставлен в поле входа")
+
+	# Выход из аккаунта пароль стирает, и на диске его не остаётся.
+	net.get("_session").call("clear")
+	check(net.call("session_password").is_empty(), "выход стирает пароль")
+	check(not FileAccess.file_exists(session_path)
+		or not FileAccess.get_file_as_string(session_path).contains(SECRET),
+		"в session.json пароля не осталось")
+
+	# Возвращаем файл сессии как был — тест не должен оставлять следов.
+	if backup.is_empty():
+		if FileAccess.file_exists(session_path):
+			DirAccess.remove_absolute(session_path)
+	else:
+		var f := FileAccess.open(session_path, FileAccess.WRITE)
+		if f != null:
+			f.store_string(backup)
+			f.close()

@@ -101,7 +101,7 @@ func _build_ui() -> void:
 	var subtitle := Label.new()
 	subtitle.text = "числа · 4 цвета · джокеры"
 	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	subtitle.add_theme_font_size_override("font_size", Settings.fs(14))
+	subtitle.add_theme_font_size_override("font_size", Settings.fs(16))
 	subtitle.add_theme_color_override("font_color", Color(1, 1, 1, 0.55))
 	box.add_child(subtitle)
 
@@ -112,7 +112,7 @@ func _build_ui() -> void:
 	_online_note = Label.new()
 	_online_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_online_note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_online_note.add_theme_font_size_override("font_size", Settings.fs(13))
+	_online_note.add_theme_font_size_override("font_size", Settings.fs(15))
 	_online_note.add_theme_color_override("font_color", Color("FFE0B2"))
 	_online_note.visible = false
 	box.add_child(_online_note)
@@ -471,7 +471,7 @@ func _rebuild_names() -> void:
 		var bot := CheckBox.new()
 		bot.text = "Бот"
 		bot.button_pressed = Settings.is_bot(i)
-		bot.add_theme_font_size_override("font_size", Settings.fs(14))
+		bot.add_theme_font_size_override("font_size", Settings.fs(16))
 		bot.add_theme_color_override("font_color", Color(1, 1, 1, 0.85))
 		bot.toggled.connect(_on_bot_toggled.bind(i))
 		row.add_child(bot)

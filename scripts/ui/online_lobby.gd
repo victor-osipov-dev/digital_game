@@ -230,6 +230,8 @@ func _enter_auth() -> void:
 	_auth_note.text = ""
 	if _login_edit.text.is_empty():
 		_login_edit.text = Net.session_login()
+	if _pass_edit.text.is_empty():
+		_pass_edit.text = Net.session_password()
 	if _nick_edit.text.is_empty():
 		_nick_edit.text = Net.session_nick()
 	_login_edit.grab_focus()
@@ -277,6 +279,13 @@ func _do_connect() -> void:
 
 
 # =============================================================== вход
+
+## Запоминает пароль по мере набора. Само значение уходит на диск из
+## Net: там же, где лежит токен, — пароль не должен попасть в файл
+## настроек, который игрок шлёт в поддержку.
+func _on_pass_typed(text: String) -> void:
+	Net.remember_password(text)
+
 
 func _do_login() -> void:
 	var login_name := _login_edit.text.strip_edges()
@@ -384,7 +393,7 @@ func _render_rooms() -> void:
 		var empty := Label.new()
 		empty.text = "Пока никто не создал комнату. Создайте свою."
 		empty.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		empty.add_theme_font_size_override("font_size", Settings.fs(14))
+		empty.add_theme_font_size_override("font_size", Settings.fs(16))
 		empty.add_theme_color_override("font_color", Color(1, 1, 1, 0.5))
 		_rooms_box.add_child(empty)
 		return
@@ -436,7 +445,7 @@ func _make_room_row(room: Dictionary) -> Control:
 	lab.text = text
 	lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	lab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	lab.add_theme_font_size_override("font_size", Settings.fs(14))
+	lab.add_theme_font_size_override("font_size", Settings.fs(16))
 	lab.add_theme_color_override("font_color", Color(1, 1, 1, 0.9))
 	lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	box.add_child(lab)
@@ -444,7 +453,7 @@ func _make_room_row(room: Dictionary) -> Control:
 	var join := Button.new()
 	join.text = "Войти"
 	join.custom_minimum_size = Vector2(Settings.touch_w(84), Settings.touch(38))
-	join.add_theme_font_size_override("font_size", Settings.fs(14))
+	join.add_theme_font_size_override("font_size", Settings.fs(16))
 	join.pressed.connect(_do_join.bind(String(room.get("code", "")), String(room.get("server", ""))))
 	box.add_child(join)
 	return row
@@ -863,14 +872,14 @@ func _update_presence() -> void:
 		var dot := Label.new()
 		var up := bool(info.get("online", false))
 		dot.text = "●" if up else "○"
-		dot.add_theme_font_size_override("font_size", Settings.fs(13))
+		dot.add_theme_font_size_override("font_size", Settings.fs(15))
 		dot.add_theme_color_override("font_color",
 			Color("66BB6A") if up else Color(1, 1, 1, 0.3))
 		row.add_child(dot)
 		var lab := Label.new()
 		lab.text = String(info.get("name", id))
 		lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		lab.add_theme_font_size_override("font_size", Settings.fs(13))
+		lab.add_theme_font_size_override("font_size", Settings.fs(15))
 		lab.add_theme_color_override("font_color",
 			Color(1, 1, 1, 0.85) if up else Color(1, 1, 1, 0.45))
 		row.add_child(lab)
@@ -879,7 +888,7 @@ func _update_presence() -> void:
 			ms.text = "%d мс" % int(info.get("ms", 0))
 		else:
 			ms.text = String(info.get("reason", "нет связи"))
-		ms.add_theme_font_size_override("font_size", Settings.fs(12))
+		ms.add_theme_font_size_override("font_size", Settings.fs(14))
 		ms.add_theme_color_override("font_color", Color(1, 1, 1, 0.5))
 		row.add_child(ms)
 		_server_box.add_child(row)
@@ -924,14 +933,19 @@ func _apply_accent(button: Button, normal: Color, hover: Color, pressed: Color) 
 	button.add_theme_color_override("font_disabled_color", Color(1, 1, 1, 0.35))
 
 
-func _header(text: String, size: int = 17) -> Label:
+## wrap = false для коротких заголовков в один ряд (например «ИГРА ПО
+## СЕТИ»): перенос разбивал их на отдельные слова, а сжимать шрифт до
+## размера остальных заголовков не хочется — лучше обрезать по краю.
+func _header(text: String, size: int = 17, wrap := true) -> Label:
 	var lab := Label.new()
 	lab.text = text
 	lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	# Заголовки — обычные подписи и длинные пояснения («Сервер
 	# выбирается случайно…»). Без переноса пояснение задавало ширину
 	# всей страницы лобби и уезжало за правый край на крупных шкалах.
-	lab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	lab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART if wrap \
+			else TextServer.AUTOWRAP_OFF
+	lab.clip_text = not wrap
 	lab.add_theme_font_size_override("font_size", Settings.fs(size))
 	lab.add_theme_color_override("font_color", Color(1, 1, 1, 0.9))
 	return lab
@@ -1009,20 +1023,22 @@ func _build() -> void:
 	var head := HBoxContainer.new()
 	head.add_theme_constant_override("separation", 10)
 	root.add_child(head)
-	head.add_child(_header("ИГРА ПО СЕТИ", 24))
+	# Короткий заголовок в один ряд с кнопкой «Назад»: перенос разбивал
+	# его на «ИГРА / ПО / СЕТИ», поэтому он не переносится вовсе.
+	head.add_child(_header("ИГРА ПО СЕТИ", 22, false))
 	var head_space := Control.new()
 	head_space.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	head.add_child(head_space)
-	_back_btn = _button("Назад", 14)
+	_back_btn = _button("Назад", 16)
 	_back_btn.custom_minimum_size = Vector2(Settings.touch_w(110), Settings.touch(40))
 	_back_btn.pressed.connect(close)
 	head.add_child(_back_btn)
 
 	_status = Label.new()
-	_status.add_theme_font_size_override("font_size", Settings.fs(13))
+	_status.add_theme_font_size_override("font_size", Settings.fs(15))
 	root.add_child(_status)
 	_busy = Label.new()
-	_busy.add_theme_font_size_override("font_size", Settings.fs(13))
+	_busy.add_theme_font_size_override("font_size", Settings.fs(15))
 	_busy.visible = false
 	root.add_child(_busy)
 
@@ -1098,6 +1114,10 @@ func _build_auth() -> VBoxContainer:
 	_login_edit = _field("логин")
 	page.add_child(_login_edit)
 	_pass_edit = _field("пароль", true)
+	# Набранный пароль запоминаем сразу, а не только по кнопке
+	# «Войти»: игрок может закрыть игру, не доходя до входа, и
+	# рассчитывать, что в следующий раз поле уже заполнено.
+	_pass_edit.text_changed.connect(_on_pass_typed)
 	page.add_child(_pass_edit)
 	page.add_child(_header("Если аккаунта нет", 15))
 	_nick_edit = _field("имя в игре")
@@ -1119,7 +1139,7 @@ func _build_auth() -> VBoxContainer:
 	# Ширину обязаны давать флагом, иначе причина «пустого места»
 	# неотличима от «текста нет».
 	_auth_note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_auth_note.add_theme_font_size_override("font_size", Settings.fs(13))
+	_auth_note.add_theme_font_size_override("font_size", Settings.fs(15))
 	_auth_note.visible = false
 	page.add_child(_auth_note)
 	return page
@@ -1159,11 +1179,11 @@ func _build_rooms() -> VBoxContainer:
 	var stuck_row := HBoxContainer.new()
 	stuck_row.add_theme_constant_override("separation", 8)
 	stuck_inner.add_child(stuck_row)
-	_return_btn = _button("Вернуться", 14)
+	_return_btn = _button("Вернуться", 16)
 	_return_btn.pressed.connect(_do_return_room)
 	_apply_accent(_return_btn, Color("2E7D32"), Color("388E3C"), Color("1B5E20"))
 	stuck_row.add_child(_return_btn)
-	_drop_btn = _button("Покинуть комнату", 14)
+	_drop_btn = _button("Покинуть комнату", 16)
 	_drop_btn.pressed.connect(_do_drop_room)
 	stuck_row.add_child(_drop_btn)
 
@@ -1212,9 +1232,9 @@ func _build_rooms() -> VBoxContainer:
 	# Тексты сюда длинные («Показаны комнаты без …, остальные серверы не
 	# ответили»), и без переноса они просто уезжают за край строки.
 	_rooms_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_rooms_note.add_theme_font_size_override("font_size", Settings.fs(13))
+	_rooms_note.add_theme_font_size_override("font_size", Settings.fs(15))
 	head.add_child(_rooms_note)
-	_refresh_btn = _button("Обновить", 13)
+	_refresh_btn = _button("Обновить", 15)
 	_refresh_btn.custom_minimum_size = Vector2(Settings.touch_w(120), Settings.touch(40))
 	_refresh_btn.pressed.connect(_refresh_rooms)
 	head.add_child(_refresh_btn)
@@ -1248,7 +1268,7 @@ func _logout_row(page: VBoxContainer) -> void:
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_END
 	page.add_child(row)
-	var out := _button("Выйти из аккаунта", 13)
+	var out := _button("Выйти из аккаунта", 15)
 	out.custom_minimum_size = Vector2(200, Settings.touch(40))
 	out.pressed.connect(_do_logout)
 	row.add_child(out)
@@ -1263,7 +1283,7 @@ func _build_lobby() -> VBoxContainer:
 	page.add_child(_lobby_code)
 	_lobby_seats = Label.new()
 	_lobby_seats.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_lobby_seats.add_theme_font_size_override("font_size", Settings.fs(13))
+	_lobby_seats.add_theme_font_size_override("font_size", Settings.fs(15))
 	_lobby_seats.add_theme_color_override("font_color", Color(1, 1, 1, 0.6))
 	page.add_child(_lobby_seats)
 	_lobby_players = VBoxContainer.new()
@@ -1275,14 +1295,14 @@ func _build_lobby() -> VBoxContainer:
 	_auto_hint = Label.new()
 	_auto_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_auto_hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_auto_hint.add_theme_font_size_override("font_size", Settings.fs(12))
+	_auto_hint.add_theme_font_size_override("font_size", Settings.fs(14))
 	_auto_hint.add_theme_color_override("font_color", Color(1, 1, 1, 0.5))
 	page.add_child(_auto_hint)
 
 	_lobby_note = Label.new()
 	_lobby_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_lobby_note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_lobby_note.add_theme_font_size_override("font_size", Settings.fs(13))
+	_lobby_note.add_theme_font_size_override("font_size", Settings.fs(15))
 	_lobby_note.visible = false
 	page.add_child(_lobby_note)
 

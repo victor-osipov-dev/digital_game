@@ -18,6 +18,13 @@ var token: String = ""
 var login: String = ""
 var nick: String = ""
 
+## Пароль в том же файле, что и токен, а не в настройках игры: иначе
+## он уехал бы в бэкап, который игрок шлёт в поддержку. Держим его
+## открытым текстом — файл и так уже лежит в приватном каталоге
+## приложения, и отдельное шифрование ключом, лежащим рядом, ровно
+## ничего бы не дало.
+var password: String = ""
+
 var _loaded := false
 
 
@@ -36,6 +43,7 @@ static func load_from_disk() -> Session:
 	out.token = String(d.get("token", ""))
 	out.login = String(d.get("login", ""))
 	out.nick = String(d.get("nick", ""))
+	out.password = String(d.get("password", ""))
 	return out
 
 func is_valid() -> bool:
@@ -45,12 +53,15 @@ func clear() -> void:
 	token = ""
 	login = ""
 	nick = ""
+	password = ""
 	save()
 
 func save() -> void:
 	# Пустую сессию стираем, а не храним: зачем держать на диске файл,
-	# из которого ничего не прочитать.
-	if not is_valid():
+	# из которого ничего не прочитать. Вход не прошёл — токена нет, но
+	# пароль и логин остаются: иначе игрок вводил бы их заново после
+	# каждой неудачной попытки.
+	if token.is_empty() and login.is_empty() and password.is_empty():
 		if FileAccess.file_exists(PATH):
 			DirAccess.remove_absolute(PATH)
 		return
@@ -63,6 +74,7 @@ func save() -> void:
 		"token": token,
 		"login": login,
 		"nick": nick,
+		"password": password,
 	}, "  "))
 	f.close()
 	var err := DirAccess.rename_absolute(tmp, PATH)
