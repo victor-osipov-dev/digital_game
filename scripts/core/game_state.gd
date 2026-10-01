@@ -453,6 +453,45 @@ func restore_turn_snapshot() -> bool:
 	turn_dirty = false
 	return true
 
+## Сервер прислал стол, не отличавшийся от его же прошлого вида, а мы ход
+## уже раскладывали локально. Так бывает, когда рассылка идёт автору
+## посреди хода: пауза из-за обрыва соперника, его возврат, повторная
+## рассылка. Без возврата правок игрок терял бы раскладку, а соперники —
+## серые фишки: автор переставал бы повторять черновик.
+## prev — состояние до нового вида. true, если правки вернулись.
+func keep_local_turn_from(prev: GameState) -> bool:
+	if prev == null or prev.finished or finished:
+		return false
+	if local_seat < 0 or current != local_seat:
+		return false
+	if not prev.turn_dirty or prev.turn_placed.is_empty():
+		return false
+	if _snap_signature(prev._snap_table) != _snap_signature(_snap_table):
+		return false
+	_apply_table(prev._capture_table())
+	# Те же объекты фишек лежат и в столе, и в turn_placed у prev.
+	turn_placed = prev.turn_placed.duplicate()
+	var hand_p := players[hand_seat()] as Player
+	for t in turn_placed:
+		var tid := (t as Tile).id
+		for h in hand_p.hand:
+			if (h as Tile).id == tid:
+				hand_p.hand.erase(h)
+				break
+	turn_dirty = true
+	return true
+
+## Подпись серверного стола: id ряда и номера фишек. Объекты Tile при
+## пересборке новые, сравнивать их можно только по номерам.
+func _snap_signature(snap: Array) -> Array:
+	var out := []
+	for e in snap:
+		var ids := []
+		for t in (e["tiles"] as Array):
+			ids.append((t as Tile).id)
+		out.append([int(e["id"]), ids])
+	return out
+
 func _index_of(row: Row, tile_id: int) -> int:
 	for i in row.tiles.size():
 		if (row.tiles[i] as Tile).id == tile_id:

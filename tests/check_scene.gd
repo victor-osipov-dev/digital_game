@@ -36,11 +36,11 @@ func _setup() -> void:
 		settings.set_bot(0, false)
 		var saved_scale: int = settings.text_scale
 		settings.text_scale = 0
-		check(settings.fs(100) == 85, "fs: small scale = 85, got %d" % settings.fs(100))
+		check(settings.fs(100) == 170, "fs: small scale = 170, got %d" % settings.fs(100))
 		settings.text_scale = 1
-		check(settings.fs(100) == 100, "fs: default scale = 100, got %d" % settings.fs(100))
+		check(settings.fs(100) == 200, "fs: default scale = 200, got %d" % settings.fs(100))
 		settings.text_scale = 2
-		check(settings.fs(100) == 120, "fs: large scale = 120, got %d" % settings.fs(100))
+		check(settings.fs(100) == 240, "fs: large scale = 240, got %d" % settings.fs(100))
 		settings.text_scale = saved_scale
 		var saved_step: int = settings.tile_step
 		settings.tile_step = 0

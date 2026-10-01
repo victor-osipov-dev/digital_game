@@ -1776,13 +1776,35 @@ test('превью чаще раза в 40 мс не проходит (трот�
   const a = fakeSock(hub, room, 0, userOf('pk7'));
   const b = fakeSock(hub, room, 1, userOf('pk8'));
   const one = () => hub.onMessage(a.ctx,
-    Buffer.from(JSON.stringify({ t: C2S.GAME_PEEK, tile: 9, kind: 'clear' })));
+    Buffer.from(JSON.stringify({ t: C2S.GAME_PEEK, tile: 9, kind: 'into', row: 0, index: 1 })));
   one();
   assert.strictEqual(b.msgs.filter((m) => m.t === S2C.GAME_PEEK).length, 1, 'первое прошло');
   room._peekAt.set(0, Date.now()); // свежая метка — как будто отправка была только что
   one();
   assert.strictEqual(b.msgs.filter((m) => m.t === S2C.GAME_PEEK).length, 1,
     'второе подряд отброшено');
+  hub.stop();
+});
+
+test('clear идёт мимо троттлинга — призрак должен погаснуть вовремя', () => {
+  const hub = newHub();
+  const room = playingRoom('pk7', 'pk8');
+  const a = fakeSock(hub, room, 0, userOf('pk7'));
+  const b = fakeSock(hub, room, 1, userOf('pk8'));
+  const send = (payload) => hub.onMessage(a.ctx,
+    Buffer.from(JSON.stringify({ t: C2S.GAME_PEEK, ...payload })));
+  send({ tile: 9, kind: 'into', row: 0, index: 1 });
+  // Смена цели: clear уходит вслед за последним превью вплотную, а своё
+  // окно 40 мс соперник только что открыл — потерянный clear оставил бы
+  // призрак висеть до пятисекундного протухания.
+  send({ tile: 9, kind: 'clear' });
+  const got = b.msgs.filter((m) => m.t === S2C.GAME_PEEK);
+  assert.strictEqual(got.length, 2, `пришло: ${JSON.stringify(got)}`);
+  assert.strictEqual(got[1].kind, 'clear', 'clear дошёл, невзирая на окно');
+  // А обычное превью в том же окне по-прежнему троттлится.
+  send({ tile: 10, kind: 'into', row: 1, index: 0 });
+  assert.strictEqual(b.msgs.filter((m) => m.t === S2C.GAME_PEEK).length, 2,
+    'into в открытое окно отброшен');
   hub.stop();
 });
 

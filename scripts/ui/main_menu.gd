@@ -6,9 +6,13 @@ var name_edits: Array = []
 var bot_checks: Array = []
 var check_30: CheckBox = null
 var help_overlay: ColorRect = null
+var stats_overlay: ColorRect = null
 var menu_scroll: ScrollContainer = null
 var menu_box: VBoxContainer = null
 var online_lobby: Control = null
+var _stats_games: Label = null
+var _stats_wins: Label = null
+var _stats_losses: Label = null
 var _online_note: Label = null
 var _room_actions: HBoxContainer = null
 var _return_room_btn: Button = null
@@ -189,6 +193,15 @@ func _build_ui() -> void:
 	_apply_accent_style(online_btn, Color("1F4E79"), Color("2A6CA8"), Color("163A5C"))
 	box.add_child(online_btn)
 
+	# Статистика — отдельной строкой, а не в нижнем ряду: там уже две
+	# кнопки по 200px, третья при большом тексте не помещается по ширине.
+	var stats_btn := Button.new()
+	stats_btn.text = "Статистика"
+	stats_btn.custom_minimum_size = Vector2(0, Settings.touch(50))
+	stats_btn.add_theme_font_size_override("font_size", Settings.fs(17))
+	stats_btn.pressed.connect(_on_stats_pressed)
+	box.add_child(stats_btn)
+
 	var bottom := HBoxContainer.new()
 	bottom.alignment = BoxContainer.ALIGNMENT_CENTER
 	bottom.add_theme_constant_override("separation", 14)
@@ -209,6 +222,7 @@ func _build_ui() -> void:
 	bottom.add_child(quit_btn)
 
 	_build_help_overlay()
+	_build_stats_overlay()
 	_build_online()
 	# Контейнеры меню не ловят касание — иначе список настроек и кнопок
 	# не проскроллить пальцем (кнопки и поля при этом остаются кликабельными).
@@ -216,6 +230,7 @@ func _build_ui() -> void:
 	menu_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	ScrollFix.relax(menu_box)
 	ScrollFix.relax(help_overlay)
+	ScrollFix.relax(stats_overlay)
 	_sync_scroll_min()
 
 
@@ -338,6 +353,83 @@ func _build_help_overlay() -> void:
 	close_btn.add_theme_font_size_override("font_size", Settings.fs(17))
 	close_btn.pressed.connect(func(): help_overlay.visible = false)
 	box.add_child(close_btn)
+
+
+## Экран статистики — тот же приём, что и «Правила»: полноэкранное
+## притемнение с панелью поверх. Цифры подтягиваются при открытии,
+## а не при сборке: после партии сцена меню могла не пересоздаваться.
+func _build_stats_overlay() -> void:
+	stats_overlay = ColorRect.new()
+	stats_overlay.color = Color(0, 0, 0, 0.78)
+	stats_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	stats_overlay.visible = false
+	add_child(stats_overlay)
+
+	var mg := MarginContainer.new()
+	mg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	mg.add_theme_constant_override("margin_left", 10)
+	mg.add_theme_constant_override("margin_right", 10)
+	mg.add_theme_constant_override("margin_top", 10)
+	mg.add_theme_constant_override("margin_bottom", 10)
+	stats_overlay.add_child(mg)
+
+	var center := CenterContainer.new()
+	mg.add_child(center)
+
+	var panel := PanelContainer.new()
+	var psb := StyleBoxFlat.new()
+	psb.bg_color = Color("1B2029")
+	psb.set_corner_radius_all(14)
+	psb.border_color = Color(1, 1, 1, 0.25)
+	psb.set_border_width_all(2)
+	psb.content_margin_left = 24.0
+	psb.content_margin_right = 24.0
+	psb.content_margin_top = 18.0
+	psb.content_margin_bottom = 18.0
+	panel.add_theme_stylebox_override("panel", psb)
+	center.add_child(panel)
+
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 14)
+	panel.add_child(box)
+
+	var title := Label.new()
+	title.text = "Статистика"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", Settings.fs(22))
+	title.add_theme_color_override("font_color", Color("FFD54F"))
+	box.add_child(title)
+
+	_stats_games = _make_stat_row(box, "Сыграно партий:")
+	_stats_wins = _make_stat_row(box, "Побед:")
+	_stats_losses = _make_stat_row(box, "Поражений:")
+
+	var close_btn := Button.new()
+	close_btn.text = "Закрыть"
+	close_btn.custom_minimum_size = Vector2(Settings.touch(200), Settings.touch(52))
+	close_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	close_btn.add_theme_font_size_override("font_size", Settings.fs(17))
+	close_btn.pressed.connect(func(): stats_overlay.visible = false)
+	box.add_child(close_btn)
+
+
+func _make_stat_row(parent: Control, caption: String) -> Label:
+	var lab := Label.new()
+	lab.text = caption + " 0"
+	lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lab.add_theme_font_size_override("font_size", Settings.fs(18))
+	lab.add_theme_color_override("font_color", Color(1, 1, 1, 0.9))
+	parent.add_child(lab)
+	return lab
+
+
+## Открытие статистики: цифры читаем здесь, в момент показа, — иначе
+## после партии, сыгранной без перезахода в меню, висели бы старые.
+func _on_stats_pressed() -> void:
+	_stats_games.text = "Сыграно партий: %d" % Settings.stat_games
+	_stats_wins.text = "Побед: %d" % Settings.stat_wins
+	_stats_losses.text = "Поражений: %d" % Settings.stat_losses
+	stats_overlay.visible = true
 
 func _rebuild_names() -> void:
 	for child in names_box.get_children():

@@ -104,6 +104,7 @@ var _turn_timer_label: Label = null
 # смотрит; здесь это рисуется призраком фишки над столом.
 var _peek_layer: Control = null
 var _peek_ghost: TileView = null
+var _peek_slot: Control = null
 var _peek_drag: Dictionary = {}
 var _last_peek: Dictionary = {}
 var _peek_resent_ms: int = 0
@@ -123,6 +124,13 @@ var _draft_at_ms: int = 0            # когда пришёл последни�
 var _last_draft_json: String = ""
 var _draft_sent_ms: int = 0
 var _draft_tick_ms: int = 0
+
+# --- статистика -----------------------------------------------------------
+#
+# Завершённая партия считается один раз: узел пересобирается при смене
+# размера текста, а сервер у уже конченной партии может прислать своё
+# состояние повторно (режоин после переподключения).
+var _stats_recorded: bool = false
 
 func _ready() -> void:
 	_build_ui()
@@ -158,6 +166,7 @@ func _process(_delta: float) -> void:
 	_update_hint_zone_size()
 	_update_turn_timer()
 	_expire_peek()
+	_sync_peek_slot()
 	_expire_draft()
 	# Раз в секунду — шанс повторить висящий черновик (только если он уже
 	# был отправлен: чистый стол отправлять нечего).
@@ -388,10 +397,28 @@ func _build_ui() -> void:
 	hint_zone.add_child(hlab)
 	table_box.add_child(hint_zone)
 
+	# Рука — в собственной панели, а не просто на общем фоне: без
+	# подложки и рамки её фишки визуально сливаются с рядами стола,
+	# особенно когда стол короткий и обе зоны стоят вплотную. Панель
+	# ловит клики только в своих отступах — зона фишек осталась у
+	# hand_flow, drop-проверки работают по её global_rect как раньше.
+	var hand_panel := PanelContainer.new()
+	var hpsb := StyleBoxFlat.new()
+	hpsb.bg_color = Color(1, 1, 1, 0.07)
+	hpsb.border_color = Color(1, 1, 1, 0.30)
+	hpsb.set_border_width_all(2)
+	hpsb.set_corner_radius_all(12)
+	hpsb.content_margin_left = 8.0
+	hpsb.content_margin_right = 8.0
+	hpsb.content_margin_top = 6.0
+	hpsb.content_margin_bottom = 8.0
+	hand_panel.add_theme_stylebox_override("panel", hpsb)
+	layout.add_child(hand_panel)
+
 	hand_flow = FlowTiles.new()
 	hand_flow.controller = self
 	hand_flow.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	layout.add_child(hand_flow)
+	hand_panel.add_child(hand_flow)
 
 	var bottom := HBoxContainer.new()
 	bottom.add_theme_constant_override("separation", 10)
@@ -809,6 +836,7 @@ func _new_match() -> void:
 	_online = false
 	_bot_seq += 1
 	_bot_active = false
+	_stats_recorded = false
 	_hint_ids.clear()
 	state = GameState.create(Settings.player_count, Array(Settings.player_names), Settings.require_30)
 	invalid_row_ids.clear()
@@ -872,9 +900,12 @@ func _net_unwatch() -> void:
 		Net.connection_changed.disconnect(_on_net_connection)
 	if Net.game_peek.is_connected(_on_net_peek):
 		Net.game_peek.disconnect(_on_net_peek)
+	if Net.game_draft.is_connected(_on_net_draft):
+		Net.game_draft.disconnect(_on_net_draft)
 	if Net.notice.is_connected(toast):
 		Net.notice.disconnect(toast)
 	_clear_peek()
+	_clear_draft()
 
 
 ## Переспрашивает состояние после входа в сцену: пока грузились текстуры
@@ -916,6 +947,7 @@ func _on_state_received(view: Dictionary, grace: float, paused: bool, waiting: b
 	# Чужой ход — показываем, кто ходит. Наш собственный ход требует
 	# действия игрока, и подсказка с названием мешала бы.
 	if state != null and state.finished:
+		_record_stats()
 		win_title.text = "Победитель - %s" % state.player_name(state.winner)
 		win_overlay.visible = true
 		_show_wait("")
@@ -957,10 +989,12 @@ func _apply_state(view: Dictionary, grace: float, paused: bool, waiting: bool = 
 	_paused = paused
 	_waiting = waiting
 	# Превью чужого хода после нового состояния уже лож: строки могли
-	# сдвинуться, а перебирать перестали. Черновик стола тоже гаснет —
-	# ход завершён, серверный стол уже финальный.
+	# сдвинуться, а перебирать перестали.
 	_clear_peek()
-	_clear_draft()
+	# Промежуточные game.state (реждойн, пауза, обновление отсчёта) не
+	# гасят чужой черновик, пока ход его автора не кончился: иначе серые
+	# фишки пропадали бы от любого состояния, прилетевшего посреди хода.
+	var draft_kept := _draft_active()
 	# Отправная сторона черновика: с новым состоянием начинаем с чистого
 	# листа, иначе следующий ход не отправился бы «как в первый раз».
 	_last_draft_json = ""
@@ -969,7 +1003,21 @@ func _apply_state(view: Dictionary, grace: float, paused: bool, waiting: bool = 
 	# словаре нет вовсе, и дедлайн гаснет сам.
 	var turn_left := int(view.get("turnLeft", 0))
 	_turn_deadline_ms = (Time.get_ticks_msec() + turn_left * 1000) if turn_left > 0 else 0
+	var prev := state
 	state = ViewBuilder.build(view)
+	# Рассылка посреди нашего хода (обрыв/возврат соперника, реджойн)
+	# пришла с тем же серверным столом — локальную раскладку возвращаем,
+	# иначе автор теряет фишки и перестаёт повторять черновик.
+	state.keep_local_turn_from(prev)
+	if draft_kept:
+		if state.finished or state.current != _draft_from:
+			_clear_draft()
+		else:
+			# База сервера могла обновиться — серые пересчитываем
+			# относительно неё, срок жизни черновика остаётся прежним.
+			_draft_grey_ids = _draft_grey_of(_draft_rows)
+	elif _draft_from >= 0:
+		_clear_draft()
 	_show_wait(_wait_text(grace, paused, waiting))
 
 
@@ -1156,8 +1204,27 @@ func _bot_execute(seq: int) -> void:
 		_show_pass()
 
 func _show_win() -> void:
+	_record_stats()
 	win_title.text = "Победитель - %s" % state.player_name(state.winner)
 	win_overlay.visible = true
+
+
+## Одна запись в статистику на партию. Победа — за нами: в одиночной
+## партии боту она в счёт не идёт, в сетевой — сид соперника. Финиш
+## без победителя (winner < 0) учитывается только как сыгранная партия.
+func _record_stats() -> void:
+	if _stats_recorded or state == null or not state.finished:
+		return
+	_stats_recorded = true
+	var won := false
+	var lost := false
+	if state.winner >= 0:
+		if _online:
+			won = state.winner == state.local_seat
+		else:
+			won = not state.is_bot_player(state.winner)
+		lost = not won
+	Settings.record_game(won, lost)
 
 func _on_deck_pressed() -> void:
 	if not _can_act():
@@ -1568,6 +1635,15 @@ func _on_net_peek(tile_id: int, kind: String, row: int, index: int, at: int) -> 
 	var pos: Variant = _peek_position(kind, tile_id, row, index, at)
 	if pos == null:
 		return
+	if kind == "new":
+		# Врезаем в наш стол прозрачный ряд той же высоты: призрак ляжет
+		# в разрыв, а не поверх соседней карточки — соперник видит, что
+		# у того открывается новый ряд. Позиция уже посчитана по
+		# _peek_new_pos — врезка встанет именно туда после переразметки,
+		# а держать призрак на ней будет _sync_peek_slot каждый кадр.
+		_show_peek_slot(at)
+		if _peek_slot == null:
+			return
 	var ghost := TileView.make(ViewBuilder.tile(tile_id), false, self)
 	ghost.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	ghost.modulate = Color(1, 1, 1, 0.7)
@@ -1636,7 +1712,52 @@ func _row_block_by_id(row_id: int) -> RowBlock:
 	return null
 
 
+## Врезка «нового ряда» под призрак соперника (game.peek kind=new).
+## Без неё призрак лёг бы поверх существующей карточки; с врезкой стол
+## расступается, и видно, что тот открывает новый ряд. Это картинка —
+## мышь её не ловит, в отличие от авторской _show_row_slot.
+func _show_peek_slot(at: int) -> void:
+	_clear_peek_slot()
+	if state == null or state.finished or table_box == null:
+		return
+	var h := maxf(Settings.tile_size().y + 16.0, 36.0)
+	var slot := Panel.new()
+	slot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	slot.custom_minimum_size = Vector2(0, h)
+	slot.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(1, 1, 1, 0.03)
+	sb.border_color = Color(1, 1, 1, 0.18)
+	sb.set_border_width_all(2)
+	sb.set_corner_radius_all(10)
+	slot.add_theme_stylebox_override("panel", sb)
+	slot.set_meta("slot_at", at)
+	table_box.add_child(slot)
+	table_box.move_child(slot, clampi(at, 0, table_box.get_child_count() - 1))
+	_peek_slot = slot
+
+
+func _clear_peek_slot() -> void:
+	if _peek_slot != null and is_instance_valid(_peek_slot):
+		var p := _peek_slot.get_parent()
+		if p != null:
+			p.remove_child(_peek_slot)
+		_peek_slot.free()
+	_peek_slot = null
+
+
+## Держим призрак нового ряда на врезке: та переезжает при каждой
+## переразметке стола (черновик приходит повторами каждые 3 с), и
+## координаты призрака обязаны следовать за ней.
+func _sync_peek_slot() -> void:
+	if _peek_slot == null or not is_instance_valid(_peek_slot):
+		return
+	if _peek_ghost != null and is_instance_valid(_peek_ghost):
+		_peek_ghost.global_position = _peek_slot.global_position
+
+
 func _clear_peek() -> void:
+	_clear_peek_slot()
 	if _peek_ghost != null and is_instance_valid(_peek_ghost):
 		_peek_ghost.queue_free()
 	_peek_ghost = null
@@ -1661,6 +1782,17 @@ func _on_net_draft(from: int, rows: Array) -> void:
 	# иначе гонка с game.state показала бы чужую раскладку поверх нашей.
 	if state.current != from:
 		return
+	_draft_from = from
+	_draft_rows = rows
+	_draft_grey_ids = _draft_grey_of(rows)
+	_draft_at_ms = Time.get_ticks_msec()
+	refresh()
+
+
+## Серые фишки черновика: все присланные, которых нет в серверной базе.
+## Отдельной функцией — та же пересчёт вызывается при каждом промежуточном
+## game.state, пока ход автора не кончился.
+func _draft_grey_of(rows: Array) -> Dictionary:
 	var base := {}
 	for row in state.table:
 		var r := row as GameState.Row
@@ -1675,11 +1807,7 @@ func _on_net_draft(from: int, rows: Array) -> void:
 			var id := int(tid)
 			if id > 0 and not base.has(id):
 				grey[id] = true
-	_draft_from = from
-	_draft_rows = rows
-	_draft_grey_ids = grey
-	_draft_at_ms = Time.get_ticks_msec()
-	refresh()
+	return grey
 
 
 ## Гасим черновик. Без перерисовки: нас вызывают и в _apply_state, где
@@ -2049,6 +2177,12 @@ func _update_table() -> void:
 		table_box.add_child(block)
 		row_blocks.append(block)
 	table_box.move_child(hint_zone, table_box.get_child_count() - 1)
+	# Пересобирали детей — врезка чужого нового ряда могла уехать в конец
+	# списка. Возвращаем её на её место среди рядов, иначе призрак
+	# соперника сядет не туда.
+	if _peek_slot != null and is_instance_valid(_peek_slot):
+		var slot_at := int(_peek_slot.get_meta("slot_at", 0))
+		table_box.move_child(_peek_slot, clampi(slot_at, 0, table_box.get_child_count() - 1))
 
 
 ## Что рисуем на столе: черновик соперника, пока он висит, иначе — наше

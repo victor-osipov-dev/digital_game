@@ -437,9 +437,12 @@ class Hub {
           peek.at = msg.at;
         }
         // Троттлинг: клиент шлёт только при смене цели, но и на всякий
-        // случай не даём сыпать превью чаще, чем раз в 40 мс.
+        // случай не даём сыпать превью чаще, чем раз в 40 мс. Сам «убери
+        // призрак» мимо окна: на смене цели clear идёт вплотную к последнему
+        // превью, и потерянный clear оставлял бы призрак висеть до
+        // собственного протухания.
         const now = Date.now();
-        if (room._peekAt && now - (room._peekAt.get(seat) || 0) < 40) break;
+        if (kind !== 'clear' && room._peekAt && now - (room._peekAt.get(seat) || 0) < 40) break;
         if (!room._peekAt) room._peekAt = new Map();
         room._peekAt.set(seat, now);
         for (let s = 0; s < room.seats; s += 1) {

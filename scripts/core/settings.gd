@@ -4,7 +4,7 @@ const CFG_PATH := "user://settings.cfg"
 const MIN_PLAYERS := 2
 const MAX_PLAYERS := 5
 
-const TEXT_SCALES := [0.85, 1.0, 1.2, 1.45]
+const TEXT_SCALES := [1.7, 2.0, 2.4, 2.9]
 const TEXT_SCALE_NAMES := ["Маленький", "Средний", "Большой", "Гигантский"]
 const TILE_WIDTHS := [32, 40, 48, 60, 66, 72]
 const TILE_SIZE_NAMES := ["Крошечный", "Маленький", "Средний", "Крупный", "Большой", "Максимум"]
@@ -17,6 +17,9 @@ var text_scale: int = 2
 var tile_step: int = 5
 var bot_level: int = 1
 var player_is_bot: Array = []
+var stat_games: int = 0
+var stat_wins: int = 0
+var stat_losses: int = 0
 
 func _ready() -> void:
 	load_settings()
@@ -97,6 +100,9 @@ func load_settings() -> void:
 		text_scale = clampi(int(cf.get_value("game", "text_scale", 2)), 0, TEXT_SCALES.size() - 1)
 		tile_step = clampi(int(cf.get_value("game", "tile_step", 5)), 0, TILE_WIDTHS.size() - 1)
 		bot_level = clampi(int(cf.get_value("game", "bot_level", 1)), 0, BOT_LEVEL_NAMES.size() - 1)
+		stat_games = maxi(0, int(cf.get_value("game", "stat_games", 0)))
+		stat_wins = maxi(0, int(cf.get_value("game", "stat_wins", 0)))
+		stat_losses = maxi(0, int(cf.get_value("game", "stat_losses", 0)))
 		var stored = cf.get_value("game", "player_names", PackedStringArray())
 		if stored is PackedStringArray:
 			player_names = stored
@@ -117,4 +123,19 @@ func save_settings() -> void:
 	cf.set_value("game", "tile_step", tile_step)
 	cf.set_value("game", "bot_level", bot_level)
 	cf.set_value("game", "player_is_bot", player_is_bot)
+	cf.set_value("game", "stat_games", stat_games)
+	cf.set_value("game", "stat_wins", stat_wins)
+	cf.set_value("game", "stat_losses", stat_losses)
 	cf.save(CFG_PATH)
+
+
+## Учёт завершённой партии для экрана «Статистика». Один вызов на
+## партию — гарант на стороне сцены игры; сохраняем сразу, в меню
+## заходить для этого не нужно.
+func record_game(won: bool, lost: bool) -> void:
+	stat_games += 1
+	if won:
+		stat_wins += 1
+	if lost:
+		stat_losses += 1
+	save_settings()

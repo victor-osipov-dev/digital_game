@@ -27,6 +27,7 @@ var _ts := "0"
 
 func _ready() -> void:
 	print("TEST  INFO | Godot %s | test_runner ready" % Engine.get_version_info().get("string", "?"))
+	print("TEST  INFO | args=%s" % str(OS.get_cmdline_user_args()))
 	for a in OS.get_cmdline_user_args():
 		var parts := a.split("=", true, 1)
 		if parts.size() != 2:
@@ -244,7 +245,72 @@ func _run_match_host(ts: String) -> void:
 	_step("host: состояние партии получено", state_ok,
 		"" if not state_ok else "мест %d, я за %d" % [game.state.players.size(), game.state.local_seat])
 	if state_ok:
-		await get_tree().create_timer(2.0).timeout
+		await _host_draft_steps(game)
+
+
+# ------------------------------------- матч: черновик стола (host — автор)
+
+## Раскладываем три фишки локально и следим, чтобы черновик уходил
+## повторами: соперник обязан видеть серые фишки ВСЁ время нашего хода,
+## а не до первого протухания. Гость за это время меряет накопление.
+func _host_draft_steps(game: Node) -> void:
+	var my_turn := await _wait_for(80, func():
+		return game.state != null and game.state.my_turn() and not game.state.finished)
+	_step("host: дождались своего хода", my_turn,
+		"" if my_turn else "ходит %d, я за %d" % [game.state.current, game.state.local_seat])
+	if not my_turn:
+		return
+	# Реджойн в полёте держит _sending до ответа сервера, а сам ответ
+	# (game.state) гасит _sending ДО завершения корутины и потом своим
+	# _apply_state стирает локальную раскладку и _last_draft_json.
+	# Ждём, пока ворота будут непрерывно открыты 2 с — круговой реджойн
+	# (~50 мс) гарантированно уложится.
+	var quiet := 0.0
+	var settled := false
+	while quiet < 2.0:
+		if game._sending:
+			quiet = 0.0
+		else:
+			quiet += 0.2
+		if quiet >= 2.0:
+			settled = true
+			break
+		await get_tree().create_timer(0.2).timeout
+	_step("host: реджойн улёгся — _sending не поднимался 2 с", settled,
+		"sending=%s" % game._sending)
+	if not settled:
+		return
+	# Три ряда по фишке. Правила здесь не проверяем — сервер до commit
+	# их не трогает, важно накопление и доставка всего стола целиком.
+	var hand: Array = game.state.hand()
+	var want := mini(3, hand.size())
+	var placed := 0
+	for i in range(want):
+		var t = hand[i]
+		var row = game.state.add_row()
+		if game.state.place_from_hand(int(t.id), row.id, 0):
+			placed += 1
+	game.refresh()
+	_step("host: выложены три фишки локально", placed == want and want == 3,
+		"положили %d из %d" % [placed, want])
+	var sent := not String(game._last_draft_json).is_empty()
+	_step("host: черновик отправлен сопернику", sent,
+		"online=%s my=%s link=%s sending=%s dirty=%s rows=%d last='%s'" % [
+			game._online, game.state.my_turn(), Net.is_linked(),
+			game._sending, game.state.turn_dirty,
+			game._build_draft_rows().size(), String(game._last_draft_json)])
+	if not sent:
+		return
+	var first_sent: int = game._draft_sent_ms
+	await get_tree().create_timer(8.0).timeout
+	_step("host: черновик повторён без нового действия",
+		game._draft_sent_ms > first_sent,
+		"повтор через %d мс" % (game._draft_sent_ms - first_sent))
+	# Гость меряет накопление 17 с — живём дольше его проверки, пока
+	# ход и связь целы.
+	await get_tree().create_timer(22.0).timeout
+	_step("host: черновик всё ещё активен (живём дольше 15 с экспайра)",
+		game.state.my_turn() and not String(game._last_draft_json).is_empty(), "")
 
 
 # -------------------------------------------------------- матч: гость
@@ -316,4 +382,37 @@ func _run_match_guest(ts: String) -> void:
 	_step("guest: состояние партии получено", state_ok,
 		"" if not state_ok else "мест %d, я за %d" % [game.state.players.size(), game.state.local_seat])
 	if state_ok:
-		await get_tree().create_timer(1.0).timeout
+		await _guest_draft_steps(game)
+
+
+# ------------------------------------- матч: черновик стола (guest — зритель)
+
+## Ждём черновик от хоста, проверяем серые фишки и главное — что они
+## НЕ пропадают, пока автор молчит: повтор каждые 3 с обязан приходить
+## дольше 15 с, иначе экспайр бы их съел.
+func _guest_draft_steps(game: Node) -> void:
+	var got := await _wait_for(90, func(): return game._draft_from >= 0)
+	_step("guest: получен черновик соперника", got,
+		"" if got else "from=%d" % game._draft_from)
+	if not got:
+		return
+	_step("guest: черновик активен: рядов >= 3, серых >= 3",
+		game._draft_active() and game._draft_rows.size() >= 3
+			and game._draft_grey_ids.size() >= 3,
+		"рядов %d, серых %d" % [game._draft_rows.size(), game._draft_grey_ids.size()])
+	var grey_id := -1
+	for k in game._draft_grey_ids.keys():
+		grey_id = int(k)
+		break
+	_step("guest: серая фишка помечена на столе",
+		grey_id > 0 and game.get_tile_marks(grey_id).get("draft", false),
+		"fid=%d" % grey_id)
+	# Ничего не трогаем 17 с — дольше экспайра 15 с. Если бы автор
+	# перестал повторять, серые бы тут и пропали.
+	await get_tree().create_timer(17.0).timeout
+	_step("guest: серые фишки не пропали через 17 с",
+		game._draft_from >= 0 and game._draft_active(),
+		"from=%d активен=%s" % [game._draft_from, game._draft_active()])
+	_step("guest: повторы продолжают приходить (пакет свежий)",
+		Time.get_ticks_msec() - game._draft_at_ms < 6000,
+		"последний пакет %d мс назад" % (Time.get_ticks_msec() - game._draft_at_ms))
