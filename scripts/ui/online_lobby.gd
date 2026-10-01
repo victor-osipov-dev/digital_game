@@ -18,6 +18,22 @@ var _page_lobby: VBoxContainer = null
 
 var _status: Label = null
 var _busy: Label = null
+# Заголовок окна лобби. Отдельное поле не для красоты: на телефоне в
+# узком портрете он не помещался рядом с «Назад» и обрезался, поэтому
+# размер шрифта у него подбирается под реально свободную ширину.
+var _title: Label = null
+# Корень прокручиваемой разметки: его шириной меряем «сколько реально
+# осталось», и по ней же решаем, складывать ли ряды в столбик.
+var _root: VBoxContainer = null
+# Ряд «заголовок + Назад»: по его фактической ширине считается, сколько
+# места достанется заголовку.
+var _head: HBoxContainer = null
+# Ряды, которые на узком экране встают друг под другом: по горизонтали
+# два-три поля делят ширину и сжимаются в нечитаемые полоски. Список
+# наполняется при сборке страниц и обходится в _relayout.
+var _stack_rows: Array = []
+var _avail_w := 0.0
+var _last_scale := -1
 
 var _login_edit: LineEdit = null
 var _pass_edit: LineEdit = null
@@ -91,6 +107,12 @@ func _ready() -> void:
 	# бы зависшей. При этом сам экран остаётся скрытым и не перехватывает
 	# щелчки главного меню.
 	_build()
+	# Ориентацию экрана на телефоне крутят, и размер окна меняется на
+	# ходу: без этого подписки раз вёрстка остаётся рассчитанной под
+	# стартовый портрет — заголовок обрезан, поля в ряд не влезают.
+	resized.connect(_relayout)
+	get_viewport().size_changed.connect(_relayout)
+	_relayout()
 
 
 ## Смена сцены с проверкой, что нас ещё есть в дереве.
@@ -438,22 +460,20 @@ func _make_room_row(room: Dictionary) -> Control:
 
 	var filled := int(room.get("filled", 0))
 	var seats := int(room.get("seats", 2))
-	# Название сервера в строке обязательно: список собирается с обоих
-	# серверов, и без подписи две одинаковые комнаты «2/2» не отличить.
-	var text := "%s · %d/%d · %s" % [
-		String(room.get("name", "?")), filled, seats,
-		String(room.get("serverName", "?")),
-	]
+	# Название комнаты и занятые места — это то, ради чего строка и нужна.
+	# Название сервера сюда раньше тоже писали, но на телефоне в портрете
+	# от него не оставалось ничего: длинная строка переносилась на три
+	# строки и выпирала из карточки. Сервер виден отдельно, в строке
+	# статуса сверху.
+	var text := "%s · %d/%d" % [String(room.get("name", "?")), filled, seats]
 	# Идущую партию тоже показываем в списке: в неё можно войти вместо
 	# бота. Помечать надо явно — иначе по «N/M» человека примут её за
 	# лобби, где можно сесть на свободное место.
 	if String(room.get("state", "")) == "playing":
-		text += " · партия идёт"
+		text += " · идёт"
 	var bots := int(room.get("bots", 0))
 	if bots > 0:
-		text += " · боты: %d" % bots
-	if bool(room.get("require30", true)):
-		text += " · от 30"
+		text += " · боты %d" % bots
 	if bool(room.get("hasPassword", false)):
 		text += " · пароль"
 
@@ -469,6 +489,7 @@ func _make_room_row(room: Dictionary) -> Control:
 	var join := Button.new()
 	join.text = "Войти"
 	join.custom_minimum_size = Vector2(Settings.touch_w(84), Settings.touch(38))
+	join.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	join.add_theme_font_size_override("font_size", Settings.fs(16))
 	join.pressed.connect(_do_join.bind(String(room.get("code", "")), String(room.get("server", ""))))
 	box.add_child(join)
@@ -633,11 +654,6 @@ func _show_lobby(room: Dictionary) -> void:
 		Net.park_room(room)
 	_set_page(_page_lobby)
 	_lobby_code.text = "Комната %s" % String(room.get("code", "?"))
-	_lobby_seats.text = "%s · места: %d · первый ход: %s" % [
-		Net.server_label(),
-		int(room.get("seats", 0)),
-		"от 30 очков" if bool(room.get("require30", true)) else "без ограничения",
-	]
 	_lobby_note.text = ""
 	for child in _lobby_players.get_children():
 		_lobby_players.remove_child(child)
@@ -672,6 +688,10 @@ func _show_lobby(room: Dictionary) -> void:
 	var is_host := bool(room.get("isHost", false))
 	var all_in := taken >= seats
 	_lobby_all_in = all_in
+	_lobby_seats.text = "%s · свободно %d из %d · первый ход: %s" % [
+		Net.server_label(), maxi(0, seats - taken), seats,
+		"от 30" if bool(room.get("require30", true)) else "любой",
+	]
 	# Боты добирают пустые места сами (при заполнении или по таймеру
 	# автостарта), поэтому кнопке «Начать» вместе со всеми не нужен —
 	# нужны лишь двое живых.
@@ -681,8 +701,7 @@ func _show_lobby(room: Dictionary) -> void:
 		_start_btn.text = "Начать партию" if _lobby_ready \
 			else "Ждём игроков (%d из %d)" % [taken, seats]
 	_update_buttons()
-	_auto_hint.text = "Игра начнётся сама при заполнении или примерно через минуту; " \
-		+ "свободные места займут боты."
+	_auto_hint.text = "Не дождались второго — начнём с ботами."
 	# Сервер всё равно не начнёт, пока не придут двое и не все будут на
 	# связи, — но сказать об этом заранее честнее, чем ловить отказ.
 	_set_note(_lobby_note,
@@ -795,6 +814,120 @@ func drop_room_now() -> void:
 		open()
 
 
+# =============================================================== вёрстка
+
+## Подгонка разметки под реальный размер окна.
+##
+## Окно на телефоне не 576×1024, как в редакторе: у него своя ширина,
+## и игрок ещё и поворачивает. Раньше ширина разметки была зашита
+## (496), из-за чего на экранах уже 576−28−12 заголовок уезжал под
+## правый край и обрезался, а поля «название»/«пароль» сжимались в
+## нечитаемые полоски. Теперь ширину берём у окна, а ряды из двух-трёх
+## контролов на узком экране складываем в столбик.
+##
+## Вызывается при повороте экрана и смене текстовой шкалы, поэтому
+## дешёвые проверки «ничего не изменилось» здесь обязательны.
+func _relayout() -> void:
+	if _root == null or _title == null:
+		return
+	var vp := get_viewport()
+	if vp == null:
+		return
+	# Поля 14+14 и вертикальная полоса прокрутки ~12 — как в _build.
+	var avail := vp.get_visible_rect().size.x - 28.0 - 12.0
+	if avail <= 0.0:
+		return
+	avail = minf(avail, 576.0)
+	# Ширина окна недостаточна для проверки «ничего не изменилось»:
+	# та же ширина при другой текстовой шкале требует другой вёрстки, а
+	# шкала меняется в главном меню, пока лобби скрыто.
+	var scale := Settings.text_scale
+	if is_equal_approx(avail, _avail_w) and scale == _last_scale:
+		return
+	_avail_w = avail
+	_last_scale = scale
+	_root.custom_minimum_size = Vector2(avail, 0)
+
+	# Заголовок ужимается под «Назад», а не обрезается: font_size
+	# спускаем, пока строка не влезет в отведённую ей ширину. Считаем
+	# по get_string_size того же шрифта, что рисует Label. Ширину
+	# кнопки берём из custom_minimum_size, а не из size: на первом
+	# проходе разметка ещё не посчитана и size.x у кнопки нулевой —
+	# заголовок решил бы, что ему места сколько угодно.
+	var base := Settings.fs(22)
+	# Место под заголовок считаем от РЕАЛЬНОЙ ширины ряда: на первом
+	# проходе разметка ещё не посчитана, и оценка по minimum_size
+	# кнопки «Назад» получалась вдвое больше настоящей — заголовок
+	# ужимался недостаточно и всё равно обрезался.
+	var head_w := _head.size.x
+	if head_w <= 0.0:
+		head_w = avail
+	var room_for_title := head_w - _back_btn.custom_minimum_size.x - 10.0
+	var size := base
+	var font := _title.get_theme_font("font")
+	if font != null and room_for_title > 40.0:
+		while size > Settings.FS_MIN:
+			if font.get_string_size(_title.text,
+					HORIZONTAL_ALIGNMENT_LEFT, -1, size).x <= room_for_title:
+				break
+			size -= 1
+	_title.add_theme_font_size_override("font_size", size)
+
+	# Ряд складывается не по «ширине экрана», а по тому, влезают ли его
+	# дети в строку: при aspect=expand вьюпорт уже базовой ширины, но на
+	# гигантском тексте места в нём вдвое меньше, чем нужно. Порог —
+	# сумма минимальных ширин детей, иначе «название (необязательно)»
+	# получает треть экрана и обрезается.
+	for row in _stack_rows:
+		_stack(row as BoxContainer, not _fits(row as BoxContainer, avail))
+	ScrollFix.relax(_root)
+
+
+## Влезают ли дети ряда в строку шириной avail. Считаем минимальные
+## ширины тех же шрифтов и размеров, что и движок, иначе решение
+## принималось бы по старым значениям.
+func _fits(row: BoxContainer, avail: float) -> bool:
+	var need := 0.0
+	var gap := float(row.get_theme_constant("separation"))
+	var first := true
+	for item in row.get_children():
+		var c := item as Control
+		# Именно c.visible, а не is_visible_in_tree: страница комнат
+		# в момент перевёрстки может быть скрыта (мы на странице входа
+		# или в лобби), и решение «влезает ли ряд» принялось бы по
+		# пустому списку — ряд остался бы в строке до следующего
+		# поворота экрана.
+		if c == null or not c.visible:
+			continue
+		need += c.get_combined_minimum_size().x
+		if not first:
+			need += gap
+		first = false
+	return need <= avail
+
+
+## Один ряд: горизонтально или столбиком. Переключение — один флаг
+## BoxContainer, а не пересборка дерева: состояние полей и нажатия при
+## этом не теряются.
+func _stack(row: BoxContainer, narrow: bool) -> void:
+	if row == null:
+		return
+	row.vertical = narrow
+	row.add_theme_constant_override("separation", 6 if narrow else 8)
+	for item in row.get_children():
+		var c := item as Control
+		if c == null:
+			continue
+		# Исходные флаги запоминаем: разложенный ряд должен выглядеть
+		# ровно как раньше, иначе «мест: 3» в разложенном ряду растянулся
+		# бы на всю ширину и поехала вёрстка широких экранов.
+		if not c.has_meta("h_flags_before_stack"):
+			c.set_meta("h_flags_before_stack", c.size_flags_horizontal)
+		# В столбике каждый контрол тянется на всю ширину страницы.
+		c.size_flags_horizontal = Control.SIZE_EXPAND_FILL if narrow \
+			else int(c.get_meta("h_flags_before_stack"))
+
+
 # =============================================================== общие мелочи
 
 func _set_page(page: VBoxContainer) -> void:
@@ -874,6 +1007,11 @@ func _update_status() -> void:
 	_set_note(_status, text, warn)
 
 
+## Список серверов с пингами. Раньше он занимал отдельные строки под
+## статусом и на странице комнат съедал высоту, которой там и так мало:
+## на телефоне в портрете список комнат уезжал за нижний край экрана.
+## Теперь он рисуется одной строкой, а состояние сервера видно по
+## строке статуса — там уже написано, какой сервер активен.
 func _update_presence() -> void:
 	for child in _server_box.get_children():
 		_server_box.remove_child(child)
@@ -881,33 +1019,19 @@ func _update_presence() -> void:
 	var health := Net.servers.health()
 	if health.is_empty():
 		return
+	var up := 0
 	for id in health:
-		var info: Dictionary = health[id]
-		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", 6)
-		var dot := Label.new()
-		var up := bool(info.get("online", false))
-		dot.text = "●" if up else "○"
-		dot.add_theme_font_size_override("font_size", Settings.fs(15))
-		dot.add_theme_color_override("font_color",
-			Color("66BB6A") if up else Color(1, 1, 1, 0.3))
-		row.add_child(dot)
-		var lab := Label.new()
-		lab.text = String(info.get("name", id))
-		lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		lab.add_theme_font_size_override("font_size", Settings.fs(15))
-		lab.add_theme_color_override("font_color",
-			Color(1, 1, 1, 0.85) if up else Color(1, 1, 1, 0.45))
-		row.add_child(lab)
-		var ms := Label.new()
-		if up:
-			ms.text = "%d мс" % int(info.get("ms", 0))
-		else:
-			ms.text = String(info.get("reason", "нет связи"))
-		ms.add_theme_font_size_override("font_size", Settings.fs(14))
-		ms.add_theme_color_override("font_color", Color(1, 1, 1, 0.5))
-		row.add_child(ms)
-		_server_box.add_child(row)
+		if bool((health[id] as Dictionary).get("online", false)):
+			up += 1
+	var total := health.size()
+	if up == total:
+		return
+	var lab := Label.new()
+	lab.text = "Серверов в сети: %d из %d" % [up, total]
+	lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	lab.add_theme_font_size_override("font_size", Settings.fs(13))
+	lab.add_theme_color_override("font_color", Color("FF8A80"))
+	_server_box.add_child(lab)
 	ScrollFix.relax(_server_box)
 
 
@@ -1028,6 +1152,12 @@ func _build() -> void:
 	# при минимуме 520 содержимое переставало бы помещаться и обрезалось
 	# справа. Поля 14 + 14 плюс 496 — как раз 524, окно игры 576.
 	var root := VBoxContainer.new()
+	_root = root
+	# Ширину задаёт _relayout по фактическому размеру окна. Раньше здесь
+	# стояли жёсткие 496, и на экранах уже 576-28-12 содержимое уезжало
+	# под правый край, а на ещё более узких обрезалось по полям входа.
+	# Ноль на старте — иначе ScrollContainer посчитал бы свою ширину по
+	# нулю и дал корню 0, а _relayout ещё не успел отработать.
 	root.custom_minimum_size = Vector2(496, 0)
 	root.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	root.add_theme_constant_override("separation", 10)
@@ -1036,24 +1166,34 @@ func _build() -> void:
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	scroll.add_child(root)
 
-	var head := HBoxContainer.new()
-	head.add_theme_constant_override("separation", 10)
-	root.add_child(head)
+	_head = HBoxContainer.new()
+	_head.add_theme_constant_override("separation", 10)
+	root.add_child(_head)
 	# Короткий заголовок в один ряд с кнопкой «Назад»: перенос разбивал
-	# его на «ИГРА / ПО / СЕТИ», поэтому он не переносится вовсе.
-	head.add_child(_header("ИГРА ПО СЕТИ", 22, false))
-	var head_space := Control.new()
-	head_space.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	head.add_child(head_space)
+	# его на «ИГРА / ПО / СЕТИ», поэтому он не переносится вовсе. Шрифт
+	# ему подбирает _relayout — на узком экране он ужимается сам,
+	# иначе надпись обрезается по краю.
+	_title = _header("ИГРА ПО СЕТИ", 22, false)
+	# Заголовок тянется на всё, что осталось после «Назад», и никакого
+	# распорки-распорки между ними: у Label с clip_text минимальная
+	# ширина нулевая, поэтому пустое место перед кнопкой забирал себе
+	# он, а обрезался заголовок.
+	_head.add_child(_title)
 	_back_btn = _button("Назад", 16)
 	_back_btn.custom_minimum_size = Vector2(Settings.touch_w(110), Settings.touch(40))
 	_back_btn.pressed.connect(close)
-	head.add_child(_back_btn)
+	_head.add_child(_back_btn)
 
+	# Перенос обязателен: у Label без autowrap минимальная ширина равна
+	# всей строке, а «Сервер: <длинное имя> · <ник>» на узком экране
+	# растягивал корень шире окна — и вместе с ним уезжали вправо все
+	# страницы. Перенос не даёт строке стать шириной макета.
 	_status = Label.new()
+	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_status.add_theme_font_size_override("font_size", Settings.fs(15))
 	root.add_child(_status)
 	_busy = Label.new()
+	_busy.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_busy.add_theme_font_size_override("font_size", Settings.fs(15))
 	_busy.visible = false
 	root.add_child(_busy)
@@ -1192,9 +1332,14 @@ func _build_rooms() -> VBoxContainer:
 	_stuck_label.add_theme_font_size_override("font_size", Settings.fs(15))
 	_stuck_label.add_theme_color_override("font_color", Color("FFE0B2"))
 	stuck_inner.add_child(_stuck_label)
-	var stuck_row := HBoxContainer.new()
+	# Ряд, а не HBoxContainer: направление у него переключается в
+	# _relayout, а у HBoxContainer vertical менять нельзя вовсе.
+	var stuck_row := BoxContainer.new()
 	stuck_row.add_theme_constant_override("separation", 8)
 	stuck_inner.add_child(stuck_row)
+	_stack_rows.append(stuck_row)
+	# Две кнопки в ряд на узком экране сжимаются в «ВернутьсяПокинуть» —
+	# ряд складывается в столбик в _relayout.
 	_return_btn = _button("Вернуться", 16)
 	_return_btn.pressed.connect(_do_return_room)
 	_apply_accent(_return_btn, Color("2E7D32"), Color("388E3C"), Color("1B5E20"))
@@ -1205,10 +1350,13 @@ func _build_rooms() -> VBoxContainer:
 
 	# --- создать
 	page.add_child(_header("Своя комната", 19))
-	page.add_child(_header("Сервер выбирается случайно, чтобы комнаты шли на обе машины", 12))
-	var create_row := HBoxContainer.new()
+	var create_row := BoxContainer.new()
 	create_row.add_theme_constant_override("separation", 8)
 	page.add_child(create_row)
+	_stack_rows.append(create_row)
+	# Название, пароль и выбор мест — три контрола в ряд: на телефоне в
+	# узком портрете каждый из них сжимается до нечитаемой полоски, так
+	# что ряд складывается в столбик (см. _stack).
 	_seats_option = OptionButton.new()
 	_seats_option.custom_minimum_size = Vector2(Settings.touch_w(110), Settings.touch(44))
 	Settings.style_option(_seats_option, 15)
@@ -1224,7 +1372,11 @@ func _build_rooms() -> VBoxContainer:
 	_room_pass.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	create_row.add_child(_room_pass)
 	_require_30 = CheckBox.new()
-	_require_30.text = "Первый ход: минимум 30 очков"
+	# Короткая подпись обязательна: у CheckBox нет переноса, и его
+	# минимальная ширина равна всей строке. На узком экране длинный
+	# текст («Первый ход: минимум 30 очков») растягивал страницу
+	# шире окна и уезжал за правый край вместе со всем остальным.
+	_require_30.text = "Первый ход: от 30"
 	_require_30.button_pressed = Settings.require_30
 	_require_30.add_theme_font_size_override("font_size", Settings.fs(15))
 	_require_30.add_theme_color_override("font_color", Color(1, 1, 1, 0.9))
@@ -1240,9 +1392,10 @@ func _build_rooms() -> VBoxContainer:
 
 	# --- список
 	page.add_child(_header("Все комнаты", 19))
-	var head := HBoxContainer.new()
+	var head := BoxContainer.new()
 	head.add_theme_constant_override("separation", 8)
 	page.add_child(head)
+	_stack_rows.append(head)
 	_rooms_note = Label.new()
 	_rooms_note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	# Тексты сюда длинные («Показаны комнаты без …, остальные серверы не
@@ -1257,15 +1410,20 @@ func _build_rooms() -> VBoxContainer:
 
 	_rooms_box = VBoxContainer.new()
 	_rooms_box.add_theme_constant_override("separation", 4)
-	_rooms_box.custom_minimum_size = Vector2(0, 140)
+	# Список комнат — то, ради чего эта страница: он получает высоту
+	# первым, остальное на странице — обвязка. Раньше минимум стоял
+	# 140, а «пояснение про случайный сервер» занимал ещё строку, и на
+	# телефоне в портрете список уезжал за нижний край экрана.
+	_rooms_box.custom_minimum_size = Vector2(0, 190)
 	_rooms_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	page.add_child(_rooms_box)
 
 	# --- по коду
 	page.add_child(_header("Войти по коду", 15))
-	var code_row := HBoxContainer.new()
+	var code_row := BoxContainer.new()
 	code_row.add_theme_constant_override("separation", 8)
 	page.add_child(code_row)
+	_stack_rows.append(code_row)
 	_join_code = _field("код")
 	_join_code.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	code_row.add_child(_join_code)

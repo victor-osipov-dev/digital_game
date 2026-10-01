@@ -19,17 +19,91 @@ var _stats_games: Label = null
 var _stats_wins: Label = null
 var _stats_losses: Label = null
 var _online_note: Label = null
-var _room_actions: HBoxContainer = null
+var _room_actions: BoxContainer = null
 var _return_room_btn: Button = null
 var _drop_room_btn: Button = null
+var _menu_title: Label = null
+var _bottom_row: BoxContainer = null
+var _count_row: BoxContainer = null
+var _name_rows: Array = []
+var _option_rows: Array = []
+var _avail_w := 0.0
 var _scroll_drag := ScrollDragClass.new()
 
+## Ширина меню ограничена окном. Раньше ширину задавал только
+## custom_minimum_size у menu_box (470), а полоса прокрутки брала её
+## дословно: на экране уже 470+28 всё уезжало вправо и обрезалось —
+## горизонтальная прокрутка у меню выключена. Теперь берём минимум из
+## двух: сколько нужно содержимому и сколько есть в окне.
 func _sync_scroll_min() -> void:
 	if menu_scroll == null or menu_box == null:
 		return
-	var c := menu_box.get_combined_minimum_size()
 	var vp := get_viewport_rect().size
-	menu_scroll.custom_minimum_size = Vector2(c.x, minf(c.y, vp.y))
+	_avail_w = maxf(vp.x - 28.0, 200.0)
+	# Ширину задаёт вьюпорт, а не содержимое: у Label и Button без
+	# переноса минимальная ширина равна всей строке, поэтому «DIGITAL
+	# GAME» на гигантском тексте или два ряда по две кнопки растягивали
+	# колонку шире окна, и всё меню уезжало вправо.
+	menu_box.custom_minimum_size = Vector2(_avail_w, 0)
+	var c := menu_box.get_combined_minimum_size()
+	menu_scroll.custom_minimum_size = Vector2(_avail_w, minf(c.y, vp.y))
+	_relayout()
+
+
+## Пересчёт под окно: заголовок ужимается, ряды из двух-трёх
+## контролов встают столбиком. Те же два приёма, что в сетевом лобби.
+func _relayout() -> void:
+	if menu_box == null or _avail_w <= 0.0:
+		return
+	if _menu_title != null:
+		var base := Settings.fs(38)
+		var size := base
+		var font: Font = _menu_title.get_theme_font("font")
+		if font != null:
+			while size > Settings.FS_MIN:
+				if font.get_string_size(_menu_title.text,
+						HORIZONTAL_ALIGNMENT_LEFT, -1, size).x <= _avail_w:
+					break
+				size -= 1
+		_menu_title.add_theme_font_size_override("font_size", size)
+	var rows: Array = [_count_row, _bottom_row, _room_actions]
+	for row in _name_rows + _option_rows + rows:
+		var box := row as BoxContainer
+		_stack(box, not _fits(box, _avail_w))
+
+
+func _fits(row: BoxContainer, avail: float) -> bool:
+	if row == null:
+		return true
+	var need := 0.0
+	var gap := float(row.get_theme_constant("separation"))
+	var first := true
+	for item in row.get_children():
+		var c := item as Control
+		if c == null or not c.visible:
+			continue
+		need += c.get_combined_minimum_size().x
+		if not first:
+			need += gap
+		first = false
+	return need <= avail
+
+
+func _stack(row: BoxContainer, narrow: bool) -> void:
+	if row == null:
+		return
+	row.vertical = narrow
+	for item in row.get_children():
+		var c := item as Control
+		if c == null:
+			continue
+		# Исходные флаги запоминаем: разложенный ряд должен выглядеть
+		# ровно как раньше, иначе OptionButton в «Игроков:» растянулся бы
+		# на всю строку и на широких экранах поменялась бы вёрстка.
+		if not c.has_meta("h_flags_before_stack"):
+			c.set_meta("h_flags_before_stack", c.size_flags_horizontal)
+		c.size_flags_horizontal = Control.SIZE_EXPAND_FILL if narrow \
+			else int(c.get_meta("h_flags_before_stack"))
 
 
 # Сама механика (вернуться / покинуть с концами) — в онлайн-лобби. Здесь
@@ -56,6 +130,11 @@ func _refresh_online_note(_room := {}) -> void:
 func _ready() -> void:
 	_build_ui()
 	_rebuild_names()
+	# Поворот экрана пересчитывает ширину: без этого меню осталось бы
+	# разложенным под прошлое окно.
+	var vp := get_viewport()
+	if vp != null:
+		vp.size_changed.connect(_sync_scroll_min)
 	# Напоминание «вы всё ещё в комнате» на самом главном экране: сигнал
 	# молчит при свежем входе, поэтому сразу читаем текущее состояние.
 	Net.pending_room_changed.connect(_refresh_online_note)
@@ -91,16 +170,19 @@ func _build_ui() -> void:
 	menu_scroll.add_child(menu_box)
 	var box := menu_box
 
-	var title := Label.new()
-	title.text = "DIGITAL GAME"
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", Settings.fs(38))
-	title.add_theme_color_override("font_color", Color("FFD54F"))
-	box.add_child(title)
+	_menu_title = Label.new()
+	_menu_title.text = "DIGITAL GAME"
+	_menu_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_menu_title.add_theme_font_size_override("font_size", Settings.fs(38))
+	_menu_title.add_theme_color_override("font_color", Color("FFD54F"))
+	box.add_child(_menu_title)
 
 	var subtitle := Label.new()
 	subtitle.text = "числа · 4 цвета · джокеры"
 	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	# Перенос: у Label без него минимальная ширина равна всей строке, и
+	# на гигантском тексте подзаголовок растягивал колонку шире окна.
+	subtitle.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	subtitle.add_theme_font_size_override("font_size", Settings.fs(16))
 	subtitle.add_theme_color_override("font_color", Color(1, 1, 1, 0.55))
 	box.add_child(subtitle)
@@ -120,7 +202,10 @@ func _build_ui() -> void:
 	# Явные кнопки «вернуться в игру» и «покинуть комнату насовсем»: они
 	# должны быть видны, пока игрок числится в комнате, и прятаться вместе
 	# с напоминанием, когда он вернулся или вышел с концами.
-	_room_actions = HBoxContainer.new()
+	# BoxContainer, а не HBoxContainer: на узком экране _stack() переключает
+	# vertical, и у HBoxContainer это запрещено («Can't change orientation
+	# of HBoxContainer»).
+	_room_actions = BoxContainer.new()
 	_room_actions.alignment = BoxContainer.ALIGNMENT_CENTER
 	_room_actions.add_theme_constant_override("separation", 12)
 	_room_actions.visible = false
@@ -145,7 +230,9 @@ func _build_ui() -> void:
 	spacer.custom_minimum_size = Vector2(0, 8)
 	box.add_child(spacer)
 
-	var count_row := HBoxContainer.new()
+	# BoxContainer, а не HBoxContainer: см. _room_actions выше.
+	var count_row := BoxContainer.new()
+	_count_row = count_row
 	count_row.add_theme_constant_override("separation", 12)
 	count_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	box.add_child(count_row)
@@ -179,7 +266,7 @@ func _build_ui() -> void:
 	# Подпись та же, что и в сетевом лобби: чекбокс не переносится, а
 	# его ширина — ширина всей колонки меню; длиннее — на гигантском
 	# строка уезжала за правый край экрана.
-	check_30.text = "Первый ход: минимум 30 очков"
+	check_30.text = "Первый ход: от 30"
 	check_30.button_pressed = Settings.require_30
 	check_30.add_theme_font_size_override("font_size", Settings.fs(15))
 	check_30.add_theme_color_override("font_color", Color(1, 1, 1, 0.9))
@@ -218,7 +305,10 @@ func _build_ui() -> void:
 	stats_btn.pressed.connect(_on_stats_pressed)
 	box.add_child(stats_btn)
 
-	var bottom := HBoxContainer.new()
+	# BoxContainer, а не HBoxContainer: на 320 px две кнопки по 200 не
+	# влезают в строку, и _stack() кладёт их столбиком.
+	var bottom := BoxContainer.new()
+	_bottom_row = bottom
 	bottom.alignment = BoxContainer.ALIGNMENT_CENTER
 	bottom.add_theme_constant_override("separation", 14)
 	box.add_child(bottom)
@@ -260,8 +350,11 @@ func _build_online() -> void:
 	online_lobby.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(online_lobby)
 
-func _make_option_row(label_text: String, names: PackedStringArray, current: int, handler: Callable) -> HBoxContainer:
-	var row := HBoxContainer.new()
+func _make_option_row(label_text: String, names: PackedStringArray,
+		current: int, handler: Callable) -> BoxContainer:
+	# BoxContainer, а не HBoxContainer: см. _room_actions выше.
+	var row := BoxContainer.new()
+	_option_rows.append(row)
 	row.add_theme_constant_override("separation", 10)
 	var lab := Label.new()
 	lab.text = label_text
@@ -277,7 +370,7 @@ func _make_option_row(label_text: String, names: PackedStringArray, current: int
 	option.select(clampi(current, 0, names.size() - 1))
 	option.item_selected.connect(handler)
 	row.add_child(option)
-	return row
+	return row as BoxContainer
 
 func _apply_accent_style(button: Button, normal: Color, hover: Color, pressed: Color) -> void:
 	var sb_normal := StyleBoxFlat.new()
@@ -453,8 +546,12 @@ func _rebuild_names() -> void:
 		child.free()
 	name_edits.clear()
 	bot_checks.clear()
+	_name_rows.clear()
 	for i in Settings.player_count:
-		var row := HBoxContainer.new()
+		# BoxContainer, а не HBoxContainer: на узком экране поле и
+		# чекбокс «Бот» встают столбиком (см. _stack).
+		var row := BoxContainer.new()
+		_name_rows.append(row)
 		row.add_theme_constant_override("separation", 8)
 		names_box.add_child(row)
 
