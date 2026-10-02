@@ -1,9 +1,11 @@
 'use strict';
 
 const { WebSocketServer } = require('ws');
+const nodeNet = require('net');
 const { config } = require('./config');
 const log = require('./log');
-const { C2S, S2C, RID_FIELD, MAX_MESSAGE_BYTES, CATALOG_SIZE } = require('./protocol');
+const { C2S, S2C, RID_FIELD, MAX_MESSAGE_BYTES } = require('./protocol');
+const catalog = require('./engine/catalog');
 const views = require('./views');
 const { planGame } = require('./engine/bot');
 
@@ -25,9 +27,19 @@ const OBSERVER_ALLOWED = [C2S.ROOMS_LIST, C2S.SERVERS_LIST, C2S.PING];
  * пределах — иначе можно сыпать мусором и раздуть рассылку. Возвращает
  * нормализованный массив или null, если формат не годится.
  */
-function cleanDraftRows(rows) {
+function cleanDraftRows(rows, game) {
   if (!Array.isArray(rows) || rows.length > 64) return null;
+  // Черновик — картинка текущего стола автора, а не произвольный набор
+  // номеров. Проверяем каждую фишку по объединению его руки и стола: так
+  // нельзя показать чужую скрытую фишку или продублировать одну фишку.
+  const allowed = new Set();
+  if (game) {
+    const me = game.players[game.current];
+    if (me) for (const id of me.handIds) allowed.add(id);
+    for (const row of game.table) for (const id of row.tileIds) allowed.add(id);
+  }
   const out = [];
+  const seen = new Set();
   let total = 0;
   for (const r of rows) {
     if (!r || typeof r !== 'object') return null;
@@ -37,7 +49,12 @@ function cleanDraftRows(rows) {
     if (total > 200) return null;
     const tiles = [];
     for (const t of r.tiles) {
-      if (!Number.isInteger(t) || t < 0 || t >= CATALOG_SIZE) return null;
+      // Именно наличие в каталоге, а не числовой диапазон: диапазон уже
+      // один раз отстал от колоды (108 вместо 106) и пропустил несуществующие
+      // номера в чужой экран.
+      if (!Number.isInteger(t) || !catalog.BY_ID.has(t)) return null;
+      if (game && (!allowed.has(t) || seen.has(t))) return null;
+      seen.add(t);
       tiles.push(t);
     }
     out.push({ id: r.id, tiles });
@@ -59,6 +76,7 @@ class Hub {
     this.rooms = rooms;
     this.sockets = new Map(); // socket -> {socket, ip, user, roomCode, seat, alive, authFails}
     this.ipCounts = new Map();
+    this.ipAuth = new Map(); // доверенный IP -> {count, windowStart}
     this.wss = null;
     this.clock = setInterval(() => this.tick(), config.pingIntervalMs);
     if (this.clock.unref) this.clock.unref();
@@ -98,6 +116,7 @@ class Hub {
       socket,
       ip,
       user: null,
+      token: null,
       alive: true,
       authFails: 0,
       authWindowStart: Date.now(),
@@ -185,6 +204,16 @@ class Hub {
       return;
     }
 
+    // Привязка соединения к живой сессии проверяется на каждом
+    // аутентифицированном сообщении: выход и смена пароля обязаны гасить
+    // и уже открытый сокет, а не только будущие входы по токену.
+    if (ctx.user && !this.accounts.sessionAlive(ctx.token)) {
+      ctx.user = null;
+      ctx.token = null;
+      this.reply(ctx, { t: S2C.AUTH_ERR, reason: 'Сессия недействительна' }, rid);
+      return;
+    }
+
     // Наблюдатель не имеет права менять состояние. Смысл в том, чтобы связь,
     // которой читают список комнат с чужого сервера, не могла ни войти в
     // комнату, ни создать, ни выйти. Ничего из этого ей и не нужно, а
@@ -210,12 +239,27 @@ class Hub {
 
   allowAuth(ctx) {
     const now = Date.now();
-    if (now - ctx.authWindowStart > 60000) {
-      ctx.authWindowStart = now;
-      ctx.authFails = 0;
+    const ip = String((ctx && ctx.ip) || '?');
+    let bucket = this.ipAuth.get(ip);
+    if (!bucket || now - bucket.windowStart > 60000) bucket = { count: 0, windowStart: now };
+    if (!ctx || now - ctx.authWindowStart > 60000) {
+      if (ctx) {
+        ctx.authWindowStart = now;
+        ctx.authFails = 0;
+      }
     }
-    if (ctx.authFails >= config.authAttemptsPerMinute) return false;
-    ctx.authFails += 1;
+    if (ctx && ctx.authFails >= config.authAttemptsPerMinute) return false;
+    if (bucket.count >= config.authIpAttemptsPerMinute) return false;
+    if (ctx) ctx.authFails += 1;
+    bucket.count += 1;
+    this.ipAuth.set(ip, bucket);
+    // Чистим только просроченные записи и только когда карта заметно
+    // выросла: иначе сами счётчики стали бы точкой утечки памяти.
+    if (this.ipAuth.size > 1000) {
+      for (const [key, entry] of this.ipAuth) {
+        if (now - entry.windowStart > 60000) this.ipAuth.delete(key);
+      }
+    }
     return true;
   }
 
@@ -255,13 +299,21 @@ class Hub {
           login: r.account.login,
           nick: r.account.nick,
         };
+        ctx.token = String(msg.token || '');
         ctx.observer = true;
         this.reply(ctx, { t: S2C.AUTH_OK, user: this.accounts.publicView(r.account) }, rid);
         break;
       }
       case C2S.LOGOUT: {
-        if (ctx.user) this.accounts.logout(msg.token || '');
+        // Отзываем сессию именно этого соединения, а не любой токен из
+        // сообщения: иначе вошедший игрок мог бы гасить чужие сессии.
+        const target = ctx.token || String(msg.token || '');
+        this.accounts.logout(target);
+        // Отзыв должен уехать соседям сразу, а не ждать минутного gossip:
+        // иначе токен ещё жил бы на другом сервере.
+        this.cluster.push().catch(() => {});
         ctx.user = null;
+        ctx.token = null;
         this.reply(ctx, { t: S2C.AUTH_ERR, reason: 'Вы вышли' }, rid);
         break;
       }
@@ -269,6 +321,7 @@ class Hub {
         const r = this.accounts.changePassword(ctx.user.account, msg.old, msg.new);
         if (!r.ok) { this.reply(ctx, { t: S2C.GAME_ERROR, reason: r.reason }, rid); break; }
         ctx.user.account = r.account;
+        ctx.token = r.token || ctx.token;
         this.cluster.push().catch(() => {});
         this.reply(ctx, { t: S2C.AUTH_OK, token: r.token, user: this.accounts.publicView(r.account) }, rid);
         break;
@@ -364,7 +417,11 @@ class Hub {
       // ------------------------------------------------------- быстрый матч
       case C2S.QUICK_JOIN: {
         // Сначала пробуем собрать комнату из уже стоящих в очереди.
-        this.rooms.quickJoin(ctx.user, msg);
+        const r = this.rooms.quickJoin(ctx.user, msg);
+        if (!r.ok) {
+          this.reply(ctx, { t: S2C.GAME_ERROR, reason: r.reason }, rid);
+          break;
+        }
         this.maybeFormQuick();
         this.sendQueueState(ctx, rid);
         break;
@@ -423,9 +480,12 @@ class Hub {
         if (!room || room.state !== 'playing') break;
         const seat = ctx.seat;
         if (!(seat >= 0 && seat < room.seats)) break;
+        // Превью — тоже только от текущего игрока: чужое «думаю сюда»
+        // от неходящего места врёт про стол точно так же, как черновик.
+        if (!room.game || room.game.current !== seat) break;
         const kind = msg.kind;
         if (kind !== 'clear' && kind !== 'into' && kind !== 'new' && kind !== 'back') break;
-        if (!Number.isInteger(msg.tile) || msg.tile < 0 || msg.tile >= CATALOG_SIZE) break;
+        if (!Number.isInteger(msg.tile) || !catalog.BY_ID.has(msg.tile)) break;
         const peek = { t: S2C.GAME_PEEK, from: seat, tile: msg.tile, kind };
         if (kind === 'into') {
           if (!Number.isInteger(msg.row) || msg.row < 0 || msg.row > 10000) break;
@@ -463,7 +523,7 @@ class Hub {
         const seat = ctx.seat;
         if (!(seat >= 0 && seat < room.seats)) break;
         if (!room.game || room.game.current !== seat) break;
-        const rows = cleanDraftRows(msg.rows);
+        const rows = cleanDraftRows(msg.rows, room.game);
         if (!rows) break;
         // Троттлинг — тот же 40 мс, что у peek: клиент шлёт только при
         // изменении стола, но и на всякий случай не даём сыпать чаще.
@@ -511,6 +571,7 @@ class Hub {
       login: r.account.login,
       nick: r.account.nick,
     };
+    ctx.token = r.token || null;
     const out = {
       t: S2C.AUTH_OK,
       token: r.token,
@@ -897,10 +958,108 @@ class Hub {
   }
 }
 
+function cleanIpAddress(raw) {
+  let s = String(raw || '').trim();
+  if (s === '') return '';
+  const bracket = s.match(/^\[([^\]]+)\](?::\d{1,5})?$/);
+  if (bracket) s = bracket[1];
+  else {
+    const v4port = s.match(/^(\d{1,3}(?:\.\d{1,3}){3}):\d{1,5}$/);
+    if (v4port) s = v4port[1];
+  }
+  const zone = s.indexOf('%');
+  if (zone > 0) s = s.slice(0, zone);
+  s = s.toLowerCase();
+  if (s.startsWith('::ffff:')) {
+    const v4 = s.slice(7);
+    if (nodeNet.isIP(v4) === 4) s = v4;
+  }
+  return nodeNet.isIP(s) ? s : '';
+}
+
+function ipToBytes(ip) {
+  if (nodeNet.isIP(ip) === 4) return Buffer.from(ip.split('.').map((x) => Number(x)));
+  const halves = ip.split('::');
+  if (halves.length < 1 || halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(':').filter((x) => x !== '') : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(':').filter((x) => x !== '') : [];
+  const groups = [...head, ...tail];
+  const expanded = [];
+  for (const g of groups) {
+    if (g.includes('.')) {
+      const bytes = g.split('.').map((x) => Number(x));
+      if (bytes.length !== 4 || bytes.some((x) => !Number.isInteger(x) || x < 0 || x > 255)) return null;
+      expanded.push(((bytes[0] * 256 + bytes[1]).toString(16)));
+      expanded.push(((bytes[2] * 256 + bytes[3]).toString(16)));
+    } else expanded.push(g);
+  }
+  if (halves.length === 1 && expanded.length !== 8) return null;
+  if (halves.length === 2) {
+    if (expanded.length > 8) return null;
+    expanded.unshift(...new Array(8 - expanded.length).fill('0'));
+  }
+  const out = Buffer.alloc(16);
+  for (let i = 0; i < 8; i += 1) {
+    const v = parseInt(expanded[i], 16);
+    if (!Number.isInteger(v) || v < 0 || v > 0xffff) return null;
+    out.writeUInt16BE(v, i * 2);
+  }
+  return out;
+}
+
+function parseTrustedProxy(raw) {
+  const s = String(raw || '').trim();
+  if (s === '') return null;
+  const slash = s.lastIndexOf('/');
+  if (slash === -1) {
+    const ip = cleanIpAddress(s);
+    if (ip === '') return null;
+    return { bytes: ipToBytes(ip), bits: ipToBytes(ip).length * 8 };
+  }
+  const ip = cleanIpAddress(s.slice(0, slash));
+  const bits = Number(s.slice(slash + 1));
+  const bytes = ip === '' ? null : ipToBytes(ip);
+  if (!bytes || !Number.isInteger(bits) || bits < 0 || bits > bytes.length * 8) return null;
+  return { bytes, bits };
+}
+
+function trustedAddressMatches(ip, rule) {
+  const bytes = ipToBytes(ip);
+  if (!bytes || bytes.length !== rule.bytes.length) return false;
+  const full = Math.floor(rule.bits / 8);
+  const rest = rule.bits % 8;
+  if (!bytes.subarray(0, full).equals(rule.bytes.subarray(0, full))) return false;
+  if (rest === 0) return true;
+  const mask = (0xff << (8 - rest)) & 0xff;
+  return (bytes[full] & mask) === (rule.bytes[full] & mask);
+}
+
+function trustedClientIp(remoteAddress, headers, trustedProxies) {
+  const remote = cleanIpAddress(remoteAddress);
+  if (remote === '') return '?';
+  const rules = (trustedProxies || []).map(parseTrustedProxy).filter(Boolean);
+  if (rules.length === 0) return remote;
+  const raw = headers ? headers['x-forwarded-for'] : '';
+  const forwarded = String(raw || '').split(',').map(cleanIpAddress).filter((x) => x !== '');
+  const chain = [...forwarded, remote];
+  let client = remote;
+  for (let i = chain.length - 1; i >= 0; i -= 1) {
+    const trusted = rules.some((rule) => trustedAddressMatches(chain[i], rule));
+    if (!trusted) {
+      client = chain[i];
+      break;
+    }
+    client = chain[i];
+  }
+  return client;
+}
+
 function clientIp(req) {
-  const xf = req.headers['x-forwarded-for'];
-  if (xf) return String(xf).split(',')[0].trim();
-  return req.socket ? req.socket.remoteAddress : '?';
+  return trustedClientIp(
+    req && req.socket ? req.socket.remoteAddress : '',
+    req ? req.headers : {},
+    config.trustedProxies,
+  );
 }
 
 module.exports = { Hub };

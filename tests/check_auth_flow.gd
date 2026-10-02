@@ -95,18 +95,19 @@ func _checks() -> void:
 	check(_page_visible("_page_rooms"), "successful login switches to rooms page")
 	check(not _page_visible("_page_auth"), "auth page hidden after login")
 
-	# 2. Отказ с причиной «Неверный пароль» не уводит со страницы и
-	#    показывает именно причину сервера.
+	# 2. Отказ входа не уводит со страницы и показывает именно причину
+	#    сервера. Сервер намеренно не различает несуществующий логин и
+	#    неверный пароль, чтобы ответы не выдавали список логинов.
 	lobby.call("_enter_auth")
-	lobby.call("_after_auth", { "ok": false, "reason": "Неверный пароль" }, "Вход выполнен")
+	lobby.call("_after_auth", { "ok": false, "reason": "Неверный логин или пароль" }, "Вход выполнен")
 	check(_page_visible("_page_auth"), "failed login stays on auth page")
-	check(_auth_note_text() == "Неверный пароль",
-		"wrong password shows server reason, got: %s" % _auth_note_text())
+	check(_auth_note_text() == "Неверный логин или пароль",
+		"failed login shows server reason, got: %s" % _auth_note_text())
 
-	# 3. Неизвестный логин — другая причина, тоже показывается.
-	lobby.call("_after_auth", { "ok": false, "reason": "Логин не найден" }, "Вход выполнен")
-	check(_auth_note_text() == "Логин не найден",
-		"unknown login shows server reason, got: %s" % _auth_note_text())
+	# 3. Та же общая причина показывается и во втором случае.
+	lobby.call("_after_auth", { "ok": false, "reason": "Неверный логин или пароль" }, "Вход выполнен")
+	check(_auth_note_text() == "Неверный логин или пароль",
+		"unknown login shows the same server reason, got: %s" % _auth_note_text())
 
 	# 4. Сбой связи не выглядит как «неправильный логин или пароль».
 	lobby.call("_after_auth", { "ok": false, "reason": "нет связи с сервером" }, "Вход выполнен")

@@ -26,10 +26,21 @@ function checkPassword(raw) {
   return '';
 }
 
+const NICK_RESERVED = new Set([
+  'admin', 'administrator', 'root', 'support', 'moderator', 'system',
+  'админ', 'администратор', 'поддержка', 'модер', 'модератор', 'система',
+]);
+
 function checkNick(raw) {
   const v = String(raw || '').trim();
   if (v.length === 0) return 'Введите ник';
   if (v.length > 24) return 'Ник: максимум 24 символа';
+  // Управляющие символы ломают списки игроков и журналы, а «админ» и «бот»
+  // вводят соперников в заблуждение: за ботов играют только серверные места.
+  if (/[\u0000-\u001F\u007F-\u009F]/.test(v)) return 'Ник: без управляющих символов';
+  const compact = v.toLowerCase().replace(/[\s_-]+/g, '');
+  if (NICK_RESERVED.has(compact)) return 'Ник: это служебное имя';
+  if (/^(bot|бот)\d*$/.test(compact)) return 'Ник: ботом может называться только бот';
   return '';
 }
 
@@ -83,13 +94,15 @@ function b64u(buf) {
   return Buffer.from(buf).toString('base64url');
 }
 
-function signToken(loginCi, accountUpdatedMs) {
+function signToken(loginCi, sessionEpoch) {
   const now = Date.now();
   const payload = {
     l: loginCi,
-    // 0 для токенов, выданных неизвестно когда, — такой не пройдёт проверку
-    // ниже, потому что updated_ms аккаунта заведомо больше нуля.
-    u: Number(accountUpdatedMs) || 0,
+    // Эпоха сессий, а не updated_ms: смена ника не должна убивать токены,
+    // а смена пароля обязана убивать их все. Старые токены без v понимают
+    // u как updated_ms — для них проверка ниже отдельная.
+    v: 2,
+    u: Number(sessionEpoch) || 0,
     iat: now,
     exp: now + 90 * 24 * 3600 * 1000,
   };
@@ -116,12 +129,19 @@ function verifyToken(token) {
     return null;
   }
   if (!payload || typeof payload.l !== 'string') return null;
+  if (payload.v !== undefined && payload.v !== 2) return null;
+  if (typeof payload.u !== 'number') return null;
   if (typeof payload.exp === 'number' && Date.now() > payload.exp) return null;
   return payload;
 }
 
 function tokenHash(token) {
   return crypto.createHash('sha256').update(String(token)).digest('base64url');
+}
+
+function tokenEpochOk(payload, acc) {
+  if (payload.v === 2) return payload.u === (Number(acc.session_epoch) || 0);
+  return payload.u >= Number(acc.updated_ms);
 }
 
 // ------------------------------------------------------------------ сервис
@@ -163,13 +183,14 @@ class Accounts {
     const acc = this.db.getAccount(loginCi);
     if (!acc) {
       // Ровно столько работы, сколько при реальном логине, чтобы по
-      // времени ответа нельзя было перебором отличить «нет логина»
-      // от «неверный пароль» (текст ошибки при этом всё равно разный).
+      // времени ответа нельзя было перебором отличить несуществующий
+      // логин от неверного пароля. Текст ошибки тоже общий: разные
+      // тексты превращали бы каждую попытку в проверку существования логина.
       hashPassword(String(password || ''));
-      return { ok: false, reason: 'Логин не найден' };
+      return { ok: false, reason: 'Неверный логин или пароль' };
     }
     if (!verifyPassword(String(password || ''), acc.pwd_hash)) {
-      return { ok: false, reason: 'Неверный пароль' };
+      return { ok: false, reason: 'Неверный логин или пароль' };
     }
     this.db.touchAccount(loginCi);
     return { ok: true, account: acc, token: this.issue(acc) };
@@ -193,11 +214,15 @@ class Accounts {
     const acc = this.db.getAccount(payload.l);
     if (!acc) return { ok: false, reason: 'Сессия недействительна' };
 
-    const fresh = typeof payload.u === 'number' && payload.u >= Number(acc.updated_ms);
+    const fresh = tokenEpochOk(payload, acc);
     const hash = tokenHash(token);
     if (!fresh) {
       // Токен старше последнего изменения аккаунта — гасим и запись, если она
       // была, чтобы следующая попытка не тратила время на её поиск.
+      this.db.dropSession(hash);
+      return { ok: false, reason: 'Сессия недействительна' };
+    }
+    if (this.db.revokedSession(hash)) {
       this.db.dropSession(hash);
       return { ok: false, reason: 'Сессия недействительна' };
     }
@@ -208,11 +233,29 @@ class Accounts {
   }
 
   logout(token) {
-    if (token) this.db.dropSession(tokenHash(token));
+    const payload = verifyToken(token);
+    if (!payload || typeof payload.l !== 'string') return false;
+    const hash = tokenHash(token);
+    const expires = Number(payload.exp) || 0;
+    this.db.dropSession(hash);
+    // Отзываем именно этот токен на всех серверах: сессии по кластеру не
+    // реплицируются, а подпись остаётся валидной до exp. Без записи отзыва
+    // выход на одном сервере не закрывал бы вход на другом.
+    this.db.revokeSession(hash, payload.l, Date.now(), expires);
+    return true;
+  }
+
+  sessionAlive(token) {
+    const payload = verifyToken(token);
+    if (!payload || typeof payload.l !== 'string') return false;
+    const acc = this.db.getAccount(payload.l);
+    if (!acc || !tokenEpochOk(payload, acc)) return false;
+    if (this.db.revokedSession(tokenHash(token))) return false;
+    return true;
   }
 
   issue(account) {
-    const token = signToken(account.login_ci, account.updated_ms);
+    const token = signToken(account.login_ci, Number(account.session_epoch) || 0);
     this.db.putSession(tokenHash(token), account.login_ci);
     return token;
   }
@@ -223,9 +266,10 @@ class Accounts {
     }
     const pe = checkPassword(newPassword);
     if (pe) return { ok: false, reason: pe };
-    const updated = this.db.updateAccount(account.login_ci, {
-      pwd_hash: hashPassword(String(newPassword)),
-    });
+    const updated = this.db.updateCredentials(
+      account.login_ci,
+      hashPassword(String(newPassword)),
+    );
     this.db.dropSessionsOf(account.login_ci);
     return { ok: true, account: updated, token: this.issue(updated) };
   }

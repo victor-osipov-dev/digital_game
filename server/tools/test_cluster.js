@@ -479,14 +479,15 @@ function planRowFromView(state, catalog) {
   section('Партии не реплицируются');
 
   const carol = await signedIn(PORT_A, 'carol', 'secret123', 'Кэрол', 'carol@A');
+  const ivan = await signedIn(PORT_A, 'ivan', 'secret123', 'Иван', 'ivan@A');
   const dave = await signedIn(PORT_B, 'dave', 'secret123', 'Дэйв', 'dave@B');
 
   let foreignRoomCode = null;
   await test('комната создаётся на своём сервере', async () => {
-    const r = await carol.rpc({ t: 'room.create', seats: 2, require30: false, name: 'Изолированная' }, 'room.state');
+    const r = await ivan.rpc({ t: 'room.create', seats: 2, require30: false, name: 'Изолированная' }, 'room.state');
     assert.ok(r.room && typeof r.room.code === 'string');
     assert.strictEqual(r.room.seats, 2);
-    assert.strictEqual(r.room.players[0].nick, 'Кэрол');
+    assert.strictEqual(r.room.players[0].nick, 'Иван');
     assert.strictEqual(r.room.players[1].empty, true, 'пустое место честно помечено');
     assert.strictEqual(r.room.you, 0);
     assert.strictEqual(r.room.isHost, true);
@@ -494,7 +495,7 @@ function planRowFromView(state, catalog) {
   });
 
   await test('в списке комнат пароля нет, только признак его наличия', async () => {
-    const r = await carol.rpc({ t: 'rooms.list' }, 'rooms.list');
+    const r = await ivan.rpc({ t: 'rooms.list' }, 'rooms.list');
     const mine = r.rooms.find((x) => x.code === foreignRoomCode);
     assert.ok(mine, 'своя комната должна быть в списке');
     assert.strictEqual(typeof mine.hasPassword, 'boolean');
@@ -518,7 +519,7 @@ function planRowFromView(state, catalog) {
   await test('наблюдатель читает список комнат чужого сервера', async () => {
     const obs = await new Client(PORT_B, 'obs').connect();
     open.pop();
-    const r = await obs.rpc({ t: 'lobby.open', token: carol.token }, ['auth.ok', 'auth.err']);
+    const r = await obs.rpc({ t: 'lobby.open', token: ivan.token }, ['auth.ok', 'auth.err']);
     assert.strictEqual(r.t, 'auth.ok', `lobby.open отказал: ${JSON.stringify(r)}`);
     const l = await obs.rpc({ t: 'rooms.list' }, 'rooms.list');
     assert.ok(Array.isArray(l.rooms), 'список комнат пришёл');
@@ -528,7 +529,7 @@ function planRowFromView(state, catalog) {
   await test('наблюдатель не может ничего менять', async () => {
     const obs = await new Client(PORT_B, 'obs2').connect();
     open.pop();
-    await obs.rpc({ t: 'lobby.open', token: carol.token }, ['auth.ok', 'auth.err']);
+    await obs.rpc({ t: 'lobby.open', token: ivan.token }, ['auth.ok', 'auth.err']);
     for (const [cmd, payload] of [
       ['room.create', { seats: 2, require30: false, name: 'Взлом' }],
       ['room.join', { code: foreignRoomCode }],
@@ -551,17 +552,17 @@ function planRowFromView(state, catalog) {
     for (let i = 0; i < 3; i += 1) {
       const obs = await new Client(PORT_B, `obs3-${i}`).connect();
       open.pop();
-      await obs.rpc({ t: 'lobby.open', token: carol.token }, ['auth.ok', 'auth.err']);
+      await obs.rpc({ t: 'lobby.open', token: ivan.token }, ['auth.ok', 'auth.err']);
       await obs.rpc({ t: 'rooms.list' }, 'rooms.list');
       obs.close();
     }
     await sleep(400);
     // Комната жива, и игрок на своём месте.
-    const r = await carol.rpc({ t: 'rooms.list' }, 'rooms.list');
+    const r = await ivan.rpc({ t: 'rooms.list' }, 'rooms.list');
     assert.ok(r.rooms.some((x) => x.code === foreignRoomCode),
       `комната ${foreignRoomCode} пропала после чтения списка наблюдателем`);
     // И это не просто остаток в списке: игрок всё ещё в комнате.
-    const st = await carol.rpc({ t: 'room.join', code: foreignRoomCode }, ['room.state', 'game.error']);
+    const st = await ivan.rpc({ t: 'room.join', code: foreignRoomCode }, ['room.state', 'game.error']);
     assert.strictEqual(st.t, 'room.state', 'игрок выбит из комнаты наблюдателем');
   });
 
@@ -570,8 +571,8 @@ function planRowFromView(state, catalog) {
     // комнату: он лишь называет в auth.ok.room комнату, в которой игрок
     // числится. Возврат — явный шаг игрока (room.join / game.rejoin), и
     // именно возврат перепривязывает место и вытесняет старый сокет.
-    const back = await new Client(PORT_A, 'carol-back').connect();
-    const r = await back.rpc({ t: 'auth.login', login: 'carol', password: 'secret123' },
+    const back = await new Client(PORT_A, 'ivan-back').connect();
+    const r = await back.rpc({ t: 'auth.login', login: 'ivan', password: 'secret123' },
       ['auth.ok', 'auth.err']);
     assert.strictEqual(r.t, 'auth.ok', 'вход после обрыва не прошёл');
     assert.ok(r.room && r.room.code === foreignRoomCode,
@@ -585,17 +586,17 @@ function planRowFromView(state, catalog) {
       ['room.state', 'game.error']);
     assert.strictEqual(joined.t, 'room.state', 'явный возврат в комнату не прошёл');
     // Прежний сокет после этого закрыт — с ним больше не работают.
-    carol.close();
-    open.splice(open.indexOf(carol), 1);
+    ivan.close();
+    open.splice(open.indexOf(ivan), 1);
     await sleep(300);
     const after = await back.rpc({ t: 'room.join', code: foreignRoomCode },
       ['room.state', 'game.error']);
     assert.strictEqual(after.t, 'room.state', 'после возврата игрок не в своей комнате');
     // Дальше по сценарию работаем уже с новым соединением.
-    carol.ws = back.ws;
-    carol.label = 'carol';
-    carol.next = back.next.bind(back);
-    carol.send = back.send.bind(back);
+    ivan.ws = back.ws;
+    ivan.label = 'ivan';
+    ivan.next = back.next.bind(back);
+    ivan.send = back.send.bind(back);
   });
 
   await test('войти в чужую комнату с другого сервера нельзя', async () => {

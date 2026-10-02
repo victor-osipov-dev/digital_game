@@ -134,6 +134,8 @@ class Rooms {
     if (this.rooms.size >= config.maxRooms) {
       return { ok: false, reason: 'На сервере слишком много комнат, попробуйте другой' };
     }
+    const busy = this._requireNoActiveGame(user, null);
+    if (busy) return busy;
     const seats = Math.max(2, Math.min(5, Number(opts.seats) || 2));
     let code = makeCode(5);
     for (let i = 0; i < 20 && this.rooms.has(code); i += 1) code = makeCode(5);
@@ -158,6 +160,8 @@ class Rooms {
   joinRoom(user, code, password) {
     const room = this.rooms.get(String(code || '').toUpperCase());
     if (!room) return { ok: false, reason: 'Комната не найдена' };
+    const busy = this._requireNoActiveGame(user, room.code);
+    if (busy) return busy;
     if (room.passwordHash && !this._checkRoomPassword(room, password)) {
       return { ok: false, reason: 'Неверный пароль комнаты' };
     }
@@ -214,7 +218,36 @@ class Rooms {
       isBot: false,
     };
     this.byUser.set(user.id, room.code);
+    // Сесть за стол — значит выйти из очереди: иначе быстрый матч позже
+    // посадит того же игрока во вторую комнату по старой заявке.
+    this._dropFromQuick(user.id);
     room.touch();
+  }
+
+  // Один аккаунт — одна активная комната. Переход из лобби в лобби
+  // освобождает старое место сразу, чтобы оно не осталось «призраком».
+  // Из идущей партии так уходить нельзя: там есть явные room.leave/drop.
+  _requireNoActiveGame(user, code) {
+    const current = this.roomOf(user);
+    if (!current || current.code === code) return null;
+    if (current.state === 'playing') {
+      return { ok: false, reason: 'Сначала покиньте текущую партию: room.leave или room.drop' };
+    }
+    this._leaveLobbySeat(current, user);
+    return null;
+  }
+
+  _leaveLobbySeat(room, user) {
+    if (!room || room.state !== 'lobby') return false;
+    const seat = room.seatOfUser(user.id);
+    if (seat === -1) return false;
+    room.players[seat] = null;
+    room.sockets.delete(seat);
+    room.paused.delete(seat);
+    this.byUser.delete(user.id);
+    this._dropFromQuick(user.id);
+    this._maybeCloseLobby(room);
+    return true;
   }
 
   leaveRoom(user) {
@@ -240,17 +273,15 @@ class Rooms {
       room.touch();
       return { ok: true, room, seat, soft: true };
     }
-    room.players[seat] = null;
-    room.sockets.delete(seat);
-    room.paused.delete(seat);
-    this.byUser.delete(user.id);
-    this._dropFromQuick(user.id);
-    this._maybeCloseLobby(room);
+    this._leaveLobbySeat(room, user);
     return { ok: true, room, seat };
   }
 
   _maybeCloseLobby(room) {
     if (room.state === 'lobby' && room.filled() <= 1) {
+      for (const p of room.players) {
+        if (p && p.userId !== null && p.userId !== undefined) this.byUser.delete(p.userId);
+      }
       this.rooms.delete(room.code);
       log.info(`комната ${room.code} удалена (осталось ${room.filled()})`);
     }
@@ -753,6 +784,8 @@ class Rooms {
   quickKey(seats, require30) { return `${seats}:${require30 ? 1 : 0}`; }
 
   quickJoin(user, opts) {
+    const busy = this._requireNoActiveGame(user, null);
+    if (busy) return { ...busy, queue: this.quickStateFor(user) };
     const seats = Math.max(2, Math.min(5, Number(opts.seats) || 2));
     const require30 = opts.require30 !== false;
     const key = this.quickKey(seats, require30);
@@ -809,12 +842,16 @@ class Rooms {
   _tryFormQuick(q) {
     if (q.waiting.length < 2) return null;
     const need = q.seats;
-    const take = q.waiting.slice(0, need);
-    if (take.length < 2) return null;
-    for (const uid of take) {
-      const i = q.waiting.indexOf(uid);
-      if (i !== -1) q.waiting.splice(i, 1);
+    const take = [];
+    for (const uid of q.waiting) {
+      if (take.length >= need) break;
+      // Уже сидит в другой комнате — пропускаем, иначе один аккаунт
+      // снова оказался бы сразу в двух партиях.
+      if (this.byUser.has(uid)) continue;
+      take.push(uid);
     }
+    if (take.length < 2) return null;
+    for (const uid of take) this._dropFromQuick(uid);
     if (q.timer) { clearTimeout(q.timer); q.timer = null; }
     if (q.waiting.length > 0) this._armQuickTimer(q);
 
@@ -853,6 +890,9 @@ class Rooms {
     }
     for (const room of Array.from(this.rooms.values())) {
       if (room.state === 'lobby' && now - room.lastActivityMs > config.roomIdleTtlMs) {
+        for (const p of room.players) {
+          if (p && p.userId !== null && p.userId !== undefined) this.byUser.delete(p.userId);
+        }
         this.rooms.delete(room.code);
         log.info(`комната ${room.code} удалена по таймауту простоя`);
       }

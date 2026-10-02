@@ -12,6 +12,8 @@
 // В рассылках (чужие ходы, вход соседа) rid не проставляется: клиент обязан
 // применять чужое состояние вслепую, не выдавая его за результат своего хода.
 
+const catalog = require('./engine/catalog');
+
 const C2S = {
   // --- вход -------------------------------------------------------------
   REGISTER: 'auth.register',      // {login, password, nick} -> auth.ok
@@ -82,9 +84,10 @@ const S2C = {
 // присылает каталог один раз в hello.
 const TILE = { id: 'id', color: 'color', value: 'value', isJoker: 'is_joker' };
 
-// Есть ли фишка с таким id: полный перебор 108 элементов на каждое
-// сообщение — лишняя работа на слабом сервере.
-const CATALOG_SIZE = 108;
+// Число фишек в каталоге. Для проверки ID его больше не используем:
+// диапазон уже отставал от колоды, поэтому превью и черновик сверяются
+// напрямую с catalog.BY_ID.
+const CATALOG_SIZE = catalog.TOTAL;
 
 const MAX_OPS_PER_COMMIT = 64;
 const MAX_MESSAGE_BYTES = 256 * 1024;

@@ -70,7 +70,6 @@ const PONG := "pong"
 # внутри класса конфликтует с ним.
 const RID_FIELD := "rid"
 
-const CATALOG_SIZE := 108
 const MAX_OPS_PER_COMMIT := 64
 
 ## Приводит разобранное сообщение сервера к виду, в котором его можно

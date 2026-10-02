@@ -21,7 +21,7 @@ process.env.DG_PEER_URLS = '';
 
 const { config } = require('../src/config');
 const { Db } = require('../src/db');
-const { Accounts, verifyToken, signToken } = require('../src/accounts');
+const { Accounts, verifyToken, signToken, tokenHash } = require('../src/accounts');
 const { Cluster } = require('../src/cluster');
 const { Rooms } = require('../src/rooms');
 const { GameState } = require('../src/engine/game_state');
@@ -29,7 +29,7 @@ const Rules = require('../src/engine/rules');
 const catalog = require('../src/engine/catalog');
 const views = require('../src/views');
 const { Hub } = require('../src/hub');
-const { C2S, S2C, CATALOG_SIZE } = require('../src/protocol');
+const { C2S, S2C } = require('../src/protocol');
 
 let passed = 0;
 const failures = [];
@@ -82,6 +82,11 @@ test('у джокеров value = 1, цвета 4 и 5 (жёлтый и фиол
   const js = catalog.CATALOG.filter((t) => t.is_joker);
   assert.deepStrictEqual(js.map((t) => t.color).sort((a, b) => a - b), [4, 5]);
   for (const t of js) assert.strictEqual(t.value, 1);
+});
+
+test('константа размера каталога совпадает с каталогом', () => {
+  const { CATALOG_SIZE } = require('../src/protocol');
+  assert.strictEqual(CATALOG_SIZE, catalog.CATALOG.length);
 });
 
 // ================================================================ правила
@@ -462,14 +467,13 @@ test('вход с неверным паролем отклоняется', () =>
   assert.strictEqual(r.ok, false);
 });
 
-test('неверный логин и неверный пароль — разные тексты', () => {
+test('ошибка входа не различает несуществующий логин и неверный пароль', () => {
   const a = accounts.login('nosuchuser', 'x');
   const b = accounts.login('testuser', 'x');
-  assert.strictEqual(a.reason, 'Логин не найден', 'нет такого логина');
-  assert.strictEqual(b.reason, 'Неверный пароль', 'логин есть, пароль нет');
-  // Сообщения разведены по просьбе игроков: рядом с формой входа
-  // подсказка, какой именно шаг ошибочен, дороже, чем сокрытие списка
-  // логинов. Тайминговую защиту от перебора сохраняем отдельно.
+  assert.strictEqual(a.reason, 'Неверный логин или пароль', 'нет такого логина');
+  assert.strictEqual(b.reason, 'Неверный логин или пароль', 'логин есть, пароль нет');
+  // Общий текст закрывает перебор логинов по ответам сервера.
+  // Тайминговую защиту от перебора сохраняем отдельно.
 });
 
 test('короткий пароль отклоняется', () => {
@@ -480,6 +484,13 @@ test('короткий пароль отклоняется', () => {
 test('плохой логин отклоняется', () => {
   const r = accounts.register('ab', 'secret123', 'X');
   assert.strictEqual(r.ok, false);
+});
+
+test('служебные ники и управляющие символы отклоняются', () => {
+  for (const nick of ['Админ', 'Поддержка', 'Бот 2', 'bot', 'bad\nnick']) {
+    assert.strictEqual(accounts.register(`nick${nick.length}`, 'secret123', nick).ok, false, nick);
+  }
+  assert.strictEqual(accounts.register('nickok', 'secret123', 'Ботаник').ok, true);
 });
 
 test('токен подходит для входа по нему', () => {
@@ -526,6 +537,59 @@ test('смена пароля выдаёт новый токен и убивае
   assert.strictEqual(accounts.login('testuser', 'newsecret').ok, true);
   assert.strictEqual(accounts.resume(oldToken).ok, false, 'старый токен отозван');
   assert.strictEqual(accounts.resume(r.token).ok, true);
+});
+
+test('выход отзывает именно эту сессию', () => {
+  const login = accounts.login('testuser', 'newsecret');
+  assert.strictEqual(login.ok, true, login.reason);
+  assert.strictEqual(accounts.sessionAlive(login.token), true);
+  assert.strictEqual(accounts.logout(login.token), true);
+  assert.strictEqual(accounts.sessionAlive(login.token), false, 'отозванный токен мёртв');
+  assert.strictEqual(accounts.resume(login.token).ok, false);
+});
+
+test('смена ника не убивает сессию', () => {
+  assert.ok(accounts.register('nickuser', 'secret123', 'Ник').ok);
+  const login = accounts.login('nickuser', 'secret123');
+  assert.strictEqual(login.ok, true, login.reason);
+  assert.strictEqual(accounts.changeNick(db.getAccount('nickuser'), 'Ник2').account.nick, 'Ник2');
+  assert.strictEqual(accounts.resume(login.token).ok, true, 'токен жив после смены ника');
+});
+
+test('отзыв сессии доезжает до соседнего сервера через gossip', () => {
+  assert.ok(accounts.register('revuser', 'secret123', 'Отзыв').ok);
+  const token = accounts.login('revuser', 'secret123').token;
+  const oldDbPath = config.dbPath;
+  const otherPath = path.join(TMP, 'rev-gossip.sqlite3');
+  for (const suffix of ['', '-wal', '-shm', '-journal']) {
+    try { fs.rmSync(otherPath + suffix, { force: true }); } catch (_) { /* нет файла */ }
+  }
+  config.dbPath = otherPath;
+  const dbB = new Db();
+  const accountsB = new Accounts(dbB);
+  try {
+    const clusterA = new Cluster(db);
+    const clusterB = new Cluster(dbB);
+    const first = clusterA.handleGossip({ from: { server_id: 'peer-a' }, since: 0, revSince: 0 });
+    clusterB.ingest(first);
+    assert.strictEqual(accountsB.resume(token).ok, true, 'токен сначала принимают оба сервера');
+    assert.strictEqual(accounts.logout(token), true);
+    const second = clusterA.handleGossip({
+      from: { server_id: 'peer-a' },
+      since: 0,
+      revSince: Number(first.rev_sent_up_to) || 0,
+    });
+    assert.ok(second.revocations.length > 0, 'отзыв попал в следующую пачку');
+    clusterB.ingest(second);
+    assert.strictEqual(accountsB.resume(token).ok, false, 'после реплики выход действует везде');
+    assert.strictEqual(accountsB.sessionAlive(token), false);
+  } finally {
+    dbB.close();
+    config.dbPath = oldDbPath;
+    for (const suffix of ['', '-wal', '-shm', '-journal']) {
+      try { fs.rmSync(otherPath + suffix, { force: true }); } catch (_) { /* нет файла */ }
+    }
+  }
 });
 
 // ================================================================ репликация
@@ -654,6 +718,17 @@ test('gossip без поля from отклоняется', () => {
   assert.strictEqual(cluster.handleGossip(null).ok, false);
 });
 
+test('безразмерная реплика отклоняется до записи', () => {
+  const cluster = new Cluster(db);
+  const out = cluster.handleGossip({
+    from: { server_id: 'peer-big' },
+    since: 0,
+    accounts: new Array(1001).fill({}),
+    revocations: [],
+  });
+  assert.strictEqual(out.ok, false);
+});
+
 test('усечённая пачка помечается more, чтобы курсор не перепрыгнул', () => {
   const cluster = new Cluster(db);
   // Просим с курсора 0 при маленьком ACCOUNT_BATCH-эффекте:
@@ -757,6 +832,142 @@ test('повторный вход того же игрока не занимае
   const r = rooms.joinRoom(userOf('host1'), room2.code, null);
   assert.strictEqual(r.seat, 1, 'тот же игрок возвращается на своё место');
   assert.strictEqual(room2.filled(), 2, 'лишнего места не появилось');
+});
+
+test('чужой X-Forwarded-For не подменяет IP для лимитов', () => {
+  const hub = newHub();
+  const sent = [];
+  const sock = { readyState: 1, send: (x) => sent.push(x), close: () => {}, on: () => {} };
+  const ip = '198.51.100.201';
+  hub.onConnection(sock, {
+    headers: { 'x-forwarded-for': '203.0.113.99' },
+    socket: { remoteAddress: ip },
+  });
+  try {
+    assert.strictEqual(hub.sockets.get(sock).ip, ip, 'лимит и журнал идут по прямому адресу');
+  } finally {
+    hub.sockets.delete(sock);
+    hub.ipCounts.set(ip, Math.max(0, (hub.ipCounts.get(ip) || 1) - 1));
+    hub.stop();
+  }
+});
+
+test('доверенный прокси читает XFF по цепочке справа налево', () => {
+  const hub = newHub();
+  const old = config.trustedProxies;
+  config.trustedProxies = ['10.0.0.5'];
+  const sock = { readyState: 1, send: () => {}, close: () => {}, on: () => {} };
+  hub.onConnection(sock, {
+    headers: { 'x-forwarded-for': '203.0.113.44, 10.0.0.5' },
+    socket: { remoteAddress: '10.0.0.5' },
+  });
+  try {
+    assert.strictEqual(hub.sockets.get(sock).ip, '203.0.113.44');
+  } finally {
+    config.trustedProxies = old;
+    hub.sockets.delete(sock);
+    hub.ipCounts.set('203.0.113.44', Math.max(0, (hub.ipCounts.get('203.0.113.44') || 1) - 1));
+    hub.stop();
+  }
+});
+
+test('лимит входа общий на IP, а не только на сокет', () => {
+  const hub = newHub();
+  const ip = '198.51.100.202';
+  const old = config.authIpAttemptsPerMinute;
+  config.authIpAttemptsPerMinute = 2;
+  try {
+    for (let i = 0; i < 2; i += 1) {
+      const fresh = { ip, authFails: 0, authWindowStart: Date.now() };
+      assert.strictEqual(hub.allowAuth(fresh), true, `попытка ${i + 1} проходит`);
+    }
+    const reconnected = { ip, authFails: 0, authWindowStart: Date.now() };
+    assert.strictEqual(hub.allowAuth(reconnected), false, 'переподключение лимит не обнуляет');
+  } finally {
+    config.authIpAttemptsPerMinute = old;
+    hub.ipAuth.delete(ip);
+    hub.stop();
+  }
+});
+
+test('переход в другое лобби освобождает старое место', () => {
+  assert.ok(accounts.register('move1', 'secret123', 'Переход').ok);
+  assert.ok(accounts.register('move2', 'secret123', 'Переход2').ok);
+  const first = rooms.createRoom(userOf('move1'), { seats: 3, name: 'Старая' }).room;
+  assert.ok(rooms.joinRoom(userOf('move2'), first.code, null).ok);
+  first.sockets.set(0, { id: 'old-socket' });
+  const second = rooms.createRoom(userOf('move1'), { seats: 2, name: 'Новая' });
+  assert.ok(second.ok, second.reason);
+  assert.strictEqual(first.players[0], null, 'в старом лобби место свободно');
+  assert.strictEqual(first.sockets.has(0), false, 'старый сокет отвязан');
+  assert.strictEqual(rooms.byUser.get('move1'), second.room.code);
+  assert.strictEqual(second.room.filled(), 1, 'игрок только в новой комнате');
+});
+
+test('из идущей партии нельзя уйти созданием комнаты', () => {
+  assert.ok(accounts.register('solo1', 'secret123', 'Партия1').ok);
+  assert.ok(accounts.register('solo2', 'secret123', 'Партия2').ok);
+  assert.ok(accounts.register('spare1', 'secret123', 'Запас').ok);
+  const arena = rooms.createRoom(userOf('solo1'), { seats: 2, require30: false }).room;
+  assert.ok(rooms.joinRoom(userOf('solo2'), arena.code, null).ok, 'второй игрок запускает партию');
+  assert.strictEqual(arena.state, 'playing');
+  const blocked = rooms.createRoom(userOf('solo1'), { seats: 2, name: 'Побег' });
+  assert.strictEqual(blocked.ok, false, 'вторая комната не создана');
+  assert.ok(String(blocked.reason).includes('парти'), `не та причина: ${blocked.reason}`);
+  const lobby = rooms.createRoom(userOf('spare1'), { seats: 2, name: 'Лобби' }).room;
+  const joined = rooms.joinRoom(userOf('solo1'), lobby.code, null);
+  assert.strictEqual(joined.ok, false, 'вход в другое лобби из партии запрещён');
+  assert.strictEqual(rooms.byUser.get('solo1'), arena.code, 'привязка осталась к идущей партии');
+});
+
+test('быстрый матч не сажает игрока, уже сидящего в комнате', () => {
+  const before = rooms.rooms.size;
+  const q = {
+    key: '3:0-test',
+    seats: 3,
+    require30: false,
+    waiting: ['solo1', userOf('spare1').id],
+    timer: null,
+    createdMs: Date.now(),
+  };
+  rooms.quick.set(q.key, q);
+  try {
+    assert.strictEqual(rooms._tryFormQuick(q), null, 'без двух свободных мест партия не собирается');
+    assert.strictEqual(rooms.rooms.size, before, 'лишняя комната не создана');
+  } finally {
+    rooms.quick.delete(q.key);
+  }
+});
+
+test('logout отзывает сессию соединения, а не чужой токен из сообщения', () => {
+  assert.ok(accounts.register('sess1', 'secret123', 'Сессия1').ok);
+  assert.ok(accounts.register('sess2', 'secret123', 'Сессия2').ok);
+  const hub = newHub();
+  const room = playingRoom('sess1', 'sess2');
+  room.game.current = 0;
+  const a = fakeSock(hub, room, 0, userOf('sess1'));
+  const b = fakeSock(hub, room, 1, userOf('sess2'));
+  const own = a.ctx.token;
+  hub.onMessage(a.ctx, Buffer.from(JSON.stringify({ t: C2S.LOGOUT, token: 'чужой-токен' })));
+  const done = a.msgs[a.msgs.length - 1];
+  assert.strictEqual(done.t, S2C.AUTH_ERR);
+  assert.strictEqual(done.reason, 'Вы вышли');
+  assert.strictEqual(accounts.sessionAlive(own), false, 'активная сессия отозвана');
+  assert.strictEqual(db.revokedSession(tokenHash('чужой-токен')), null, 'чужой токен не тронут');
+  // Открытое соединение соперника тоже проверяется: внешний отзыв (например,
+  // с другого сервера) закрывает его на следующем сообщении.
+  const c = fakeSock(hub, room, 1, userOf('sess2'));
+  accounts.logout(c.ctx.token);
+  hub.onMessage(c.ctx, Buffer.from(JSON.stringify({
+    t: C2S.GAME_DRAFT,
+    rows: [{ id: 1, tiles: room.game.players[1].handIds.slice(0, 1) }],
+  })));
+  const rejected = c.msgs[c.msgs.length - 1];
+  assert.strictEqual(rejected.t, S2C.AUTH_ERR);
+  assert.strictEqual(rejected.reason, 'Сессия недействительна');
+  assert.strictEqual(b.msgs.filter((m) => m.t === S2C.GAME_DRAFT).length, 0,
+    'отозванный сокет ничего не разослал');
+  hub.stop();
 });
 
 test('незанятые места партия добирает ботами при старте', () => {
@@ -1277,10 +1488,12 @@ test('в свой ход взятие из колоды проходит', () =>
 // ---- обрывы
 group('== Обрывы связи ==');
 
-const room3 = rooms.createRoom(userOf('host1'), { seats: 2, require30: false }).room;
-rooms.joinRoom(userOf('guest1'), room3.code, null);
+assert.ok(accounts.register('room3a', 'secret123', 'Обрыв1').ok);
+assert.ok(accounts.register('room3b', 'secret123', 'Обрыв2').ok);
+const room3 = rooms.createRoom(userOf('room3a'), { seats: 2, require30: false }).room;
+rooms.joinRoom(userOf('room3b'), room3.code, null);
 assert.strictEqual(room3.state, 'playing', 'второй игрок заполняет комнату и старт идёт сам');
-const u1 = userOf('guest1');
+const u1 = userOf('room3b');
 rooms.onDisconnect(u1);
 test('после обрыва в партии место НЕ освобождается сразу', () => {
   assert.strictEqual(room3.state, 'playing');
@@ -1288,9 +1501,9 @@ test('после обрыва в партии место НЕ освобожда
   assert.ok(room3.paused.has(1), 'комната на паузе');
   assert.ok(room3.isPaused());
 });
-
 test('игра заблокирована, пока кто-то ждёт переподключения', () => {
-  const r = rooms.commitTurn(userOf('host1'), [{ op: 'place', tile: room3.game.players[0].handIds[0], to: 'n0', index: 0 }]);
+  const r = rooms.commitTurn(userOf('room3a'),
+    [{ op: 'place', tile: room3.game.players[0].handIds[0], to: 'n0', index: 0 }]);
   assert.strictEqual(r.ok, false);
   assert.ok(r.reason.includes('переподключения'), r.reason);
 });
@@ -1319,7 +1532,7 @@ test('по истечении срока вдвоём — место освоб�
 });
 
 test('в ожидании второго ход любого заблокирован понятной причиной', () => {
-  const r = rooms.commitTurn(userOf('host1'),
+  const r = rooms.commitTurn(userOf('room3a'),
     [{ op: 'place', tile: room3.game.players[0].handIds[0], to: 'n0', index: 0 }]);
   assert.strictEqual(r.ok, false);
   assert.ok(r.reason.includes('второго'), r.reason);
@@ -1395,11 +1608,13 @@ test('полный выход из двоих — не удаление, а ож
 });
 
 test('в лобби обрыв освобождает место сразу', () => {
-  const room4 = rooms.createRoom(userOf('host1'), { seats: 3 }).room;
-  rooms.joinRoom(userOf('guest1'), room4.code, null);
+  assert.ok(accounts.register('room4a', 'secret123', 'Лобби1').ok);
+  assert.ok(accounts.register('room4b', 'secret123', 'Лобби2').ok);
+  const room4 = rooms.createRoom(userOf('room4a'), { seats: 3 }).room;
+  rooms.joinRoom(userOf('room4b'), room4.code, null);
   assert.strictEqual(room4.filled(), 2);
   assert.strictEqual(room4.state, 'lobby', 'неполная комната не стартует');
-  rooms.onDisconnect(userOf('guest1'));
+  rooms.onDisconnect(userOf('room4b'));
   assert.strictEqual(room4.filled(), 1, 'в лобби ждать нечего — место свободно');
 });
 
@@ -1470,10 +1685,12 @@ test('публичное представление аккаунта не сод
 });
 
 test('вход в комнату с неверным паролем отклоняется', () => {
-  const protectedRoom = rooms.createRoom(userOf('host1'), { seats: 2, password: 'код' }).room;
-  const bad = rooms.joinRoom(userOf('guest1'), protectedRoom.code, 'не-код');
+  assert.ok(accounts.register('roomp1', 'secret123', 'Пароль1').ok);
+  assert.ok(accounts.register('roomp2', 'secret123', 'Пароль2').ok);
+  const protectedRoom = rooms.createRoom(userOf('roomp1'), { seats: 2, password: 'код' }).room;
+  const bad = rooms.joinRoom(userOf('roomp2'), protectedRoom.code, 'не-код');
   assert.strictEqual(bad.ok, false);
-  const good = rooms.joinRoom(userOf('guest1'), protectedRoom.code, 'код');
+  const good = rooms.joinRoom(userOf('roomp2'), protectedRoom.code, 'код');
   assert.strictEqual(good.ok, true, good.reason);
 });
 
@@ -1513,6 +1730,7 @@ function fakeSock(hub, room, seat, user) {
     socket: sock,
     ip: '127.0.0.1',
     user,
+    token: hub.accounts.issue(db.getAccount(user.id)),
     roomCode: room.code,
     seat,
     alive: true,
@@ -1740,6 +1958,22 @@ test('превью видов new/clear/back несёт только своё', 
   hub.stop();
 });
 
+test('превью принимает только от текущего игрока', () => {
+  assert.ok(accounts.register('pk13', 'secret123', 'Превью13').ok);
+  assert.ok(accounts.register('pk14', 'secret123', 'Превью14').ok);
+  const hub = newHub();
+  const room = playingRoom('pk13', 'pk14');
+  const b = fakeSock(hub, room, 1, userOf('pk14'));
+  room.game.current = 1;
+  const a = fakeSock(hub, room, 0, userOf('pk13'));
+  hub.onMessage(a.ctx, Buffer.from(JSON.stringify({
+    t: C2S.GAME_PEEK, tile: 9, kind: 'into', row: 0, index: 1,
+  })));
+  assert.strictEqual(b.msgs.filter((m) => m.t === S2C.GAME_PEEK).length, 0,
+    'превью неходящего места не пересылается');
+  hub.stop();
+});
+
 test('мусор в превью отбрасывается молча', () => {
   const hub = newHub();
   const room = playingRoom('pk5', 'pk6');
@@ -1748,7 +1982,8 @@ test('мусор в превью отбрасывается молча', () => {
   const bad = [
     { tile: 5, kind: 'bogus' },
     { tile: -1, kind: 'clear' },
-    { tile: CATALOG_SIZE, kind: 'clear' },
+    { tile: 0, kind: 'clear' },
+    { tile: catalog.TOTAL + 1, kind: 'clear' },
     { tile: 1.5, kind: 'clear' },
     { tile: '7', kind: 'clear' },
     { tile: 5, kind: 'into', row: 0 }, // без index
@@ -1764,17 +1999,21 @@ test('мусор в превью отбрасывается молча', () => {
   assert.strictEqual(b.msgs.filter((m) => m.t === S2C.GAME_PEEK).length, 0,
     'ничего из мусора не должно было пройти');
   // А валидное проходит — доказывает, что молчание выше из-за проверок.
-  hub.onMessage(a.ctx, Buffer.from(JSON.stringify({ t: C2S.GAME_PEEK, tile: 5, kind: 'clear' })));
+  // Граничный номер catalog.TOTAL тоже валиден: отсев идёт по каталогу, а не
+  // по устаревшему числовому диапазону.
+  hub.onMessage(a.ctx, Buffer.from(JSON.stringify({ t: C2S.GAME_PEEK, tile: catalog.TOTAL, kind: 'clear' })));
   assert.strictEqual(b.msgs.filter((m) => m.t === S2C.GAME_PEEK).length, 1,
     'валидное превью проходит');
   hub.stop();
 });
 
 test('превью чаще раза в 40 мс не проходит (троттлинг)', () => {
+  assert.ok(accounts.register('pk11', 'secret123', 'Превью11').ok);
+  assert.ok(accounts.register('pk12', 'secret123', 'Превью12').ok);
   const hub = newHub();
-  const room = playingRoom('pk7', 'pk8');
-  const a = fakeSock(hub, room, 0, userOf('pk7'));
-  const b = fakeSock(hub, room, 1, userOf('pk8'));
+  const room = playingRoom('pk11', 'pk12');
+  const a = fakeSock(hub, room, 0, userOf('pk11'));
+  const b = fakeSock(hub, room, 1, userOf('pk12'));
   const one = () => hub.onMessage(a.ctx,
     Buffer.from(JSON.stringify({ t: C2S.GAME_PEEK, tile: 9, kind: 'into', row: 0, index: 1 })));
   one();
@@ -1815,7 +2054,9 @@ test('превью от сокета вне комнаты игнорирует�
   const msgs = [];
   const sock = { readyState: 1, send: (payload) => msgs.push(JSON.parse(payload)) };
   const ctx = {
-    socket: sock, ip: '127.0.0.1', user: userOf('pk9'), roomCode: null, seat: undefined,
+    socket: sock, ip: '127.0.0.1', user: userOf('pk9'),
+    token: hub.accounts.issue(db.getAccount('pk9')),
+    roomCode: null, seat: undefined,
     alive: true, observer: false, authFails: 0, authWindowStart: Date.now(),
   };
   hub.sockets.set(sock, ctx);
@@ -1841,7 +2082,8 @@ test('черновик уходит сопернику целиком и не в
   room.game.current = 0;
   const a = fakeSock(hub, room, 0, userOf('dr1'));
   const b = fakeSock(hub, room, 1, userOf('dr2'));
-  const rows = [{ id: 1, tiles: [3, 7] }, { id: 0, tiles: [12, 45] }];
+  const owned = room.game.players[0].handIds.slice(0, 2);
+  const rows = [{ id: 1, tiles: owned.slice(0, 1) }, { id: 0, tiles: owned.slice(1, 2) }];
   hub.onMessage(a.ctx, Buffer.from(JSON.stringify({ t: C2S.GAME_DRAFT, rows })));
   assert.strictEqual(a.msgs.filter((m) => m.t === S2C.GAME_DRAFT).length, 0,
     'автор своего черновика не видит');
@@ -1859,18 +2101,36 @@ test('черновик принимается только от текущего
   room.game.current = 1;
   // Ходит соперник: черновик от seat0 — гонка или враньё, рисовать его
   // нельзя, столы перепутались бы у всех.
+  const owned = room.game.players[0].handIds.slice(0, 1);
   hub.onMessage(a.ctx, Buffer.from(JSON.stringify({
-    t: C2S.GAME_DRAFT, rows: [{ id: 1, tiles: [5] }],
+    t: C2S.GAME_DRAFT, rows: [{ id: 1, tiles: owned }],
   })));
   assert.strictEqual(b.msgs.filter((m) => m.t === S2C.GAME_DRAFT).length, 0,
     'от не-текущего игрока не проходит');
   // Ходит seat0 — то же сообщение проходит.
   room.game.current = 0;
   hub.onMessage(a.ctx, Buffer.from(JSON.stringify({
-    t: C2S.GAME_DRAFT, rows: [{ id: 1, tiles: [5] }],
+    t: C2S.GAME_DRAFT, rows: [{ id: 1, tiles: owned }],
   })));
   assert.strictEqual(b.msgs.filter((m) => m.t === S2C.GAME_DRAFT).length, 1,
     'от текущего игрока проходит');
+  hub.stop();
+});
+
+test('черновик не показывает чужие скрытые фишки', () => {
+  assert.ok(accounts.register('dr9', 'secret123', 'Черновик9').ok);
+  assert.ok(accounts.register('dr10', 'secret123', 'Черновик10').ok);
+  const hub = newHub();
+  const room = playingRoom('dr9', 'dr10');
+  room.game.current = 0;
+  const a = fakeSock(hub, room, 0, userOf('dr9'));
+  const b = fakeSock(hub, room, 1, userOf('dr10'));
+  const foreign = room.game.players[1].handIds[0];
+  hub.onMessage(a.ctx, Buffer.from(JSON.stringify({
+    t: C2S.GAME_DRAFT, rows: [{ id: 1, tiles: [foreign] }],
+  })));
+  assert.strictEqual(b.msgs.filter((m) => m.t === S2C.GAME_DRAFT).length, 0,
+    'чужая скрытая фишка не должна уходить в чужой экран');
   hub.stop();
 });
 
@@ -1880,8 +2140,9 @@ test('черновик чаще раза в 40 мс не проходит (тр�
   room.game.current = 0;
   const a = fakeSock(hub, room, 0, userOf('dr5'));
   const b = fakeSock(hub, room, 1, userOf('dr6'));
+  const owned = room.game.players[0].handIds.slice(0, 1);
   const one = () => hub.onMessage(a.ctx, Buffer.from(JSON.stringify({
-    t: C2S.GAME_DRAFT, rows: [{ id: 1, tiles: [9] }],
+    t: C2S.GAME_DRAFT, rows: [{ id: 1, tiles: owned }],
   })));
   one();
   assert.strictEqual(b.msgs.filter((m) => m.t === S2C.GAME_DRAFT).length, 1,
@@ -1902,7 +2163,7 @@ test('мусор в черновике отбрасывается молча', (
   const manyRows = Array.from({ length: 65 }, (_, i) => ({ id: i, tiles: [1] }));
   const manyTiles = [{
     id: 1,
-    tiles: Array.from({ length: 201 }, (_, i) => i % CATALOG_SIZE),
+    tiles: Array.from({ length: 201 }, (_, i) => i % (catalog.TOTAL + 1)),
   }];
   const bad = [
     {},
@@ -1915,7 +2176,8 @@ test('мусор в черновике отбрасывается молча', (
     { rows: [{ id: 10001, tiles: [1] }] },
     { rows: [{ id: 1, tiles: 'x' }] },
     { rows: [{ id: 1, tiles: [-1] }] },
-    { rows: [{ id: 1, tiles: [CATALOG_SIZE] }] },
+    { rows: [{ id: 1, tiles: [0] }] },
+    { rows: [{ id: 1, tiles: [catalog.TOTAL + 1] }] },
     { rows: [{ id: 1, tiles: [1.5] }] },
     { rows: [{ id: 1, tiles: ['7'] }] },
     { rows: manyRows },
@@ -1927,8 +2189,11 @@ test('мусор в черновике отбрасывается молча', (
   assert.strictEqual(b.msgs.filter((m) => m.t === S2C.GAME_DRAFT).length, 0,
     'ничего из мусора не должно было пройти');
   // А валидное проходит — доказывает, что молчание выше из-за проверок.
+  // Граничный номер catalog.TOTAL тоже валиден, если он есть в руке автора.
+  const owned = room.game.players[0].handIds;
+  if (!owned.includes(catalog.TOTAL)) owned.push(catalog.TOTAL);
   hub.onMessage(a.ctx, Buffer.from(JSON.stringify({
-    t: C2S.GAME_DRAFT, rows: [{ id: 2, tiles: [7, 7] }],
+    t: C2S.GAME_DRAFT, rows: [{ id: 2, tiles: [catalog.TOTAL] }],
   })));
   assert.strictEqual(b.msgs.filter((m) => m.t === S2C.GAME_DRAFT).length, 1,
     'валидный черновик проходит');
@@ -1936,10 +2201,11 @@ test('мусор в черновике отбрасывается молча', (
 });
 
 test('черновик вне партии игнорируется', () => {
+  assert.ok(accounts.register('drlobby', 'secret123', 'ЧерновикЛобби').ok);
   const hub = newHub();
   // Лобби: партия ещё не началась.
-  const lobby = rooms.createRoom(userOf('dr1'), { seats: 2, require30: false }).room;
-  const s0 = fakeSock(hub, lobby, 0, userOf('dr1'));
+  const lobby = rooms.createRoom(userOf('drlobby'), { seats: 2, require30: false }).room;
+  const s0 = fakeSock(hub, lobby, 0, userOf('drlobby'));
   hub.onMessage(s0.ctx, Buffer.from(JSON.stringify({
     t: C2S.GAME_DRAFT, rows: [{ id: 1, tiles: [1] }],
   })));
@@ -1947,6 +2213,7 @@ test('черновик вне партии игнорируется', () => {
   // Сокет вообще вне комнаты.
   const ctx = {
     socket: { readyState: 1, send: () => {} }, ip: '127.0.0.1', user: userOf('dr2'),
+    token: accounts.issue(db.getAccount('dr2')),
     roomCode: null, seat: undefined, alive: true, observer: false,
     authFails: 0, authWindowStart: Date.now(),
   };

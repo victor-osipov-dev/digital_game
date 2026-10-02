@@ -3,9 +3,10 @@
 const { config } = require('./config');
 const log = require('./log');
 
-// Реплицируются ровно две вещи:
+// Реплицируются ровно три вещи:
 //   1) реестр живых серверов кластера;
-//   2) аккаунты (логин, ник, хеш пароля).
+//   2) аккаунты (логин, ник, хеш пароля);
+//   3) отзывы сессий (хеши токенов).
 // Игровое состояние не реплицируется принципиально: партия живёт в памяти
 // одного сервера и гибнет вместе с ним. Так и было задумано.
 //
@@ -14,6 +15,11 @@ const log = require('./log');
 // пересылать одно и то же повторно.
 
 const ACCOUNT_BATCH = 200;
+const REVOCATION_BATCH = 200;
+// Даже подписанный сосед не должен присылать безразмерные массивы: тело и
+// так ограничено 8 МБ, но явный предел защищает базу от раздувания одной
+// аномальной репликой.
+const MAX_INBOUND_ROWS = 1000;
 
 function signBody(raw) {
   const crypto = require('crypto');
@@ -96,9 +102,11 @@ class Cluster {
   async talk(peer) {
     const state = this.db.getPeerState(peer.url);
     const since = state ? state.last_seq : 0;
+    const revSince = state ? Number(state.rev_last_seq) || 0 : 0;
     const payload = {
       from: this.selfRecord(),
       since,
+      revSince,
       accounts: this.db.outboxSince(since, ACCOUNT_BATCH).map(rowToAccount),
     };
     const body = JSON.stringify(payload);
@@ -150,6 +158,19 @@ class Cluster {
       this.db.setPeerState(peer.url, Number(reply.sent_up_to) || 0, true);
     } else {
       this.db.setPeerState(peer.url, since, true);
+    }
+    // Тот же принцип для отзывов сессий: у них отдельный курсор.
+    const peerState = this.db.getPeerState(peer.url) || {};
+    if (!reply.rev_more) {
+      this.db.setPeerState(peer.url, Number(peerState.last_seq) || 0, false, {
+        lastSeq: Number(reply.rev_sent_up_to) || revSince,
+        pulled: true,
+      });
+    } else {
+      this.db.setPeerState(peer.url, Number(peerState.last_seq) || 0, false, {
+        lastSeq: revSince,
+        pulled: true,
+      });
     }
     this.db.upsertClusterServer({
       server_id: reply.from.server_id,
@@ -205,16 +226,26 @@ class Cluster {
         else if (how === 'updated') updated += 1;
       }
     }
-    if (inserted > 0 || updated > 0) {
-      log.info(`репликация от ${reply.from.server_id}: +${inserted} новых, обновлено ${updated}`);
+    let revoked = 0;
+    if (Array.isArray(reply.revocations)) {
+      for (const rev of reply.revocations) {
+        if (this.db.applyRemoteRevocation(rev) === 'inserted') revoked += 1;
+      }
     }
-    return { inserted, updated };
+    if (inserted > 0 || updated > 0 || revoked > 0) {
+      log.info(`репликация от ${reply.from.server_id}: +${inserted} новых, обновлено ${updated}, отозвано сессий ${revoked}`);
+    }
+    return { inserted, updated, revoked };
   }
 
   /** Разбор входящего /cluster/gossip. Возвращает ответ для соседа. */
   handleGossip(body) {
     if (!body || typeof body !== 'object') return { ok: false, reason: 'bad body' };
     if (!body.from || !body.from.server_id) return { ok: false, reason: 'bad from' };
+    if ((Array.isArray(body.accounts) && body.accounts.length > MAX_INBOUND_ROWS)
+      || (Array.isArray(body.revocations) && body.revocations.length > MAX_INBOUND_ROWS)) {
+      return { ok: false, reason: 'batch too large' };
+    }
     // Мы должны знать и про себя: сосед получит наш реестр и увидит нас.
     this.announceSelf();
     this.ingest(body);
@@ -225,12 +256,23 @@ class Cluster {
     const since = Number(body.since) || 0;
     const batch = this.db.outboxSince(since, ACCOUNT_BATCH);
     const sentUpTo = batch.length > 0 ? Number(batch[batch.length - 1].seq) : since;
+    const revSince = Number(body.revSince) || 0;
+    const revBatch = this.db.revokedSince(revSince, REVOCATION_BATCH);
+    const revSentUpTo = revBatch.length > 0 ? Number(revBatch[revBatch.length - 1].seq) : revSince;
     return {
       ok: true,
       from: this.selfRecord(),
       sent_up_to: sentUpTo,
       more: batch.length === ACCOUNT_BATCH,
       accounts: batch.map(rowToAccount),
+      rev_sent_up_to: revSentUpTo,
+      rev_more: revBatch.length === REVOCATION_BATCH,
+      revocations: revBatch.map((row) => ({
+        token_hash: row.token_hash,
+        login_ci: row.login_ci,
+        revoked_ms: row.revoked_ms,
+        expires_ms: row.expires_ms,
+      })),
       servers: this.db.listClusterServers(),
     };
   }
@@ -266,6 +308,7 @@ function rowToAccount(row) {
     origin: row.origin,
     created_ms: row.created_ms,
     updated_ms: row.updated_ms,
+    session_epoch: Number(row.session_epoch) || 0,
   };
 }
 

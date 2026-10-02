@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS accounts (
   origin       TEXT NOT NULL,             -- server_id, который принял регистрацию
   created_ms   INTEGER NOT NULL,
   updated_ms   INTEGER NOT NULL,
+  session_epoch INTEGER NOT NULL DEFAULT 0, -- растёт только при смене пароля
   last_seen_ms INTEGER NOT NULL DEFAULT 0,
   games        INTEGER NOT NULL DEFAULT 0,
   wins         INTEGER NOT NULL DEFAULT 0
@@ -58,6 +59,25 @@ CREATE TABLE IF NOT EXISTS sessions (
   last_seen_ms INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_login ON sessions(login_ci);
+
+-- Отзыв конкретных сессий. Сессии по кластеру не реплицируются, а выход
+-- обязан работать на всех серверах, поэтому разносим именно факты отзыва.
+CREATE TABLE IF NOT EXISTS revoked_sessions (
+  token_hash   TEXT PRIMARY KEY,
+  login_ci     TEXT NOT NULL,
+  revoked_ms   INTEGER NOT NULL,
+  expires_ms   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_revoked_sessions_login ON revoked_sessions(login_ci);
+
+-- Журнал исходящих отзывов для соседей: курсор отдельный от аккаунтов.
+CREATE TABLE IF NOT EXISTS revocation_outbox (
+  seq          INTEGER PRIMARY KEY AUTOINCREMENT,
+  token_hash   TEXT NOT NULL,
+  login_ci     TEXT NOT NULL,
+  revoked_ms   INTEGER NOT NULL,
+  expires_ms   INTEGER NOT NULL
+);
 `;
 
 class Db {
@@ -69,7 +89,18 @@ class Db {
     this.db.pragma('synchronous = NORMAL');
     this.db.pragma('busy_timeout = 5000');
     this.db.exec(SCHEMA);
+    this._ensureColumn('peer_state', 'rev_last_seq', 'INTEGER NOT NULL DEFAULT 0');
+    this._ensureColumn('peer_state', 'rev_last_pull_ms', 'INTEGER NOT NULL DEFAULT 0');
+    this._ensureColumn('accounts', 'session_epoch', 'INTEGER NOT NULL DEFAULT 0');
     log.info(`sqlite готов: ${config.dbPath}`);
+  }
+
+  _ensureColumn(table, column, type) {
+    try {
+      this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    } catch (e) {
+      if (!/duplicate column name/i.test(String((e && e.message) || e))) throw e;
+    }
   }
 
   // ------------------------------------------------------------ аккаунты
@@ -118,6 +149,24 @@ class Db {
     return this.getAccount(loginCi);
   }
 
+  // Смена пароля двигает и updated_ms, и эпоху сессий: все токены,
+  // выданные до смены, обязаны умереть на всех серверах. Смена ника epoch
+  // не трогает, чтобы не выкидывать игрока из игры сменой подписи.
+  updateCredentials(loginCi, pwdHash) {
+    const cur = this.getAccount(loginCi);
+    if (!cur) return null;
+    const now = Math.max(Date.now(), cur.updated_ms + 1);
+    const tx = this.db.transaction(() => {
+      this.db.prepare(
+        'UPDATE accounts SET pwd_hash = ?, session_epoch = session_epoch + 1, updated_ms = ? WHERE login_ci = ?',
+      ).run(pwdHash, now, loginCi);
+      this.db.prepare('INSERT INTO outbox (login_ci, created_ms) VALUES (?, ?)')
+        .run(loginCi, now);
+    });
+    tx();
+    return this.getAccount(loginCi);
+  }
+
   touchAccount(loginCi) {
     this.db.prepare('UPDATE accounts SET last_seen_ms = ? WHERE login_ci = ?')
       .run(Date.now(), loginCi);
@@ -148,11 +197,11 @@ class Db {
     const cur = this.getAccount(remote.login_ci);
     if (!cur) {
       this.db.prepare(`
-        INSERT INTO accounts (login_ci, login, nick, pwd_hash, origin, created_ms, updated_ms, last_seen_ms)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+        INSERT INTO accounts (login_ci, login, nick, pwd_hash, origin, created_ms, updated_ms, session_epoch, last_seen_ms)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
       `).run(
         remote.login_ci, remote.login, remote.nick, remote.pwd_hash,
-        remote.origin, remote.created_ms, remote.updated_ms,
+        remote.origin, remote.created_ms, remote.updated_ms, Number(remote.session_epoch) || 0,
       );
       this.db.prepare('INSERT INTO outbox (login_ci, created_ms) VALUES (?, ?)')
         .run(remote.login_ci, Number(remote.updated_ms));
@@ -161,8 +210,11 @@ class Db {
     if (String(remote.origin) !== String(cur.origin)) return 'not-owner';
     if (Number(remote.updated_ms) > Number(cur.updated_ms)) {
       this.db.prepare(
-        'UPDATE accounts SET login = ?, nick = ?, pwd_hash = ?, updated_ms = ? WHERE login_ci = ?',
-      ).run(remote.login, remote.nick, remote.pwd_hash, Number(remote.updated_ms), remote.login_ci);
+        'UPDATE accounts SET login = ?, nick = ?, pwd_hash = ?, updated_ms = ?, session_epoch = ? WHERE login_ci = ?',
+      ).run(
+        remote.login, remote.nick, remote.pwd_hash, Number(remote.updated_ms),
+        Number(remote.session_epoch) || 0, remote.login_ci,
+      );
       this.db.prepare('INSERT INTO outbox (login_ci, created_ms) VALUES (?, ?)')
         .run(remote.login_ci, Number(remote.updated_ms));
       return 'updated';
@@ -189,16 +241,23 @@ class Db {
     return this.db.prepare('SELECT * FROM peer_state WHERE peer_id = ?').get(peerId) || null;
   }
 
-  setPeerState(peerId, lastSeq, pulled) {
+  setPeerState(peerId, lastSeq, pulled, rev = {}) {
     const now = Date.now();
+    const cur = this.getPeerState(peerId) || {};
+    const revSeq = rev.lastSeq === undefined ? Number(cur.rev_last_seq) || 0 : rev.lastSeq;
+    const revPull = rev.pulled ? now : Number(cur.rev_last_pull_ms) || 0;
     this.db.prepare(`
-      INSERT INTO peer_state (peer_id, last_seq, last_pull_ms, last_seen_ms)
-      VALUES (?, ?, ?, ?)
+      INSERT INTO peer_state (
+        peer_id, last_seq, last_pull_ms, last_seen_ms, rev_last_seq, rev_last_pull_ms
+      )
+      VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT(peer_id) DO UPDATE SET
         last_seq = excluded.last_seq,
         last_pull_ms = excluded.last_pull_ms,
-        last_seen_ms = excluded.last_seen_ms
-    `).run(peerId, lastSeq, pulled ? now : 0, now);
+        last_seen_ms = excluded.last_seen_ms,
+        rev_last_seq = excluded.rev_last_seq,
+        rev_last_pull_ms = excluded.rev_last_pull_ms
+    `).run(peerId, lastSeq, pulled ? now : 0, now, revSeq, revPull);
   }
 
   // ------------------------------------------------------------ сессии
@@ -228,6 +287,74 @@ class Db {
 
   dropSessionsOf(loginCi) {
     this.db.prepare('DELETE FROM sessions WHERE login_ci = ?').run(loginCi);
+  }
+
+  revokeSession(tokenHash, loginCi, revokedMs = Date.now(), expiresMs = 0) {
+    const tx = this.db.transaction(() => {
+      const info = this.db.prepare(`
+        INSERT INTO revoked_sessions (token_hash, login_ci, revoked_ms, expires_ms)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(token_hash) DO NOTHING
+      `).run(tokenHash, loginCi, revokedMs, expiresMs);
+      if (info.changes > 0) {
+        this.db.prepare(`
+          INSERT INTO revocation_outbox (token_hash, login_ci, revoked_ms, expires_ms)
+          VALUES (?, ?, ?, ?)
+        `).run(tokenHash, loginCi, revokedMs, expiresMs);
+      }
+      return info.changes > 0;
+    });
+    return tx();
+  }
+
+  revokedSession(tokenHash, now = Date.now()) {
+    const row = this.db.prepare('SELECT * FROM revoked_sessions WHERE token_hash = ?').get(tokenHash);
+    if (!row) return null;
+    if (Number(row.expires_ms) <= now) {
+      this.db.prepare('DELETE FROM revoked_sessions WHERE token_hash = ?').run(tokenHash);
+      return null;
+    }
+    return row;
+  }
+
+  revokedSince(seq, limit) {
+    this.pruneRevokedSessions();
+    return this.db.prepare(`
+      SELECT seq, token_hash, login_ci, revoked_ms, expires_ms
+      FROM revocation_outbox
+      WHERE seq > ? ORDER BY seq ASC LIMIT ?
+    `).all(seq, limit);
+  }
+
+  revocationSeq() {
+    const r = this.db.prepare('SELECT COALESCE(MAX(seq), 0) AS s FROM revocation_outbox').get();
+    return r.s;
+  }
+
+  applyRemoteRevocation(remote, now = Date.now()) {
+    if (!remote || typeof remote.token_hash !== 'string' || typeof remote.login_ci !== 'string') return 'skip';
+    const revokedMs = Number(remote.revoked_ms);
+    const expiresMs = Number(remote.expires_ms);
+    if (!Number.isFinite(revokedMs) || !Number.isFinite(expiresMs)) return 'skip';
+    if (expiresMs <= now) return 'expired';
+    const info = this.db.prepare(`
+      INSERT INTO revoked_sessions (token_hash, login_ci, revoked_ms, expires_ms)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(token_hash) DO NOTHING
+    `).run(remote.token_hash, remote.login_ci, revokedMs, expiresMs);
+    if (info.changes === 0) return 'duplicate';
+    this.db.prepare(`
+      INSERT INTO revocation_outbox (token_hash, login_ci, revoked_ms, expires_ms)
+      VALUES (?, ?, ?, ?)
+    `).run(remote.token_hash, remote.login_ci, revokedMs, expiresMs);
+    return 'inserted';
+  }
+
+  pruneRevokedSessions(now = Date.now()) {
+    this.db.prepare('DELETE FROM revoked_sessions WHERE expires_ms <= ?').run(now);
+    // Просроченные записи не нужны и в журнале: токен с истёкшим exp всё
+    // равно не пройдёт verifyToken, а журнал иначе рос бы бесконечно.
+    this.db.prepare('DELETE FROM revocation_outbox WHERE expires_ms <= ?').run(now);
   }
 
   pruneSessions() {

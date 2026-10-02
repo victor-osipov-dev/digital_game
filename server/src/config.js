@@ -77,6 +77,16 @@ const config = {
   maxRooms: int('DG_MAX_ROOMS', 60),
   maxSocketsPerIp: int('DG_MAX_SOCKETS_PER_IP', 12),
   authAttemptsPerMinute: int('DG_AUTH_ATTEMPTS_PER_MIN', 20),
+  // Суммарные попытки входа с одного доверенного IP за минуту. Ограничение
+  // именно по IP, а не по сокету: переподключение создаёт новый контекст и
+  // иначе обнуляло бы счётчик.
+  authIpAttemptsPerMinute: int('DG_AUTH_IP_ATTEMPTS_PER_MIN', 60),
+  // X-Forwarded-For доверяем только перечисленным прокси. По умолчанию
+  // список пуст, и для лимитов/журнала берётся прямой адрес сокета.
+  trustedProxies: str('DG_TRUSTED_PROXIES', '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s !== ''),
   // 1 «unit» scrypt = 16 КиБ. Для слабого 1 vCPU держим 16 (128 КиБ).
   scryptN: int('DG_SCRYPT_N', 16384),
   scryptR: int('DG_SCRYPT_R', 8),
