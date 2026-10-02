@@ -20,6 +20,11 @@ const POOL_SIZE = 14; // сколько кандидатов рассматри�
 const COMBO_MAX = 3; // максимум групп в одном ходе
 const MAX_NEW = 360; // потолок кандидатов «новая серия/набор»
 const MAX_EXT = 400; // потолок кандидатов «достроить ряд»
+// Бережение джокеров: ход с джокером проигрывает в цене столько очков.
+// Джокер закрывает любую дырку, поэтому его лучше отложить, пока есть ход
+// без него. Штраф не абсолютный: если джокер даёт заметно больше очков
+// или опустошает руку, он всё равно сыграет.
+const JOKER_PENALTY = 30;
 
 /**
  * Ход бота для состояния g (авторитетный GameState). Возвращает
@@ -105,11 +110,18 @@ function better(a, b) {
   if (!b) return true;
   if (a.win !== b.win) return a.win;
   if (a.added !== b.added) return a.added > b.added;
-  return a.points > b.points;
+  // Одинаковые рука и очки — предпочитаем ход, который не тратит джокер.
+  const pa = a.points - a.jokers * JOKER_PENALTY;
+  const pb = b.points - b.jokers * JOKER_PENALTY;
+  return pa > pb;
 }
 
 function strength(c) {
-  return c.placed * 1000 + c.points;
+  return c.placed * 1000 + c.points - c.jokers * JOKER_PENALTY;
+}
+
+function countJokers(tiles) {
+  return tiles.reduce((n, t) => n + (t.is_joker ? 1 : 0), 0);
 }
 
 function conflict(a, b) {
@@ -220,6 +232,7 @@ function collectCandidates(g, handIds) {
         placed: addTiles.length,
         points: pts,
         usedTiles: new Set(addTiles.map((t) => t.id)),
+        jokers: countJokers(addTiles),
       });
     }
   }
@@ -229,7 +242,10 @@ function collectCandidates(g, handIds) {
 function mkNew(tiles) {
   const t = tiles.map((id) => catalog.BY_ID.get(id));
   if (!Rules.validateRow(t).ok) return null;
-  return { kind: 'new', rowId: 0, tiles, placed: tiles.length, points: Rules.rowPoints(t), usedTiles: new Set(tiles) };
+  return {
+    kind: 'new', rowId: 0, tiles, placed: tiles.length,
+    points: Rules.rowPoints(t), usedTiles: new Set(tiles), jokers: countJokers(t),
+  };
 }
 
 function dedupePool(pool) {

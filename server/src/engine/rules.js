@@ -2,11 +2,14 @@
 // Это 1-в-1 порт scripts/core/rules.gd — менять поведение здесь нельзя,
 // иначе разойдётся conformance-тест против GDScript.
 
-// Цвета: RED=0, BLUE=1, BLACK=2, ORANGE=3 (совпадает с Tile.TColor)
+// Цвета: RED=0, BLUE=1, BLACK=2, ORANGE=3 (совпадает с Tile.TColor).
+// YELLOW=4 и PURPLE=5 — цвета джокеров, в сериях и наборах не участвуют.
 const RED = 0;
 const BLUE = 1;
 const BLACK = 2;
 const ORANGE = 3;
+const YELLOW = 4;
+const PURPLE = 5;
 
 const MIN_TILES = 3;
 const MAX_SET = 4;
@@ -162,7 +165,7 @@ function rowPoints(tiles) {
 }
 
 module.exports = {
-  RED, BLUE, BLACK, ORANGE,
+  RED, BLUE, BLACK, ORANGE, YELLOW, PURPLE,
   MIN_TILES, MAX_SET, MIN_VALUE, MAX_VALUE, OPENING_POINTS,
   validateRow, rowPoints, rulesText,
 };
@@ -175,8 +178,8 @@ function rulesText() {
     'Первый игрок, оставшийся без чисел в руке, побеждает.',
     '',
     '[b]Колода[/b]',
-    '108 чисел: 4 цвета (красный, синий, чёрный, оранжевый), значения 1–13,',
-    'по 2 экземпляра каждого + 4 джокера (по одному на цвет).',
+    '106 чисел: 4 цвета (красный, синий, чёрный, оранжевый), значения 1–13,',
+    'по 2 экземпляра каждого + 2 джокера (жёлтый и фиолетовый).',
     'Джокер заменяет любое число любого цвета.',
     '',
     '[b]Ход[/b]',

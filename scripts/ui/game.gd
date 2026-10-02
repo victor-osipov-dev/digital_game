@@ -1028,9 +1028,10 @@ func _apply_state(view: Dictionary, grace: float, paused: bool, waiting: bool = 
 	# листа, иначе следующий ход не отправился бы «как в первый раз».
 	_last_draft_json = ""
 	_draft_sent_ms = 0
-	# Отсчёт сервера. Пришло null (пауза/ожидание/конец) — ключа в
-	# словаре нет вовсе, и дедлайн гаснет сам.
-	var turn_left := int(view.get("turnLeft", 0))
+	# Отсчёт сервера. Пришло null (пауза/ожидание/конец) — дедлайн гаснет
+	# сам. Ключ при этом может быть и в словаре, но с null: views.js отдаёт
+	# turnLeft: null, а не пропускает ключ, поэтому int(null) падал бы.
+	var turn_left := int(view.get("turnLeft", 0) or 0)
 	_turn_deadline_ms = (Time.get_ticks_msec() + turn_left * 1000) if turn_left > 0 else 0
 	var prev := state
 	state = ViewBuilder.build(view)

@@ -19,6 +19,15 @@ const BONUS_BRIDGE := 12
 const BONUS_REBUILD := 4
 const REBUILD_GROUP_MAX := 8
 
+# Бережение джокеров — стратегия, которая включается со «Среднего» уровня.
+#
+# Джокер закрывает любую дырку, поэтому в начале игры он ценнее почти любой
+# фишки: ход с джокером лучше отложить, если есть ход без него. Под конец
+# игры джокер — лишь способ выложить руку, и штраф почти нулевой. Штраф
+# растёт с уровнем: чем умнее бот, тем дольше он держит джокер.
+const JOKER_HOLD := [0.0, 40.0, 55.0, 70.0]
+const JOKER_HOLD_LATE := [0.0, 8.0, 12.0, 16.0]
+
 static func plan(state: GameState, level: int) -> Dictionary:
 	var p := new()
 	return p._plan(state, level)
@@ -61,12 +70,15 @@ func _plan(state: GameState, level: int) -> Dictionary:
 	_need30 = state.require_30 and state.first_turn
 	_build_candidates()
 	_rank_candidates()
-	if _level == LEVEL_EASY and state.can_draw() and randf() < 0.35:
-		return _action("draw")
 	if _level == LEVEL_EASY:
+		# Сначала пробуем выложить: ход из руки лучше, чем брать из колоды
+		# вслепую. Берём из колоды только когда выкладывать нечего — и то
+		# не всегда: иногда выгоднее пропустить, чтобы не тащить лишнее.
 		var single := _random_single()
 		if not single.is_empty():
 			return single
+		if state.can_draw() and randf() < 0.35:
+			return _action("draw")
 	_budget = BUDGET_MEDIUM if _level <= LEVEL_MEDIUM else BUDGET_HARD
 	_search()
 	if not _best.is_empty():
@@ -115,7 +127,7 @@ func _rank_candidates() -> void:
 	if _candidates.size() > cap:
 		_candidates.resize(cap)
 
-func _mk(kind: String, refs: Array, ops: Array, hand_ids: Array, points: int, hand_points: int, bonus: int) -> Dictionary:
+func _mk(kind: String, refs: Array, ops: Array, hand_ids: Array, points: int, hand_points: int, bonus: int, jokers := 0) -> Dictionary:
 	return {
 		kind=kind,
 		refs=refs,
@@ -124,8 +136,30 @@ func _mk(kind: String, refs: Array, ops: Array, hand_ids: Array, points: int, ha
 		points=points,
 		hand_points=hand_points,
 		bonus=bonus,
-		score=points * 4 + hand_ids.size() * 6 + bonus,
+		jokers=jokers,
+		score=points * 4 + hand_ids.size() * 6 + bonus - jokers * _joker_penalty(),
 	}
+
+## Цена траты джокера в текущий момент игры. Ноль на «Лёгком» — там бот
+## играет как попало. На остальных уровнях штраф высок в начале и тает к
+## концу: держать джокер имеет смысл, пока в колоде много фишек, а под конец
+## он нужен, чтобы выложить руку.
+func _joker_penalty() -> float:
+	if _level <= LEVEL_EASY:
+		return 0.0
+	var total := float(_state.deck.total_tiles())
+	var left := float(_state.tiles_left_in_deck())
+	if total <= 0.0:
+		return float(JOKER_HOLD_LATE[_level])
+	var late := 1.0 - left / total
+	return lerpf(float(JOKER_HOLD[_level]), float(JOKER_HOLD_LATE[_level]), late)
+
+static func _joker_count(tiles: Array) -> int:
+	var n := 0
+	for t in tiles:
+		if (t as Tile).is_joker:
+			n += 1
+	return n
 
 func _next_n_ref() -> String:
 	var ref := "n%d" % _n_ref
@@ -177,7 +211,7 @@ func _pack_candidates(hand: Array) -> void:
 			var ops := []
 			for t in order:
 				ops.append({op="place", tile=(t as Tile).id, to=ref, index=99})
-			_candidates.append(_mk("new", [ref], ops, _ids(order), pts, pts, 0))
+			_candidates.append(_mk("new", [ref], ops, _ids(order), pts, pts, 0, _joker_count(order)))
 			break
 
 func _extend_candidates(hand: Array) -> void:
@@ -210,7 +244,7 @@ func _extend_candidates(hand: Array) -> void:
 						ops.append({op="place", tile=(order[i] as Tile).id, to=ref, index=idx})
 					_candidates.append(_mk(
 						"extend", [ref], ops, _ids(order),
-						new_pts - old_pts, _hand_points(order, res), 0
+						new_pts - old_pts, _hand_points(order, res), 0, _joker_count(order)
 					))
 					done = true
 					break
@@ -359,7 +393,7 @@ func _steal_candidates(hand: Array) -> void:
 						"steal", [src_ref, ref], ops, _ids(s_order),
 						new_pts + rest_pts - old_pts,
 						_hand_points(s_order, res),
-						BONUS_STEAL
+						BONUS_STEAL, _joker_count(s_order)
 					))
 					break
 
@@ -438,7 +472,7 @@ func _bridge_candidates(hand: Array) -> void:
 			var gain := Rules.row_points(comp) - Rules.row_points(A.tiles) - Rules.row_points(B.tiles)
 			_candidates.append(_mk(
 				"bridge", [ref_a, ref_b], ops, _ids(gap_tiles),
-				gain, _hand_points(gap_tiles, res), BONUS_BRIDGE
+				gain, _hand_points(gap_tiles, res), BONUS_BRIDGE, _joker_count(gap_tiles)
 			))
 
 func _fill_gap(hand: Array, gap: Array, color: int) -> Array:
@@ -783,7 +817,15 @@ func _rb_emit() -> void:
 	if hand_ids.is_empty():
 		return
 	var refs: Array = _rb_refs + new_refs
-	_candidates.append(_mk("rebuild", refs, ops, hand_ids, pts - _rb_old_pts, hp, BONUS_REBUILD))
+	# Штраф считаем только по джокерам, взятым из руки: джокер, который
+	# уже лежал на столе и просто переехал в новый ряд, бот не тратил.
+	var played := []
+	for g in _rb_groups:
+		for t in g:
+			if hand_ids.has((t as Tile).id):
+				played.append(t)
+	_candidates.append(_mk("rebuild", refs, ops, hand_ids, pts - _rb_old_pts, hp,
+		BONUS_REBUILD, _joker_count(played)))
 	_rb_emitted += 1
 
 static func _rb_subsets(items: Array, k: int) -> Array:

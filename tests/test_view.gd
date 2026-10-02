@@ -58,7 +58,7 @@ func _initialize() -> void:
 func test_catalog(data: Dictionary) -> void:
 	var catalog: Array = data["catalog"]
 	section("каталог фишек")
-	ok("в каталоге все 108 фишек", catalog.size() == 108, "пришло %d" % catalog.size())
+	ok("в каталоге все 106 фишек", catalog.size() == 106, "пришло %d" % catalog.size())
 	ViewBuilder.set_catalog(catalog)
 	ok("каталог принят", ViewBuilder.catalog_ready())
 	# Один и тот же объект на весь сеанс: состояние сравнивает фишки по
@@ -66,7 +66,7 @@ func test_catalog(data: Dictionary) -> void:
 	ok("один объект на номер фишки", ViewBuilder.tile(5) == ViewBuilder.tile(5))
 	var t := ViewBuilder.tile(1)
 	ok("номер 1 — красная единица", t.color == Tile.TColor.RED and t.value == 1 and not t.is_joker)
-	ok("джокер помечен", ViewBuilder.tile(108).is_joker)
+	ok("джокер помечен", ViewBuilder.tile(106).is_joker)
 
 
 func test_round_trip(data: Dictionary) -> void:
@@ -111,7 +111,7 @@ func test_round_trip(data: Dictionary) -> void:
 		_ids(g.turn_placed) == _int_list(view["turnPlaced"]),
 		"%s != %s" % [_ids(g.turn_placed), _int_list(view["turnPlaced"])])
 
-	# Все 108 фишек на месте: рука + стол + колода + руки соперников.
+	# Все 106 фишек на месте: рука + стол + колода + руки соперников.
 	# Сумма не сходится — значит, представление где-то потерялось или
 	# где-то протекла чужая рука.
 	var total_tiles := g.hand().size() + g.tiles_left_in_deck()
@@ -120,7 +120,7 @@ func test_round_trip(data: Dictionary) -> void:
 	for row in g.table:
 		total_tiles += (row as GameState.Row).tiles.size()
 	total_tiles -= g.hand().size()   # своя рука уже учтена в hand_size
-	ok("все 108 фишек учтены", total_tiles == 108, "получилось %d" % total_tiles)
+	ok("все 106 фишек учтены", total_tiles == 106, "получилось %d" % total_tiles)
 
 
 func test_no_opponent_hands(data: Dictionary) -> void:

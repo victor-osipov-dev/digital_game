@@ -1,9 +1,15 @@
 class_name Tile
 extends RefCounted
 
-enum TColor { RED, BLUE, BLACK, ORANGE }
+# YELLOW и PURPLE — цвета джокеров, а не ряды колоды: в сериях и наборах
+# они не участвуют, фишка с is_joker проверяется раньше цвета. Нужны,
+# чтобы джокер был виден на столе (цветная подложка под звездой).
+enum TColor { RED, BLUE, BLACK, ORANGE, YELLOW, PURPLE }
 
+# Обычных цветов по-прежнему четыре: столько же серий и наборов.
 const COLOR_COUNT := 4
+# Вместо четырёх джокеров (по одному на цвет) — два, жёлтый и фиолетовый.
+const JOKER_COLORS := [TColor.YELLOW, TColor.PURPLE]
 
 var id: int = 0
 var color: int = TColor.RED
@@ -26,6 +32,10 @@ static func color_hex(c: int) -> String:
 			return "212121"
 		TColor.ORANGE:
 			return "FB8C00"
+		TColor.YELLOW:
+			return "FDD835"
+		TColor.PURPLE:
+			return "8E24AA"
 	return "9E9E9E"
 
 static func color_name(c: int) -> String:
@@ -38,6 +48,10 @@ static func color_name(c: int) -> String:
 			return "чёрный"
 		TColor.ORANGE:
 			return "оранжевый"
+		TColor.YELLOW:
+			return "жёлтый"
+		TColor.PURPLE:
+			return "фиолетовый"
 	return "?"
 
 static func sort_tiles(tiles: Array) -> void:

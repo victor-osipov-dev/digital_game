@@ -53,19 +53,19 @@ function group(name) {
 // ================================================================ каталог
 group('== Каталог фишек ==');
 
-test('в каталоге ровно 108 фишек', () => {
-  assert.strictEqual(catalog.CATALOG.length, 108);
-  assert.strictEqual(catalog.BY_ID.size, 108);
+test('в каталоге ровно 106 фишек', () => {
+  assert.strictEqual(catalog.CATALOG.length, 106);
+  assert.strictEqual(catalog.BY_ID.size, 106);
 });
 
 test('id фишек идут подряд с 1', () => {
   const ids = catalog.CATALOG.map((t) => t.id).sort((a, b) => a - b);
   assert.strictEqual(ids[0], 1);
-  assert.strictEqual(ids[ids.length - 1], 108);
-  for (let i = 0; i < 108; i += 1) assert.strictEqual(ids[i], i + 1);
+  assert.strictEqual(ids[ids.length - 1], 106);
+  for (let i = 0; i < 106; i += 1) assert.strictEqual(ids[i], i + 1);
 });
 
-test('каждого (цвет, значение) ровно две фишки, джокеров 4', () => {
+test('каждого (цвет, значение) ровно две фишки, джокеров 2', () => {
   const pairs = new Map();
   let jokers = 0;
   for (const t of catalog.CATALOG) {
@@ -75,12 +75,12 @@ test('каждого (цвет, значение) ровно две фишки, 
   }
   assert.strictEqual(pairs.size, 52, 'должно быть 52 пары ц��та/значение');
   for (const [, n] of pairs) assert.strictEqual(n, 2);
-  assert.strictEqual(jokers, 4);
+  assert.strictEqual(jokers, 2);
 });
 
-test('у джокеров value = 1, цвет 0..3', () => {
+test('у джокеров value = 1, цвета 4 и 5 (жёлтый и фиолетовый)', () => {
   const js = catalog.CATALOG.filter((t) => t.is_joker);
-  assert.deepStrictEqual(js.map((t) => t.color).sort(), [0, 1, 2, 3]);
+  assert.deepStrictEqual(js.map((t) => t.color).sort((a, b) => a - b), [4, 5]);
   for (const t of js) assert.strictEqual(t.value, 1);
 });
 
@@ -161,11 +161,11 @@ test('три джокера — валидный набор', () => {
 // ================================================================ GameState
 group('== Состояние партии ==');
 
-test('раздача: 2 игрока по 14 фишек, колода 108-28=80', () => {
+test('раздача: 2 игрока по 14 фишек, колода 106-28=78', () => {
   const s = GameState.create(2, ['A', 'B'], false);
   assert.strictEqual(s.handSize(0), 14);
   assert.strictEqual(s.handSize(1), 14);
-  assert.strictEqual(s.tilesLeftInDeck(), 80);
+  assert.strictEqual(s.tilesLeftInDeck(), 78);
 });
 
 test('в руке нет повторяющихся id', () => {
@@ -177,12 +177,12 @@ test('в руке нет повторяющихся id', () => {
   }
 });
 
-test('рука и колода вместе = 108 уникальных фишек', () => {
+test('рука и колода вместе = 106 уникальных фишек', () => {
   const s = GameState.create(5, [], false);
   const seen = new Set();
   for (const p of s.players) for (const id of p.handIds) seen.add(id);
   for (const id of s.deck.ids) seen.add(id);
-  assert.strictEqual(seen.size, 108);
+  assert.strictEqual(seen.size, 106);
 });
 
 test('взятие из колоды добавляет фишку и передаёт ход', () => {
@@ -193,7 +193,7 @@ test('взятие из колоды добавляет фишку и перед
   assert.strictEqual(s.handSize(0), before + 1);
   assert.strictEqual(s.handSize(1), 14);
   assert.strictEqual(s.current, 1);
-  assert.strictEqual(s.tilesLeftInDeck(), 79);
+  assert.strictEqual(s.tilesLeftInDeck(), 77);
 });
 
 // Рука определяется раздачей, а раздача случайна. Чтобы тесты про 30 очков
@@ -201,7 +201,7 @@ test('взятие из колоды добавляет фишку и перед
 //
 // Замена руки не должна терять фишки: колода хранит только невыданные, так
 // что вытесненные из руки фишки возвращаем в колоду, а нужные — забираем
-// оттуда, где оказались. Итог всегда 108 уникальных фишек.
+// оттуда, где оказались. Итог всегда 106 уникальных фишек.
 function stateWithHand(require30, hand) {
   const s = GameState.create(2, ['A', 'B'], require30);
   const want = new Set(hand);
@@ -224,12 +224,12 @@ function stateWithHand(require30, hand) {
   const used = new Set();
   for (const p of s.players) for (const id of p.handIds) used.add(id);
   for (const id of s.deck.ids) used.add(id);
-  assert.strictEqual(used.size, 108, 'фишки в партии должны быть уникальны');
+  assert.strictEqual(used.size, 106, 'фишки в партии должны быть уникальны');
   return s;
 }
 
-// Фишки по моей схеме id: 1..52 — не-джокеры (цвет = (id-1)/26, значение =
-// ((id-1)%26)/2 + 1), 53..56 — джокеры. Находим по описанию, а не по id,
+// Фишки по моей схеме id: 1..104 — не-джокеры (цвет = (id-1)/26, значение =
+// ((id-1)%26)/2 + 1), 105..106 — джокеры. Находим по описанию, а не по id,
 // чтобы тест не зависел от порядка выдачи.
 function findTile(color, value) {
   const t = catalog.CATALOG.find((x) => !x.is_joker && x.color === color && x.value === value);

@@ -23,6 +23,39 @@ var total := 0
 var game: Node = null
 var view: Dictionary = {}
 
+# Конкретные номера фишек в фикстуре случайны (переснимается с раздачей),
+# поэтому тест берёт их из неё, а не из констант: иначе переснял фикстуру —
+# и тест разом посыпался. Нужны три вещи:
+#   _tbl  — фишка, которая уже на серверном столе (не серая в черновике);
+#   _na/_nb — фишки, которых на столе нет (серые);
+#   _ha/_hb — фишки из своей руки (для выкладки).
+var _tbl := 0
+var _na := 0
+var _nb := 0
+var _ha := 0
+var _hb := 0
+
+func _pick_ids(data: Dictionary) -> void:
+	var used := {}
+	for tid in view["hand"]:
+		used[int(tid)] = true
+	for row in view["table"]:
+		for tid in row["tileIds"]:
+			used[int(tid)] = true
+	_tbl = int(view["table"][0]["tileIds"][0])
+	_ha = int(view["hand"][0])
+	_hb = int(view["hand"][1])
+	var picks := []
+	for t in data["catalog"]:
+		var tid := int((t as Dictionary)["id"])
+		if used.has(tid):
+			continue
+		picks.append(tid)
+		if picks.size() >= 2:
+			break
+	_na = picks[0]
+	_nb = picks[1]
+
 
 func _initialize() -> void:
 	process_frame.connect(_boot, CONNECT_ONE_SHOT)
@@ -41,6 +74,7 @@ func _boot() -> void:
 		return
 	ViewBuilder.set_catalog(data["catalog"])
 	view = data["game"]["seat0"]
+	_pick_ids(data)
 	var packed := load("res://scenes/game.tscn") as PackedScene
 	if packed == null:
 		printerr("game.tscn не читается")
@@ -75,16 +109,16 @@ func _boot() -> void:
 func test_draft_arrives() -> void:
 	section("приём черновика: серые и рисунок стола")
 	game._on_net_draft(2, [
-		{"id": 900, "tiles": [72, 1]},
-		{"id": 901, "tiles": [2]},
+		{"id": 900, "tiles": [_tbl, _na]},
+		{"id": 901, "tiles": [_nb]},
 	])
 	ok("черновик активен", game._draft_active(), "from=%d" % game._draft_from)
-	ok("серыми ровно новые фишки {1,2}",
-		game._draft_grey_ids.size() == 2 and game._draft_grey_ids.has(1)
-			and game._draft_grey_ids.has(2),
+	ok("серыми ровно новые фишки",
+		game._draft_grey_ids.size() == 2 and game._draft_grey_ids.has(_na)
+			and game._draft_grey_ids.has(_nb),
 		"grey=%s" % [game._draft_grey_ids.keys()])
-	ok("фишка из серверного стола (72) не серая", not game.get_tile_marks(72).get("draft", false))
-	ok("новая фишка помечена серой", game.get_tile_marks(1).get("draft", false))
+	ok("фишка из серверного стола не серая", not game.get_tile_marks(_tbl).get("draft", false))
+	ok("новая фишка помечена серой", game.get_tile_marks(_na).get("draft", false))
 	var rows: Array = game._table_rows()
 	ok("стол показан целиком из черновика (2 ряда)",
 		rows.size() == 2 and int(rows[0]["id"]) == 900 and int(rows[1]["id"]) == 901,
@@ -112,11 +146,11 @@ func test_draft_recolor_on_base_change() -> void:
 	_apply(v)
 	ok("черновик пережил даже пустую базу", game._draft_from == 2 and game._draft_active(),
 		"from=%d" % game._draft_from)
-	ok("серые пересчитаны: {72,1,2}",
-		game._draft_grey_ids.size() == 3 and game._draft_grey_ids.has(72)
-			and game._draft_grey_ids.has(1) and game._draft_grey_ids.has(2),
+	ok("серые пересчитаны: стол пуст, серы все три",
+		game._draft_grey_ids.size() == 3 and game._draft_grey_ids.has(_tbl)
+			and game._draft_grey_ids.has(_na) and game._draft_grey_ids.has(_nb),
 		"grey=%s" % [game._draft_grey_ids.keys()])
-	ok("72 теперь серая", game.get_tile_marks(72).get("draft", false))
+	ok("фишка с пустого стола теперь серая", game.get_tile_marks(_tbl).get("draft", false))
 
 
 func test_turn_change_clears() -> void:
@@ -135,7 +169,7 @@ func test_turn_change_clears() -> void:
 func test_expiry() -> void:
 	section("15 с молчания автора гасят черновик")
 	_apply(view)
-	game._on_net_draft(2, [{"id": 900, "tiles": [72, 1]}, {"id": 901, "tiles": [2]}])
+	game._on_net_draft(2, [{"id": 900, "tiles": [_tbl, _na]}, {"id": 901, "tiles": [_nb]}])
 	ok("снова принят", game._draft_active())
 	game._draft_at_ms = Time.get_ticks_msec() - 16000
 	game._expire_draft()
@@ -158,8 +192,8 @@ func test_author_turn_survives_state() -> void:
 	v["myTurn"] = true
 	_apply(v)
 	var row = game.state.add_row()
-	var placed: bool = game.state.place_from_hand(5, row.id, 0)
-	placed = placed and game.state.place_from_hand(9, row.id, 1)
+	var placed: bool = game.state.place_from_hand(_ha, row.id, 0)
+	placed = placed and game.state.place_from_hand(_hb, row.id, 1)
 	ok("локально выложили два в новый ряд", placed and game.state.turn_dirty,
 		"рядов %d turn_placed %d" % [
 			game.state.table.size(), game.state.turn_placed.size()])
@@ -175,7 +209,8 @@ func test_author_turn_survives_state() -> void:
 		"turn_placed %d" % game.state.turn_placed.size())
 	ok("рука уменьшена ровно на выложенное",
 		game.state.hand().size() == 9, "в руке %d" % game.state.hand().size())
-	ok("новый ряд хранит [5,9]", _row_tiles(game.state.table, row.id) == [5, 9],
+	ok("новый ряд хранит две фишки из руки",
+		_row_tiles(game.state.table, row.id) == [_ha, _hb],
 		"tiles=%s" % [_row_tiles(game.state.table, row.id)])
 	# Серверный стол ИЗМЕНИЛСЯ — истина сервера, правок больше нет.
 	var v2: Dictionary = v.duplicate(true)
@@ -204,9 +239,9 @@ func _row_tiles(rows: Array, row_id: int) -> Array:
 func test_peek_new_row() -> void:
 	section("призрак нового ряда врезает ряд, а не ложится поверх")
 	_apply(view)
-	game._on_net_draft(2, [{"id": 900, "tiles": [72, 1]}, {"id": 901, "tiles": [2]}])
+	game._on_net_draft(2, [{"id": 900, "tiles": [_tbl, _na]}, {"id": 901, "tiles": [_nb]}])
 	# Ряды на экране: 900, 901. Соперник наводит на разряд ПЕРЕД вторым.
-	game._on_net_peek(17, "new", -1, -1, 1)
+	game._on_net_peek(_na, "new", -1, -1, 1)
 	ok("врезка создана", game._peek_slot != null)
 	ok("призрак создан", game._peek_ghost != null)
 	ok("врезка встала между рядами (child index 1)",
@@ -231,15 +266,15 @@ func test_peek_new_row() -> void:
 		game._peek_ghost.global_position == slot.global_position,
 		"ghost=%s slot=%s" % [game._peek_ghost.global_position, slot.global_position])
 	# Смена цели: into по черновому ряду — врезки быть не должно.
-	game._on_net_peek(72, "into", 900, 0, -1)
+	game._on_net_peek(_tbl, "into", 900, 0, -1)
 	ok("into не оставляет врезку", game._peek_slot == null and game._peek_ghost != null)
 	# Вернулись к новому ряду и тут же пришёл повтор черновика:
 	# пересборка стола обязана вернуть врезку на её место.
-	game._on_net_peek(17, "new", -1, -1, 1)
+	game._on_net_peek(_na, "new", -1, -1, 1)
 	ok("врезка снова создана", game._peek_slot != null)
 	game._on_net_draft(2, [
-		{"id": 900, "tiles": [72, 1, 3]},
-		{"id": 901, "tiles": [2]},
+		{"id": 900, "tiles": [_tbl, _na, _nb]},
+		{"id": 901, "tiles": [_nb]},
 	])
 	ok("после пересборки черновика врезка на месте (child index 1)",
 		game._peek_slot != null and game._peek_slot.get_index() == 1,

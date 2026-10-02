@@ -3,7 +3,9 @@ extends RefCounted
 
 const VALUES := 13
 const COPIES := 2
-const JOKERS := Tile.COLOR_COUNT
+# Два джокера вместо четырёх: жёлтый и фиолетовый (см. Tile.JOKER_COLORS).
+# Число зашито литералом: size() у массива — не константное выражение.
+const JOKERS := 2
 
 var tiles: Array = []
 
@@ -18,7 +20,7 @@ func rebuild() -> void:
 			for _copy in COPIES:
 				tiles.append(Tile.new(next_id, c, v, false))
 				next_id += 1
-	for c in Tile.COLOR_COUNT:
+	for c in Tile.JOKER_COLORS:
 		tiles.append(Tile.new(next_id, c, 1, true))
 		next_id += 1
 	tiles.shuffle()

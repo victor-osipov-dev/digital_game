@@ -380,9 +380,9 @@ function planRowFromView(state, catalog) {
   const alice = await signedIn(PORT_A, 'alice', 'secret123', 'Алиса', 'alice@A');
   const herHello = await alice.waitHello();
 
-  await test('hello приходит сразу и содержит каталог из 108 фишек', () => {
+  await test('hello приходит сразу и содержит каталог из 106 фишек', () => {
     assert.ok(herHello, 'hello не пришёл');
-    assert.strictEqual(herHello.catalog.length, 108);
+    assert.strictEqual(herHello.catalog.length, 106);
     assert.strictEqual(herHello.server.id, 'srv-a');
     assert.ok(herHello.graceMs > 0, 'клиенту нужно знать срок ожидания переподключения');
   });

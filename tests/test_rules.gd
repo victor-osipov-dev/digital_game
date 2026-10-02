@@ -32,7 +32,7 @@ func fresh(s: GameState, tiles: Array) -> void:
 func _init() -> void:
 	print("== Deck ==")
 	var d := Deck.new()
-	check(d.total_tiles() == 108, "total tiles = 108, got %d" % d.total_tiles())
+	check(d.total_tiles() == 106, "total tiles = 106, got %d" % d.total_tiles())
 	var counts := {}
 	var jokers := 0
 	for tile in d.tiles:
@@ -41,7 +41,13 @@ func _init() -> void:
 		else:
 			var key := "%d/%d" % [tile.color, tile.value]
 			counts[key] = int(counts.get(key, 0)) + 1
-	check(jokers == 4, "4 jokers, got %d" % jokers)
+	check(jokers == 2, "2 jokers, got %d" % jokers)
+	var joker_colors := {}
+	for tile in d.tiles:
+		if (tile as Tile).is_joker:
+			joker_colors[(tile as Tile).color] = true
+	check(joker_colors.has(T.YELLOW) and joker_colors.has(T.PURPLE),
+		"jokers are yellow and purple, got %s" % str(joker_colors.keys()))
 	check(counts.size() == 52, "52 distinct color/value pairs, got %d" % counts.size())
 	var all_two := true
 	for k in counts:
@@ -51,7 +57,7 @@ func _init() -> void:
 	var drawn := 0
 	while d.draw() != null:
 		drawn += 1
-	check(drawn == 108 and d.count() == 0, "deck empties after 108 draws")
+	check(drawn == 106 and d.count() == 0, "deck empties after 106 draws")
 	check(d.draw() == null, "draw from empty deck returns null")
 
 	print("== Rules: runs ==")
@@ -105,7 +111,7 @@ func _init() -> void:
 	check(s.player_count() == 3, "3 players")
 	check(s.player_name(0) == "Анна" and s.player_name(2) == "Игрок 3", "names + default")
 	check(s.hand_size(0) == 14 and s.hand_size(2) == 14, "14 tiles each")
-	check(s.tiles_left_in_deck() == 66, "deck left = 108 - 42 = 66, got %d" % s.tiles_left_in_deck())
+	check(s.tiles_left_in_deck() == 64, "deck left = 106 - 42 = 64, got %d" % s.tiles_left_in_deck())
 	check(s.can_draw(), "can draw at start")
 	check(not s.can_skip(), "cannot skip while deck has tiles")
 
@@ -237,7 +243,7 @@ func _init() -> void:
 	res = s.draw_from_deck()
 	check(res.ok and s.hand_size(0) == before + 1, "draw adds a tile")
 	check(s.current == 1, "draw advances turn")
-	check(s.tiles_left_in_deck() == 79, "deck decremented: 108-28-1=79, got %d" % s.tiles_left_in_deck())
+	check(s.tiles_left_in_deck() == 77, "deck decremented: 106-28-1=77, got %d" % s.tiles_left_in_deck())
 	check(s.turn_placed.is_empty(), "turn_placed reset after draw")
 	s = GameState.create(2, ["A", "B"], false)
 	s.deck.tiles.clear()
@@ -484,6 +490,44 @@ func _init() -> void:
 	res = s.end_turn()
 	check(res.ok and res.get("win", false) == true, "win after hard pair rebuild")
 	print("  info  hard pair plan took %d ms" % plan_ms)
+
+	print("== TurnPlanner: бережение джокеров ==")
+	# Стратегия со «Среднего» уровня: если есть ход без джокера, джокер
+	# откладывается. У джокера закрывается любая дырка, поэтому в начале
+	# игры он ценнее почти любой фишки.
+	s = GameState.create(2, ["A", "B"], false)
+	var jk_id := 0
+	var jk := jk()
+	jk_id = (jk as Tile).id
+	# Набор из четырёх семёрок (28 очков) и набор с джокером вместо одной
+	# семёрки (те же 28 очков, но джокер потрачен). От джокера в наборе
+	# не прибавляется очков — он просто замещает семёрку, — поэтому бот
+	# обязан выбрать набор без него и оставить джокер в руке.
+	fresh(s, [jk, t(7), t(7, T.BLUE), t(7, T.BLACK), t(7, T.ORANGE)])
+	plan = TurnPlanner.plan(s, TurnPlanner.LEVEL_MEDIUM)
+	check(plan.action == "place", "джокер не мешает выложить набор (action=%s)" % plan.action)
+	var used_joker := false
+	for id in plan.tiles:
+		if int(id) == jk_id:
+			used_joker = true
+	check(not used_joker, "бот отложил джокер, когда есть ход без него")
+	check(plan.tiles.size() == 4, "выложены четыре семёрки, а не джокер с троими")
+
+	# Если джокер — единственный способ выложить руку, бот его тратит:
+	# держать его дальше некуда, а ход из руки лучше, чем брать вслепую.
+	fresh(s, [jk, t(5), t(6)])
+	plan = TurnPlanner.plan(s, TurnPlanner.LEVEL_MEDIUM)
+	check(plan.action == "place", "джокер тратится, когда это единственный ход (action=%s)" % plan.action)
+	used_joker = false
+	for id in plan.tiles:
+		if int(id) == jk_id:
+			used_joker = true
+	check(used_joker, "джокер выложен, когда по-другому не выложить")
+
+	# На «Лёгком» уровне стратегии нет: джокер может уйти в первый же ход.
+	fresh(s, [jk, t(5), t(6), t(7)])
+	plan = TurnPlanner.plan(s, TurnPlanner.LEVEL_EASY)
+	check(plan.action == "place", "лёгкий уровень тоже выкладывает (action=%s)" % plan.action)
 
 	print("== GameState: apply_ops rejects bad input ==")
 	s = GameState.create(2, ["A", "B"], false)
