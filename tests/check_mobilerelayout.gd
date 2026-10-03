@@ -492,6 +492,14 @@ func _audit_buttons(node: Node, where: String) -> void:
 func _audit_checks(node: Node, where: String) -> void:
 	if node is CheckBox:
 		var cb := node as CheckBox
+		# Чекбокс не рисует фоны кнопок: по иерархии типов он тянет
+		# стильбоксы Button, и включённый чекбокс получал чёрный фон
+		# (pressed-стиль). Тема отдаёт ему пустоту.
+		for state in ["normal", "hover", "pressed", "disabled"]:
+			var sb := cb.get_theme_stylebox(state)
+			if not (sb is StyleBoxEmpty):
+				_fail("%s: чекбокс рисует фон %s" % [where, state])
+				break
 		var un := cb.get_theme_icon("unchecked")
 		var ch := cb.get_theme_icon("checked")
 		if un == null or ch == null:
