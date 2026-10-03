@@ -87,6 +87,7 @@ var _rooms: Array = []
 var _busy_flag := false
 var _started := false
 var _tick: Timer = null
+var _rooms_timer: Timer = null
 var _back_btn: Button = null
 var _stuck_box: PanelContainer = null
 var _stuck_label: Label = null
@@ -153,6 +154,7 @@ func open() -> void:
 	_build()
 	visible = true
 	_tick.start()
+	_rooms_timer.start()
 	_refresh_presence()
 	_enter()
 
@@ -171,6 +173,7 @@ func close() -> void:
 		_current_room = {}
 	visible = false
 	_tick.stop()
+	_rooms_timer.stop()
 
 
 func _on_net_connection(connected: bool, detail: String) -> void:
@@ -1396,6 +1399,14 @@ func _build() -> void:
 	_tick.autostart = false
 	_tick.timeout.connect(_on_tick)
 	add_child(_tick)
+	# Список комнат сам не молодеет: раз в 10 секунд молча освежаем,
+	# пока смотрим на него. Только чтение и только в покое — посреди
+	# запроса, чужой страницы или без входа не дёргаем сеть.
+	_rooms_timer = Timer.new()
+	_rooms_timer.wait_time = 10.0
+	_rooms_timer.autostart = false
+	_rooms_timer.timeout.connect(_on_rooms_tick)
+	add_child(_rooms_timer)
 	_set_page(_page_auth)
 	_refresh_stuck()
 	_update_buttons()
@@ -1418,6 +1429,17 @@ func _on_tick() -> void:
 		# попытку обрывом — а _do_connect на этом сокет пересоздал бы,
 		# и подключение не началось бы никогда.
 		_do_connect()
+
+
+## Раз в 10 секунд молча освежаем список комнат, пока на него смотрим.
+## Только чтение и только в покое: посреди запроса, на чужой странице,
+## без входа или без связи сеть не дёргаем.
+func _on_rooms_tick() -> void:
+	if not visible or _page_rooms == null or not _page_rooms.visible:
+		return
+	if _busy_flag or not Net.is_logged_in():
+		return
+	await _refresh_rooms()
 
 
 ## Проверяет живость серверов и перерисовывает строку статуса.

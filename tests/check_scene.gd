@@ -116,6 +116,7 @@ func _after_title_checks() -> void:
 	_flow_center_checks()
 	await _burger_checks()
 	await _topbar_width_checks()
+	_confirm_checks()
 	inst.free()
 	inst = null
 	if fails == 0:
@@ -190,21 +191,36 @@ func _burger_checks() -> void:
 	var burger = inst.get("_burger_btn")
 	check(burger != null and (burger as Control).visible, "burger button visible when collapsed")
 	var box = inst.get("_burger_box")
-	var moved := true
-	for b in (inst.get("_top_action_buttons") as Array):
+	var bar = inst.get("_top_actions")
+	var overflowed := true
+	for b in (inst.get("_top_overflow") as Array):
 		if (b as Control).get_parent() != box:
-			moved = false
-	check(moved, "all six actions moved into burger box")
+			overflowed = false
+	check(overflowed, "rare actions moved into burger box")
+	var pinned := true
+	for b in (inst.get("_top_action_buttons") as Array):
+		if not (inst.get("_top_overflow") as Array).has(b) \
+				and (b as Control).get_parent() != bar:
+			pinned = false
+	check(pinned, "frequent actions stay in the bar (save/restore/hint)")
+	# Панель поверх раскладки: открытый бургер не раздвигает соседей.
+	var bar_kids := (bar as Control).get_child_count()
+	var scroll := inst.get("table_scroll") as Control
+	var scroll_y: float = (scroll as Control).get_global_rect().position.y
 	(burger as Button).pressed.emit()
 	await create_timer(0.5).timeout
 	var panel = inst.get("_burger_panel")
 	check(bool(inst.get("_burger_open")), "burger opens on press")
 	check((panel as Control).visible and (panel as Control).modulate.a > 0.9,
 		"burger panel faded in, alpha=%.2f" % (panel as Control).modulate.a)
+	check((panel as Control).top_level, "burger panel floats above layout")
+	check(is_equal_approx((scroll as Control).get_global_rect().position.y, scroll_y),
+		"open burger doesn't shift table down")
 	(burger as Button).pressed.emit()
 	await create_timer(0.5).timeout
 	check(not bool(inst.get("_burger_open")), "burger closes on second press")
 	check(not (panel as Control).visible, "burger panel hidden after close")
+	check((bar as Control).get_child_count() == bar_kids, "bar children unchanged by burger")
 	settings.text_scale = saved_scale
 	inst.call("_rebuild_ui")
 	for i in range(4):
@@ -244,3 +260,32 @@ func _topbar_width_checks() -> void:
 	inst.call("_sync_top_bar")
 	for i in range(2):
 		await process_frame
+
+
+func _confirm_checks() -> void:
+	# Свой диалог вместо системного: тексты подменяются, действие одно,
+	# отмена и тап мимо ничего не запускают.
+	var fired := [0]
+	inst.call("_ask_confirm", "Вопрос", "Текст вопроса", "Да",
+		func(): fired[0] += 1)
+	var ov = inst.get("_confirm_overlay")
+	check(ov != null and (ov as Control).visible, "confirm overlay shown")
+	check(String((inst.get("_confirm_title") as Label).text) == "Вопрос", "confirm title set")
+	check(String((inst.get("_confirm_ok") as Button).text) == "Да", "confirm ok set")
+	(inst.get("_confirm_ok") as Button).pressed.emit()
+	check(not (ov as Control).visible, "confirm hides on ok")
+	check(fired[0] == 1, "confirm action ran once")
+	inst.call("_ask_confirm", "Вопрос", "Текст вопроса", "Да",
+		func(): fired[0] += 1)
+	check((ov as Control).visible, "confirm shown again")
+	(inst.get("_confirm_cancel") as Button).pressed.emit()
+	check(not (ov as Control).visible, "confirm hides on cancel")
+	check(fired[0] == 1, "cancel doesn't run action")
+	inst.call("_ask_confirm", "Вопрос", "Текст вопроса", "Да",
+		func(): fired[0] += 1)
+	var ev := InputEventMouseButton.new()
+	ev.button_index = MOUSE_BUTTON_LEFT
+	ev.pressed = true
+	inst.call("_on_confirm_backdrop", ev)
+	check(not (ov as Control).visible, "confirm hides on outside tap")
+	check(fired[0] == 1, "outside tap doesn't run action")

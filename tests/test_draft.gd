@@ -105,6 +105,8 @@ func _boot() -> void:
 	await test_draft_tile_flies_live()
 	await test_bot_move_flies()
 	await test_bot_commit_staggered()
+	test_draft_resend_no_rebuild()
+	test_hint_once()
 
 	if fails == 0:
 		print("\nЧЕРНОВИК/ПРЕВЬЮ: все %d проверок прошли" % total)
@@ -598,6 +600,54 @@ func _check_committed_style(tile_id: int, msg: String) -> void:
 
 
 # ------------------------------------------------------------------ служебное
+
+## Повтор висящего черновика не пересобирает стол: иначе каждые 3 с
+## ресенда виды пересоздавались и дёргались вместе со скроллом.
+func test_draft_resend_no_rebuild() -> void:
+	section("повтор черновика без пересборки")
+	game._clear_draft()
+	_apply(view)
+	var rows := [{"id": 900, "tiles": [_tbl, _na]}, {"id": 901, "tiles": [_nb]}]
+	game._on_net_draft(2, rows)
+	var before := _view_ids()
+	game._on_net_draft(2, rows)
+	game._on_net_draft(2, rows)
+	ok("виды те же (пересборки не было)", _view_ids() == before,
+		"видов %d" % _view_ids().size())
+	ok("черновик всё ещё активен", game._draft_active())
+	game._clear_draft()
+
+
+## Подсказка — раз за партию: второе нажатие ничего не делает,
+## кнопка гаснет, новый матч сбрасывает.
+func test_hint_once() -> void:
+	section("подсказка раз за партию")
+	game._clear_draft()
+	_apply(view)
+	ok("подсказка не использована", not game._hint_used)
+	game._on_hint_pressed()
+	ok("первое нажатие сработало", game._hint_used)
+	var hint_btn: Button = game.get("hint_btn")
+	ok("кнопка подсказки погасла", hint_btn != null and hint_btn.disabled)
+	var marks_before: int = game._hint_ids.size()
+	game._on_hint_pressed()
+	ok("второе нажатие ничего не делает",
+		game._hint_used and game._hint_ids.size() == marks_before)
+	game._new_match()
+	ok("новый матч сбрасывает подсказку", not game._hint_used)
+
+
+func _view_ids() -> Array:
+	var out := []
+	for block in game.row_blocks:
+		out.append((block as Control).get_instance_id())
+		var flow = block.get("flow")
+		if flow == null:
+			continue
+		for item in flow.get("tile_views"):
+			out.append((item as Control).get_instance_id())
+	return out
+
 
 func _apply(v: Dictionary) -> void:
 	game._apply_state(v, 0.0, false)

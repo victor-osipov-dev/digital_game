@@ -302,6 +302,7 @@ func _stuck(menu: Node, lobby: Node) -> void:
 			_fail("на узком экране (доступно %.0f) поля названия и пароля "
 				% wide + "обязаны стоять столбиком")
 	await _dynamic_content(lobby)
+	_rooms_timer_check(lobby)
 	net.clear_pending_room()
 	lobby.call("_refresh_stuck")
 	(menu as Control).call("_refresh_online_note")
@@ -457,6 +458,23 @@ func _find_button_in(node: Node, text: String) -> Button:
 		if found != null:
 			return found
 	return null
+
+
+## Автообновление списка комнат: тикает раз в 10 с, сам не стартует,
+## вне комнатной страницы молча ничего не делает (без сети в тесте —
+## просто возвращается).
+func _rooms_timer_check(lobby: Node) -> void:
+	var timer := lobby.get("_rooms_timer") as Timer
+	if timer == null:
+		_fail("нет таймера обновления комнат")
+		return
+	if not is_equal_approx(timer.wait_time, 10.0):
+		_fail("таймер комнат не 10 с (%.1f)" % timer.wait_time)
+	if timer.autostart:
+		_fail("таймер комнат стартует сам")
+	lobby.call("_on_rooms_tick")
+	for i in range(2):
+		await process_frame
 
 
 ## Быстрый матч без очередей: из публичных комнат с людьми берём самую

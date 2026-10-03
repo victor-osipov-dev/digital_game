@@ -92,14 +92,19 @@ func _row_checks() -> void:
 	check(inst.get("table_box").get_child_count() == rbs2.size() + 1,
 		"table has only rows and hint after rebuild")
 
-	var dd = inst.get("draw_dialog")
-	check(dd != null, "draw dialog exists")
-	if dd != null:
-		check(String(dd.title) == "Взять карту", "draw dialog title in Russian, got: %s" % dd.title)
-		var dl = dd.get_label()
-		check(dl != null and dl.has_theme_font_size_override("font_size"), "draw dialog label font scaled")
-	var md = inst.get("menu_dialog")
-	check(md != null and String(md.title) == "Выход в меню", "menu dialog title in Russian")
+	# Свой диалог вместо системного: тексты задаются при показе.
+	hover.call("_ask_confirm", "Взять карту", "Взять число?", "Взять", Callable())
+	var ov = inst.get("_confirm_overlay")
+	check(ov != null and (ov as Control).visible, "custom confirm shown")
+	if ov != null:
+		check(String((inst.get("_confirm_title") as Label).text) == "Взять карту",
+			"confirm title in Russian")
+		check((inst.get("_confirm_text") as Label).has_theme_font_size_override("font_size"),
+			"confirm text font scaled")
+		check(not (inst.get("_confirm_overlay") as Control).is_queued_for_deletion(),
+			"confirm is custom overlay, not a popup window")
+		(inst.get("_confirm_cancel") as Button).pressed.emit()
+		check(not (ov as Control).visible, "confirm hides on cancel")
 
 	var settings := root.get_node_or_null("Settings")
 	var hf = inst.get("hand_flow")

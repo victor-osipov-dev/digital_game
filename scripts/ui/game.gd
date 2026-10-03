@@ -44,19 +44,25 @@ var turn_title_overlay: ColorRect = null
 var turn_title_label: Label = null
 var toast_label: Label = null
 var _toast_panel: PanelContainer = null
-var draw_dialog: ConfirmationDialog = null
-var menu_dialog: ConfirmationDialog = null
+var _confirm_overlay: ColorRect = null
+var _confirm_title: Label = null
+var _confirm_text: Label = null
+var _confirm_ok: Button = null
+var _confirm_cancel: Button = null
+var _confirm_action: Callable = Callable()
 var toast_tween: Tween = null
 var title_tween: Tween = null
 var _again_btn: Button = null
 var _settings_panel: PanelContainer = null
 var _settings_rows: Array = []
-var _top_actions: BoxContainer = null
+var _top_actions: FlowContainer = null
 var _top_action_buttons: Array = []
+var _top_overflow: Array = []
 var _burger_btn: Button = null
 var _burger_panel: PanelContainer = null
 var _burger_box: VBoxContainer = null
 var _burger_open := false
+var _burger_catcher: ColorRect = null
 var _top_collapsed := false
 var _burger_tween: Tween = null
 
@@ -64,6 +70,7 @@ var _drag_view: TileView = null
 var _bot_active: bool = false
 var _bot_seq: int = 0
 var _hint_ids: Array = []
+var _hint_used := false
 var _pan_pressed: bool = false
 var _pan_pos: Vector2 = Vector2.ZERO
 var _pan_press_on_tile: bool = false
@@ -235,8 +242,9 @@ func _build_ui() -> void:
 	top_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	top.add_child(top_spacer)
 
-	_top_actions = BoxContainer.new()
-	_top_actions.add_theme_constant_override("separation", 6)
+	_top_actions = FlowContainer.new()
+	_top_actions.add_theme_constant_override("h_separation", 6)
+	_top_actions.add_theme_constant_override("v_separation", 6)
 	top.add_child(_top_actions)
 	cp_save_btn = _make_top_button("Сохр.", "Сохранить расклад (чекпоинт)",
 		_on_cp_save_pressed, "Сохранить")
@@ -258,11 +266,15 @@ func _build_ui() -> void:
 	_top_actions.add_child(settings_btn)
 
 	var menu_btn := _make_top_button("Меню", "Выход в меню",
-		func(): menu_dialog.popup_centered(), "Меню")
+		func(): _ask_confirm("Выход в меню", "Выйти в главное меню?",
+			"Выйти", _on_leave_to_menu), "Меню")
 	_top_actions.add_child(menu_btn)
 	_top_action_buttons = [
 		cp_save_btn, cp_restore_btn, hint_btn, help_btn, settings_btn, menu_btn,
 	]
+	# Частые кнопки живут в строке всегда и в бургер не уезжают:
+	# прятать «Сохранить»/«Вернуть»/«Подсказку» за тремя тапами нельзя.
+	_top_overflow = [help_btn, settings_btn, menu_btn]
 	_burger_btn = Button.new()
 	_burger_btn.text = "☰"
 	_burger_btn.tooltip_text = "Действия"
@@ -273,9 +285,24 @@ func _build_ui() -> void:
 	_burger_btn.visible = false
 	top.add_child(_burger_btn)
 
+	# Ловец кликов мимо меню: закрывает бургер и съедает нажатие,
+	# чтобы оно не проваливалось в стол. Лежит под панелью, над всем
+	# остальным; кнопка «☰» под ним, но её тап тоже ловится сюда же —
+	# повторный тап закрывает, как и раньше.
+	_burger_catcher = ColorRect.new()
+	_burger_catcher.color = Color(0, 0, 0, 0)
+	_burger_catcher.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_burger_catcher.mouse_filter = Control.MOUSE_FILTER_STOP
+	_burger_catcher.visible = false
+	_burger_catcher.gui_input.connect(_on_burger_catcher)
+	add_child(_burger_catcher)
 	# Бургер — та же шестёрка кнопок, только столбиком: узкий экран не
 	# должен ни резать их, ни раскидывать в две неровные строки.
+	# Панель — поверх раскладки (top_level), а не в потоке: открытое
+	# меню ничего не сдвигает.
 	_burger_panel = PanelContainer.new()
+	_burger_panel.top_level = true
+	_burger_panel.visible = false
 	var bsb := StyleBoxFlat.new()
 	bsb.bg_color = Color(0.09, 0.12, 0.19, 0.97)
 	bsb.border_color = Color(1, 1, 1, 0.22)
@@ -288,7 +315,7 @@ func _build_ui() -> void:
 	_burger_panel.add_theme_stylebox_override("panel", bsb)
 	_burger_panel.visible = false
 	_burger_panel.modulate.a = 0.0
-	layout.add_child(_burger_panel)
+	add_child(_burger_panel)
 	_burger_box = VBoxContainer.new()
 	_burger_box.add_theme_constant_override("separation", 8)
 	_burger_panel.add_child(_burger_box)
@@ -482,24 +509,7 @@ func _build_ui() -> void:
 	_build_help_overlay()
 	_build_settings_overlay()
 	_build_turn_title_overlay()
-
-	draw_dialog = ConfirmationDialog.new()
-	draw_dialog.title = "Взять карту"
-	draw_dialog.dialog_text = "Взять число из колоды?\nХод сразу завершится."
-	draw_dialog.ok_button_text = "Взять"
-	draw_dialog.get_cancel_button().text = "Отмена"
-	draw_dialog.confirmed.connect(_on_draw_confirmed)
-	_style_dialog(draw_dialog)
-	add_child(draw_dialog)
-
-	menu_dialog = ConfirmationDialog.new()
-	menu_dialog.title = "Выход в меню"
-	menu_dialog.dialog_text = "Выйти в главное меню?"
-	menu_dialog.ok_button_text = "Выйти"
-	menu_dialog.get_cancel_button().text = "Отмена"
-	menu_dialog.confirmed.connect(_on_leave_to_menu)
-	_style_dialog(menu_dialog)
-	add_child(menu_dialog)
+	_build_confirm_dialog()
 	_sync_top_bar()
 
 ## Смена сцены с проверкой, что нас ещё есть в дереве.
@@ -529,19 +539,103 @@ func _on_leave_to_menu() -> void:
 			Net.leave_room()
 	_go_menu()
 
-func _style_dialog(dialog: ConfirmationDialog) -> void:
-	# Диалог с двумя выборами («Выйти»/«Отмена») при большом тексте не
-	# должен оставаться крошечным: окно раздвигаем, кнопки делаем высокими.
-	var maxw := int(minf(Settings.touch(420), get_viewport_rect().size.x * 0.9))
-	dialog.min_size = Vector2i(maxw, 0)
-	var lab := dialog.get_label()
-	if lab != null:
-		lab.add_theme_font_size_override("font_size", Settings.fs(17))
-		lab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	for b in [dialog.get_ok_button(), dialog.get_cancel_button()]:
-		if b != null:
-			b.add_theme_font_size_override("font_size", Settings.fs(16))
-			b.custom_minimum_size = Vector2(Settings.touch_w(120), Settings.touch(52))
+## Свой диалог выбора вместо системного ConfirmationDialog: тёмная
+## скруглённая панель с зелёной кнопкой — в стиле игры, а не ОС.
+## Один на оба вопроса («Взять карту», «Выйти в меню»): текст и действие
+## подменяются при показе, обработчики не копятся.
+func _build_confirm_dialog() -> void:
+	_confirm_overlay = ColorRect.new()
+	_confirm_overlay.color = Color(0, 0, 0, 0.6)
+	_confirm_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_confirm_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	_confirm_overlay.visible = false
+	_confirm_overlay.gui_input.connect(_on_confirm_backdrop)
+	add_child(_confirm_overlay)
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_confirm_overlay.add_child(center)
+	var panel := PanelContainer.new()
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.09, 0.12, 0.17, 0.98)
+	sb.border_color = Color("43A047")
+	sb.set_border_width_all(2)
+	sb.set_corner_radius_all(14)
+	sb.content_margin_left = 20.0
+	sb.content_margin_right = 20.0
+	sb.content_margin_top = 16.0
+	sb.content_margin_bottom = 16.0
+	panel.add_theme_stylebox_override("panel", sb)
+	panel.custom_minimum_size = Vector2(
+		minf(Settings.touch(420), get_viewport_rect().size.x * 0.9), 0)
+	center.add_child(panel)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 14)
+	panel.add_child(box)
+	_confirm_title = Label.new()
+	_confirm_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_confirm_title.add_theme_font_size_override("font_size", Settings.fs(22))
+	_confirm_title.add_theme_color_override("font_color", Color("FFD54F"))
+	box.add_child(_confirm_title)
+	_confirm_text = Label.new()
+	_confirm_text.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_confirm_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_confirm_text.add_theme_font_size_override("font_size", Settings.fs(16))
+	_confirm_text.add_theme_color_override("font_color", Color(1, 1, 1, 0.9))
+	box.add_child(_confirm_text)
+	var row := BoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 12)
+	box.add_child(row)
+	_confirm_ok = Button.new()
+	_confirm_ok.custom_minimum_size = Vector2(Settings.touch_w(120), Settings.touch(52))
+	_confirm_ok.add_theme_font_size_override("font_size", Settings.fs(16))
+	_confirm_ok.pressed.connect(_on_confirm_ok)
+	_apply_accent_style(_confirm_ok, Color("2E7D32"), Color("388E3C"), Color("1B5E20"))
+	row.add_child(_confirm_ok)
+	var cancel := Button.new()
+	cancel.text = "Отмена"
+	cancel.custom_minimum_size = Vector2(Settings.touch_w(120), Settings.touch(52))
+	cancel.add_theme_font_size_override("font_size", Settings.fs(16))
+	cancel.pressed.connect(_close_confirm)
+	row.add_child(cancel)
+	_confirm_cancel = cancel
+
+
+func _ask_confirm(title: String, text: String, ok_text: String, action: Callable) -> void:
+	if _confirm_overlay == null:
+		return
+	_confirm_title.text = title
+	_confirm_text.text = text
+	_confirm_ok.text = ok_text
+	_confirm_action = action
+	_confirm_overlay.visible = true
+
+
+func _close_confirm() -> void:
+	if _confirm_overlay != null:
+		_confirm_overlay.visible = false
+	_confirm_action = Callable()
+
+
+func _on_confirm_ok() -> void:
+	var act := _confirm_action
+	_close_confirm()
+	if act.is_valid():
+		act.call()
+
+
+func _on_confirm_backdrop(event: InputEvent) -> void:
+	# Тап мимо окна — тоже отмена.
+	var cancel := false
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		cancel = mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT
+	elif event is InputEventScreenTouch:
+		cancel = (event as InputEventScreenTouch).pressed
+	if cancel:
+		_close_confirm()
+		_confirm_overlay.accept_event()
 
 func _make_top_button(text_value: String, tip: String, handler: Callable, full_value: String = "") -> Button:
 	var btn := Button.new()
@@ -576,9 +670,10 @@ func _top_button_need(btn: Button) -> float:
 	return w
 
 
-## Верхние кнопки либо стоят в один ряд, либо уезжают в бургер: считать
-## надо по минимальной ширине, иначе при гигантском тексте ряд либо
-## разъезжается на две линии, либо уезжает за правый край.
+## Верхние кнопки либо стоят в один ряд, либо редкие уезжают в бургер.
+## Частые (сохранить/вернуть/подсказка) остаются в строке всегда.
+## Считать надо по честной ширине подписей, иначе при гигантском тексте
+## ряд либо разъезжается на две линии, либо уезжает за правый край.
 func _sync_top_bar() -> void:
 	if deck_button == null or _top_actions == null or _burger_btn == null \
 			or _burger_panel == null or _burger_box == null:
@@ -592,23 +687,28 @@ func _sync_top_bar() -> void:
 	var collapse := need > have
 	for btn in _top_action_buttons:
 		var b := btn as Button
-		var key := "full_text" if collapse else "short_text"
+		var in_overflow := _top_overflow.has(b)
+		var key := "full_text" if (collapse and in_overflow) else "short_text"
 		b.text = String(b.get_meta(key))
 		var cur := b.custom_minimum_size
-		# В строке — ширина по подписи, чтобы текст влезал целиком;
-		# в бургере кнопки лежат столбиком на всю ширину, минимум малый.
-		b.custom_minimum_size = Vector2(60.0 if collapse else _top_button_need(b), cur.y)
-	var target: Control = _burger_box if collapse else _top_actions
-	for btn in _top_action_buttons:
-		if (btn as Button).get_parent() != target:
-			(btn as Button).get_parent().remove_child(btn)
-			target.add_child(btn)
-	_top_actions.visible = not collapse
+		if collapse and in_overflow:
+			b.custom_minimum_size = Vector2(60.0, cur.y)
+		else:
+			b.custom_minimum_size = Vector2(_top_button_need(b), cur.y)
+		var target: Control = _burger_box if (collapse and in_overflow) else _top_actions
+		if b.get_parent() != target:
+			b.get_parent().remove_child(b)
+			target.add_child(b)
+	_top_actions.visible = true
 	_burger_btn.visible = collapse
 	var was_collapsed := _top_collapsed
 	_top_collapsed = collapse
 	if not collapse:
 		_set_burger_open(false, false)
+	elif not was_collapsed:
+		_set_burger_open(false, false)
+	if _burger_open:
+		_place_burger_panel()
 	elif not was_collapsed:
 		_set_burger_open(false, false)
 
@@ -631,16 +731,21 @@ func _set_burger_open(open: bool, animate := true) -> void:
 	_burger_open = open
 	if _burger_tween != null and _burger_tween.is_valid():
 		_burger_tween.kill()
+	if _burger_catcher != null:
+		_burger_catcher.visible = open
 	if not open and not animate:
 		_burger_panel.visible = false
 		return
 	_burger_panel.visible = true
+	_place_burger_panel()
 	_burger_panel.pivot_offset = Vector2(_burger_panel.size.x * 0.5, 0.0)
 	_burger_panel.modulate.a = 1.0 if open else _burger_panel.modulate.a
 	_burger_panel.scale = Vector2.ONE if open else _burger_panel.scale
 	if not animate:
 		_burger_panel.modulate.a = 1.0 if open else 0.0
 		_burger_panel.visible = open
+		if _burger_catcher != null:
+			_burger_catcher.visible = open
 		return
 	_burger_tween = create_tween()
 	_burger_tween.set_parallel(true)
@@ -659,6 +764,36 @@ func _set_burger_open(open: bool, animate := true) -> void:
 func _hide_burger_panel() -> void:
 	if not _burger_open and _burger_panel != null:
 		_burger_panel.visible = false
+	if _burger_catcher != null:
+		_burger_catcher.visible = _burger_open
+
+
+## Панель под кнопку «☰», правым краем по ней: поверх раскладки, ничего
+## не сдвигает. Ширина — по содержимому, но не шире окна.
+func _place_burger_panel() -> void:
+	if _burger_panel == null or _burger_btn == null:
+		return
+	var r := _burger_btn.get_global_rect()
+	var want := _burger_panel.get_combined_minimum_size()
+	var vw := get_viewport_rect().size.x
+	var w := minf(maxf(want.x, 200.0), maxf(vw - 20.0, 200.0))
+	_burger_panel.size = Vector2(w, maxf(want.y, 1.0))
+	_burger_panel.position = Vector2(
+		clampf(r.end.x - w, 10.0, maxf(10.0, vw - w - 10.0)),
+		r.end.y + 4.0)
+
+
+func _on_burger_catcher(event: InputEvent) -> void:
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
+			_set_burger_open(false)
+			_burger_catcher.accept_event()
+			return
+	if event is InputEventScreenTouch:
+		if (event as InputEventScreenTouch).pressed:
+			_set_burger_open(false)
+			_burger_catcher.accept_event()
 
 func _apply_accent_style(button: Button, normal: Color, hover: Color, pressed: Color) -> void:
 	var sb_normal := StyleBoxFlat.new()
@@ -1037,6 +1172,7 @@ func _new_match() -> void:
 	_bot_active = false
 	_stats_recorded = false
 	_hint_ids.clear()
+	_hint_used = false
 	state = GameState.create(Settings.player_count, Array(Settings.player_names), Settings.require_30)
 	invalid_row_ids.clear()
 	win_overlay.visible = false
@@ -1080,6 +1216,7 @@ func _net_begin() -> void:
 	_bot_seq += 1
 	_bot_active = false
 	_hint_ids.clear()
+	_hint_used = false
 	# «Заново» на экране победы — это про локальную партию: сервер не умеет
 	# «сыграть ещё раз в той же комнате». В сетевой игре кнопка скрывается,
 	# иначе после конца партии она молча запускала локальную игру поверх
@@ -1486,7 +1623,8 @@ func _record_stats() -> void:
 func _on_deck_pressed() -> void:
 	if not _can_act():
 		return
-	draw_dialog.popup_centered()
+	_ask_confirm("Взять карту", "Взять число из колоды?\nХод сразу завершится.",
+		"Взять", _on_draw_confirmed)
 
 func _on_draw_confirmed() -> void:
 	_hint_ids.clear()
@@ -1608,8 +1746,9 @@ func _on_cp_restore_pressed() -> void:
 		toast("Нет сохранённых раскладов", false)
 
 func _on_hint_pressed() -> void:
-	if not _can_act():
+	if not _can_act() or _hint_used:
 		return
+	_hint_used = true
 	_hint_ids.clear()
 	var plan := TurnPlanner.plan(state, TurnPlanner.LEVEL_IMPOSSIBLE)
 	var action := String(plan.get("action", ""))
@@ -1632,6 +1771,8 @@ func _on_hint_pressed() -> void:
 func _on_resized() -> void:
 	_update_hint_zone_size()
 	_sync_top_bar()
+	if _burger_open:
+		_place_burger_panel()
 
 # ---------------------------------------------------------------- drag & drop
 
@@ -1722,10 +1863,14 @@ func _on_net_draft(from: int, rows: Array) -> void:
 	# иначе гонка с game.state показала бы чужую раскладку поверх нашей.
 	if state.current != from:
 		return
+	_draft_at_ms = Time.get_ticks_msec()
+	if JSON.stringify(rows) == JSON.stringify(_draft_rows):
+		# Повтор висящего черновика (автор шлёт его каждые 3 с, пока
+		# думает): стол тот же, перерисовка дёргала бы его и скролл.
+		return
 	_draft_from = from
 	_draft_rows = rows
 	_draft_new_ids = _draft_new_of(rows)
-	_draft_at_ms = Time.get_ticks_msec()
 	# Живая постановка видна сразу прилётом: новые фишки черновика,
 	# которых ещё не было на экране, прилетают сверху.
 	_anim_pending = true
@@ -2242,7 +2387,8 @@ func _update_buttons() -> void:
 	undo_button.disabled = locked or not state.turn_dirty
 	cp_save_btn.disabled = locked or not state.turn_dirty
 	cp_restore_btn.disabled = locked or state.checkpoint_count() == 0
-	hint_btn.disabled = locked
+	# Подсказка — раз за партию: использованную гасим сразу.
+	hint_btn.disabled = locked or _hint_used
 	if state.finished:
 		end_button.text = "Игра окончена"
 		end_button.disabled = true
@@ -2269,8 +2415,11 @@ func _update_hint_zone_size() -> void:
 		if b == null:
 			continue
 		rows_h += maxf(b.size.y, b.get_combined_minimum_size().y) + sep
-	var target := maxf(HINT_MIN_H, table_scroll.size.y - rows_h)
-	if not is_equal_approx(hint_zone.custom_minimum_size.y, target):
+	var target := maxf(HINT_MIN_H, floorf(table_scroll.size.y - rows_h))
+	# Мёртвая зона в пиксель: кадры пересборки дают промежуточные размеры,
+	# и без неё минимум дёргался на доли пикселя каждый кадр — вместе с
+	# ним мигал и скролл.
+	if absf(hint_zone.custom_minimum_size.y - target) >= 1.0:
 		hint_zone.custom_minimum_size.y = target
 
 ## Подсказка всегда чуть уже экрана.
@@ -2382,9 +2531,7 @@ func _point_on_tile(p: Vector2) -> bool:
 
 ## Модальные экраны лежат поверх стола: жест по ним партию листать не должен.
 func _modal_open() -> bool:
-	if draw_dialog != null and draw_dialog.visible:
-		return true
-	if menu_dialog != null and menu_dialog.visible:
+	if _confirm_overlay != null and _confirm_overlay.visible:
 		return true
 	for overlay in [pass_overlay, win_overlay, help_overlay, settings_overlay,
 			turn_title_overlay]:
