@@ -134,14 +134,16 @@ var _anim_stagger := false
 # только последнее — по самым свежим видам. Иначе дубли твинов дёргают
 # одни и те же фишки.
 var _anim_gen := 0
-## Id фишек, которым должны пошаговый прилёт, но он ещё не начался:
-## следующее состояние (цепочка ботов идёт каждые 1.4–2.4 с, а stagger
-## длится до ~2.6 с) забирает долг в свой прилёт, а не роняет молча.
-## Долг живёт только между пересборками: любая пересборка либо летит
-## его (stagger — пошагово, обычная — быстро), либо строит виды заново
-## и долг гаснет сам. Чужие id сюда попасть не могут: новая партия
-## и вход в сеть обнуляют.
-var _stagger_debt: Array = []
+## Очередь презентаций сетевых ходов: [{kind="title", seat, text},
+## {kind="steps", ids}]. Данные применяются сразу (стол всегда актуален),
+## а показываются строго по очереди: титр — шаги — титр — шаги. Цепочки
+## ботов иначе рвут друг друга: следующий коммит прилетал раньше, чем
+## долетал предыдущий, и середина цепочки не показывалась никогда.
+var _present_queue: Array = []
+var _present_busy := false
+var _present_gen := 0
+## Место последнего поставленного в очередь титра (дубли подряд лишние).
+var _title_shown_for: int = -1
 
 # --- отсчёт хода (сетевая партия) ---------------------------------------
 #
@@ -1244,7 +1246,10 @@ func _new_match() -> void:
 	_stats_recorded = false
 	_hint_ids.clear()
 	_hints_used.clear()
-	_stagger_debt.clear()
+	_present_queue.clear()
+	_present_busy = false
+	_present_gen += 1
+	_title_shown_for = -1
 	_drew_seat = -1
 	_draw_marks.clear()
 	state = GameState.create(Settings.player_count, Array(Settings.player_names), Settings.require_30)
@@ -1291,7 +1296,10 @@ func _net_begin() -> void:
 	_bot_active = false
 	_hint_ids.clear()
 	_hints_used.clear()
-	_stagger_debt.clear()
+	_present_queue.clear()
+	_present_busy = false
+	_present_gen += 1
+	_title_shown_for = -1
 	_drew_seat = -1
 	_draw_marks.clear()
 	# «Заново» на экране победы — это про локальную партию: сервер не умеет
@@ -1362,13 +1370,39 @@ func _on_state_received(view: Dictionary, grace: float, paused: bool, waiting: b
 		win_title.text = Lang.t("Победитель - %s") % state.player_name(state.winner)
 		win_overlay.visible = true
 		_show_wait("")
+		_present_queue.clear()
+		_present_gen += 1
 		refresh()
 		return
 	pass_overlay.visible = false
-	if state != null and not state.my_turn():
-		_show_turn_title()
+	_enqueue_turn_title()
 	_show_wait(_wait_text(grace, paused, waiting))
 	refresh()
+
+
+## Титр «Ход: …» — в очередь презентаций, а не сразу на экран: шаги
+## предыдущего бота ещё могут долетать, и титр следующего хода встаёт
+## за ними своим чередом. Свой ход титруем только следом за чужими
+## шагами — иначе после каждого своего хода мигало бы «Ход: вы».
+func _enqueue_turn_title() -> void:
+	if state == null or state.finished:
+		return
+	var seat := state.current
+	if seat == _title_shown_for:
+		return
+	_title_shown_for = seat
+	if state.my_turn() and not _has_steps_queued():
+		return
+	_present_queue.append({"kind": "title", "seat": seat,
+		"text": _turn_title_text(seat)})
+	_pump_present()
+
+
+func _has_steps_queued() -> bool:
+	for seg in _present_queue:
+		if String((seg as Dictionary).get("kind", "")) == "steps":
+			return true
+	return false
 
 
 func _wait_text(grace: float, paused: bool, waiting: bool) -> String:
@@ -1604,13 +1638,27 @@ func _on_pass_ready() -> void:
 func _show_turn_title() -> void:
 	if state == null:
 		return
-	var who := state.current_player().pname
-	# Серверный бот ходит сам, и пометить его обязаны: иначе партия,
-	# сидящая на паузе или идущая на чужих устройствах, выглядит как
-	# молчащий человек с выключенным экраном.
-	if state.is_bot_player(state.current):
-		who += Lang.t(" (бот)")
-	turn_title_label.text = Lang.t("Ход: %s") % who
+	_flash_turn_title(_turn_title_text(state.current))
+
+
+## Текст титра для места (имя + пометка бота). Текст фиксируем при
+## постановке в очередь: к моменту показа ход уже уйдёт дальше.
+func _turn_title_text(seat: int) -> String:
+	var who := "?"
+	if state != null and seat >= 0 and seat < state.player_count():
+		who = (state.players[seat] as GameState.Player).pname
+		# Серверный бот ходит сам, и пометить его обязаны: иначе партия,
+		# сидящая на паузе или идущая на чужих устройствах, выглядит как
+		# молчащий человек с выключенным экраном.
+		if state.is_bot_player(seat):
+			who += Lang.t(" (бот)")
+	return Lang.t("Ход: %s") % who
+
+
+func _flash_turn_title(text: String) -> void:
+	if turn_title_overlay == null or turn_title_label == null:
+		return
+	turn_title_label.text = text
 	turn_title_overlay.visible = true
 	turn_title_overlay.modulate.a = 0.0
 	if title_tween != null and title_tween.is_running():
@@ -2432,31 +2480,94 @@ func refresh() -> void:
 	_anim_force = []
 	var stagger := _anim_stagger
 	_anim_stagger = false
-	# Неслетанный долг забираем в этот прилёт: старые (долг) летят
-	# первыми. Обычная пересборка гасит долг быстрым прилётом — чтобы
-	# ни одна выставленная фишка не осталась вообще без полёта.
-	if stagger:
-		var merged: Array = _stagger_debt.duplicate()
-		for id in force:
-			if not merged.has(id):
-				merged.append(id)
-		force = merged
-		_stagger_debt = force.duplicate()
-	elif not _stagger_debt.is_empty():
-		for id in _stagger_debt:
-			if not force.has(id):
-				force.append(id)
-		_stagger_debt.clear()
+	# Пошаговый прилёт — в очередь презентаций (там же титры), а не
+	# сразу на экран: цепочки ботов иначе рвут друг друга. Здесь же
+	# запрещаем немедленный полёт этих же фишек (skip): erase из prev
+	# их не убрал бы — новых фишек в снимке и так нет, и они полетели
+	# бы быстрым путём мимо очереди.
+	var rerouted: Array = []
+	if stagger and not force.is_empty() and state != null and not state.finished:
+		_enqueue_steps(force)
+		rerouted = force.duplicate()
+		force = []
 	if not shots.is_empty() or not force.is_empty():
-		# Прилетающие прячем сразу: иначе они стоят видимыми (под плашкой
-		# или в цепочке ботов), а к началу полёта прыгают в угол и летят —
-		# со стороны «поставились, убрались, полетели». Полёты вернут
-		# прозрачность сами; game over при обрыве нет — следующая
+		# Прилетающие прячем сразу: иначе они стоят видимыми, а к началу
+		# полёта прыгают в угол и летят — со стороны «поставились,
+		# убрались, полетели». Прячем и уже стоящие в очереди: пересборка
+		# вернула их виды домой видимыми, а полёт у них впереди. Полёты
+		# вернут прозрачность сами; game over при обрыве нет — следующая
 		# пересборка строит виды заново, уже видимыми.
 		if not force.is_empty():
 			_hide_force_tiles(force)
+		_hide_queued_steps()
 		_anim_gen += 1
-		_play_place_anim(shots, force, _anim_gen, stagger)
+		_play_place_anim(shots, force, _anim_gen, rerouted)
+
+
+## Шаги в очередь: дубли номеров ни к чему (повторные рассылки несут
+## те же фишки), порядок — как пришли.
+func _enqueue_steps(ids: Array) -> void:
+	var fresh: Array = []
+	for id in ids:
+		var iid := int(id)
+		if not fresh.has(iid):
+			fresh.append(iid)
+	if fresh.is_empty():
+		return
+	_present_queue.append({"kind": "steps", "ids": fresh})
+	_pump_present()
+
+
+## Крутит очередь презентаций: титр — шаги — титр — шаги. Данные уже
+## применены (стол актуален), здесь только показ. Перекрытий нет по
+## построению: следующий сегмент начинается после предыдущего.
+func _pump_present() -> void:
+	if _present_busy:
+		return
+	_present_busy = true
+	var gen := _present_gen
+	var tree := get_tree()
+	while not _present_queue.is_empty() and gen == _present_gen:
+		if tree == null:
+			break
+		var seg: Dictionary = _present_queue.pop_front()
+		if String(seg.get("kind", "")) == "title":
+			# Протухший титр (ход уже ушёл дальше) молча пропускаем —
+			# врать про «Ход: Бот», когда ходит человек, нельзя.
+			var seat := int(seg.get("seat", -1))
+			if state != null and not state.finished and seat >= 0 \
+					and state.current == seat:
+				_flash_turn_title(String(seg.get("text", "")))
+				await tree.create_timer(1.45).timeout
+		else:
+			await _play_queued_steps(seg.get("ids", []), tree, gen)
+	_present_queue.clear()
+	_present_busy = false
+
+
+## Пошаговый прилёт из очереди: ищем живые виды по id (пересборки могли
+## их пересоздать), прячем и летим друг за другом, как локальный бот.
+func _play_queued_steps(ids: Array, tree: SceneTree, gen: int) -> void:
+	if tree == null or gen != _present_gen:
+		return
+	var cur := {}
+	_collect_live(cur)
+	var views := []
+	for id in ids:
+		var tv := cur.get(int(id)) as TileView
+		if tv != null:
+			tv.modulate.a = 0.0
+			views.append(tv)
+	var step := 0
+	for tv in views:
+		if gen != _present_gen:
+			return
+		if is_instance_valid(tv):
+			_fly_in_tile(tv, step, 0.45, 2.0)
+			step += 1
+	if views.is_empty():
+		return
+	await tree.create_timer(minf(float(maxi(views.size() - 1, 0)) * 0.45, 2.0) + 0.8).timeout
 
 ## Все показанные сейчас фишки: id, сама фишка и положение на экране.
 func _capture_tiles() -> Array:
@@ -2482,6 +2593,16 @@ func _capture_flow(flow: FlowTiles, out: Array) -> void:
 			})
 
 ## Разница старого и нового состояния в живых view: id -> TileView.
+func _hide_queued_steps() -> void:
+	var ids := []
+	for seg in _present_queue:
+		if String((seg as Dictionary).get("kind", "")) == "steps":
+			for id in ((seg as Dictionary).get("ids", []) as Array):
+				if not ids.has(int(id)):
+					ids.append(int(id))
+	if not ids.is_empty():
+		_hide_force_tiles(ids)
+
 func _hide_force_tiles(force: Array) -> void:
 	var cur := {}
 	_collect_live(cur)
@@ -2531,8 +2652,11 @@ func _fresh_committed_ids(view: Dictionary) -> Array:
 
 ## Слушает раскладку кадр — только тогда у свежесобранных контейнеров
 ## есть координаты. Пустой снимок (вход в сцену) ничего не анимирует.
+## Прилёты здесь всегда быстрые (почти разом): пошаговые идут очередью
+## презентаций (_pump_present) после своего титра, а не здесь. Id из
+## skip не трогаем вообще (ни полёт, ни слайд) — их полёт впереди.
 func _play_place_anim(shots: Array, force: Array = [],
-		gen: int = -1, stagger: bool = false) -> void:
+		gen: int = -1, skip: Array = []) -> void:
 	# Рассылка могла застать сцену уже за бортом (смена сцены ещё/уже
 	# едет): вне дерева ждать кадр не на чем — просто не анимируем.
 	if not is_inside_tree():
@@ -2542,23 +2666,6 @@ func _play_place_anim(shots: Array, force: Array = [],
 		return
 	if not is_inside_tree() or (shots.is_empty() and force.is_empty()):
 		return
-	# Пошаговый прилёт ждёт, пока спадёт плашка «Ход: …»: иначе первые
-	# фишки прилетают под ней и их не видно. Ждём по флагу видимости,
-	# а не по секундам, — длительность плашки может поменяться. Плашки
-	# нет (свой ход) — едем сразу. Быстрые прилёты не ждут: они короче
-	# плашки и дёргать их паузами незачем.
-	var title_ov := turn_title_overlay as Control
-	if stagger and title_ov != null and is_instance_valid(title_ov) and title_ov.visible:
-		var hide_by := Time.get_ticks_msec() + 2500
-		while is_instance_valid(title_ov) and title_ov.visible \
-				and Time.get_ticks_msec() < hide_by:
-			await get_tree().process_frame
-			if gen >= 0 and gen != _anim_gen:
-				return
-	# Полёты начались — долг закрыт: следующее состояние унаследует уже
-	# летящие фишки обычными слайдами, а не повторным прилётом.
-	if stagger:
-		_stagger_debt.clear()
 	var prev := {}
 	for s in shots:
 		prev[int(s["id"])] = s
@@ -2577,12 +2684,11 @@ func _play_place_anim(shots: Array, force: Array = [],
 				}
 	for id in force:
 		prev.erase(int(id))
-	# Ход бота — прилёты друг за другом, как в локальной пошаговке;
-	# обычные ходы — почти разом, лишь бы не в один кадр.
-	var gap := 0.45 if stagger else 0.05
-	var cap := 2.0 if stagger else 0.4
+	# Здесь только быстрые прилёты (почти разом, лишь бы не в один кадр).
 	var step := 0
 	for id in cur.keys():
+		if skip.has(id):
+			continue
 		var tv: TileView = cur[id]
 		if prev.has(id):
 			var gpos: Vector2 = prev[id]["gpos"]
@@ -2590,7 +2696,7 @@ func _play_place_anim(shots: Array, force: Array = [],
 			if gpos.distance_to(tv.global_position) > 2.0:
 				_slide_tile(tv, gpos)
 		else:
-			_fly_in_tile(tv, step, gap, cap)
+			_fly_in_tile(tv, step, 0.05, 0.4)
 			step += 1
 	# Остались только ушедшие фишки.
 	for id in prev.keys():

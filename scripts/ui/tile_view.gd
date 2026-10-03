@@ -94,32 +94,19 @@ func _build() -> void:
 		tooltip_text = Lang.t("Джокер — заменяет любое число любого цвета")
 	else:
 		tooltip_text = "%s %d" % [Tile.color_name(tile.color), tile.value]
-	if mark_drawn and not face_down:
-		# Взята из колоды: галочка в правом верхнем углу. Отдельным
-		# потомком, а не рамкой, — рамки уже заняты черновиком, прошлым
-		# ходом и подсказкой, а галочка сочетается с любой из них.
-		var badge := Label.new()
-		badge.text = "✓"
-		badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		badge.anchor_left = 1.0
-		badge.anchor_right = 1.0
-		badge.anchor_top = 0.0
-		badge.anchor_bottom = 0.0
-		var bsize := clampi(int(ts.y * 0.34), 10, 30)
-		badge.offset_left = -float(bsize) - 2.0
-		badge.offset_right = -2.0
-		badge.offset_top = 0.0
-		badge.offset_bottom = float(bsize)
-		badge.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		badge.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		badge.add_theme_font_size_override("font_size", bsize)
-		badge.add_theme_color_override("font_color", Color("69F0AE"))
-		badge.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
-		badge.add_theme_constant_override("outline_size", maxi(2, bsize / 5))
-		add_child(badge)
 	base_alpha = modulate.a
 
 	queue_redraw()
+
+## Кружок взятой из колоды — в правом верхнем углу. Рисуем дугой, а не
+## лейблом: глиф «✓»/«○» зависит от шрифта устройства, а дуга — нет.
+## Сочетается с любой рамкой (черновик, прошлый ход, подсказка).
+func _draw_badge() -> void:
+	var ts := Settings.tile_size()
+	var r := ts.y * 0.16
+	var c := Vector2(ts.x - r - 3.0, r + 3.0)
+	draw_arc(c, r, 0.0, TAU, 24, Color(0, 0, 0, 0.85), maxi(3.0, r * 0.45), true)
+	draw_arc(c, r, 0.0, TAU, 24, Color("69F0AE"), maxi(2.0, r * 0.28), true)
 
 func _draw() -> void:
 	if face_down:
@@ -131,6 +118,8 @@ func _draw() -> void:
 			c + Vector2(0, r), c + Vector2(-r, 0),
 		]), Color("FFD54F"))
 		return
+	if mark_drawn:
+		_draw_badge()
 
 func _get_drag_data(pos: Vector2) -> Variant:
 	if not draggable or tile == null or controller == null:

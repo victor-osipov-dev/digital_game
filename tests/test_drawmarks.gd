@@ -3,8 +3,8 @@ extends SceneTree
 # ==============================================================
 #  Пометки взятия из колоды.
 #
-#  Своё взятие — галочка «✓» на фишке, пока она в руке взявшего
-#  (выложил — убралась, взял новую — заменилась). Чужое взятие
+#  Своё взятие — кружок на фишке, пока она в руке взявшего
+#  (выложил — убрался, взял новую — заменился). Чужое взятие
 #  (бот или соперник по сети) — «· взял» у имени в чипах: рука +1
 #  при том же столе и пустом lastTurn.
 #
@@ -92,7 +92,7 @@ func test_draw_marks_tile() -> void:
 	# Ход вернулся к взявшему — галочка на фишке в его руке.
 	game.state.current = 0
 	game.refresh()
-	ok("галочка видна на фишке", _hand_badge(took))
+	ok("кружок виден на фишке", _hand_badge(took))
 	ok("чип показывает взятие", _chip_has("взял"))
 	# Выложил (фишка ушла из руки) — метка снялась сама.
 	var hand: Array = game.state.players[0].hand
@@ -145,7 +145,7 @@ func test_bot_draw_marked() -> void:
 	game._online = false
 
 
-## Галочка «✓» на виде фишки в руке.
+## Кружок взятой фишки: флаг вида (сам кружок рисуется дугой в _draw).
 func _hand_badge(tile_id: int) -> bool:
 	var views: Array = []
 	if game.hand_flow != null and game.hand_flow.get("tile_views") != null:
@@ -157,9 +157,8 @@ func _hand_badge(tile_id: int) -> bool:
 		var tile = v.get("tile")
 		if tile == null or int(tile.get("id")) != tile_id:
 			continue
-		for c in v.get_children():
-			if c is Label and (c as Label).text == "✓":
-				return true
+		if bool(v.get("mark_drawn")):
+			return true
 	return false
 
 

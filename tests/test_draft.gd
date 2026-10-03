@@ -112,7 +112,7 @@ func _boot() -> void:
 	await test_bot_move_flies()
 	await test_bot_commit_staggered()
 	await test_bot_commit_no_mid_state()
-	await test_bot_chain_adopts_debt()
+	await test_bot_chain_queued()
 	test_draft_resend_no_rebuild()
 	test_hint_per_player()
 
@@ -570,12 +570,13 @@ func _landing_spread(need: Array, title_ov: Control = null, max_frames: int = 60
 	return out
 
 
-## Цепочка ботов: второй коммит приходит, пока первый stagger ещё ждёт
-## плашку (боты ходят каждые 1.4–2.4 с, stagger длится дольше). Неслетанные
-## фишки первого наследуются вторым прилётом, а не роняются молча: без
-## наследования первые три так и остались бы стоять без полёта.
-func test_bot_chain_adopts_debt() -> void:
-	section("цепочка ботов наследует неслетанное")
+## Цепочка ботов идёт очередью презентаций: титр — шаги первого, титр —
+## шаги второго, титр игрока. Второй коммит приходит, пока первый прилёт
+## ещё не начался (боты ходят каждые 1.4–2.4 с), — очередь не роняет его,
+## а показывает своим чередом. Без очереди первые три так и остались бы
+## стоять без полёта.
+func test_bot_chain_queued() -> void:
+	section("цепочка ботов идёт очередью титр-шаги")
 	game._clear_draft()
 	game._online = true
 	game.turn_title_overlay.visible = false
@@ -611,7 +612,7 @@ func test_bot_chain_adopts_debt() -> void:
 	ok("фишки спрятаны до прилёта, а не стоят видимо", hidden == 6,
 		"скрыто %d" % hidden)
 	var r := await _landing_spread([_na, _nb, _nc, _nd, _ne, _nf],
-		game.turn_title_overlay, 1000)
+		game.turn_title_overlay, 1400)
 	ok("все шесть долетели", int(r["landed"]) == 6, "сели %d" % int(r["landed"]))
 	if int(r["landed"]) == 6:
 		ok("посадки разнесены во времени", int(r["spread_ms"]) >= 300,
