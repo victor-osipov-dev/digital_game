@@ -105,6 +105,7 @@ func _boot() -> void:
 	await test_draft_tile_flies_live()
 	await test_bot_move_flies()
 	await test_bot_commit_staggered()
+	await test_bot_commit_no_mid_state()
 	test_draft_resend_no_rebuild()
 	test_hint_per_player()
 
@@ -467,6 +468,69 @@ func test_bot_commit_staggered() -> void:
 			"разброс %d мс" % spread)
 	for tid in need:
 		_check_committed_style(int(tid), "фишка бота %d обычная" % int(tid))
+
+
+## Промежуточное «ходит бот» могло не дойти (вход посреди чужого хода,
+## сбой): прошлое состояние — ход человека, а коммит опознаём по новому
+## (место перед current — бот + непустой lastTurn) и кладём поэтапно.
+## На старом триггере тут был быстрый прилёт разом (разброс < 300 мс).
+func test_bot_commit_no_mid_state() -> void:
+	section("коммит бота без промежуточного состояния — тоже поэтапно")
+	game._clear_draft()
+	game._online = true
+	var s0: Dictionary = view.duplicate(true)
+	for i in range((s0["players"] as Array).size()):
+		(s0["players"] as Array)[i]["isBot"] = (i == 1)
+	s0["current"] = 0
+	game._on_state_received(s0, 0.0, false, false)
+	for i in range(40):
+		await process_frame
+	var s2: Dictionary = s0.duplicate(true)
+	(s2["table"] as Array).append({"id": 51, "tileIds": [_na, _nb, _nc]})
+	s2["lastTurn"] = [_na, _nb, _nc]
+	s2["current"] = 2
+	game._on_state_received(s2, 0.0, false, false)
+	var spread := await _landing_spread([_na, _nb, _nc])
+	ok("все три долетели", spread >= 0, "spread=%d" % spread)
+	if spread >= 0:
+		ok("посадки разнесены во времени", spread >= 300,
+			"разброс %d мс" % spread)
+	game._online = false
+
+
+## Разброс посадок в мс (-1, если не все сели): «приземлился» значит
+## позиция встала И alpha доросла (ждущий в углу неподвижен, но сер).
+func _landing_spread(need: Array) -> int:
+	var hist := {}
+	var landed_at := {}
+	for i in range(300):
+		await process_frame
+		var now := Time.get_ticks_msec()
+		for tid in need:
+			var a: int = int(tid)
+			if landed_at.has(a):
+				continue
+			var v := _placed_view(a)
+			if v == null:
+				continue
+			if not hist.has(a):
+				hist[a] = []
+			var h: Array = hist[a]
+			h.append((v as Control).position)
+			while h.size() > 3:
+				h.remove_at(0)
+			var steady := h.size() == 3 \
+				and (h[0] as Vector2).is_equal_approx(h[1]) \
+				and (h[1] as Vector2).is_equal_approx(h[2])
+			if steady and (v as Control).modulate.a > 0.99:
+				landed_at[a] = now
+		if landed_at.size() == need.size():
+			break
+	if landed_at.size() != need.size():
+		return -1
+	var times := landed_at.values()
+	times.sort()
+	return int(times[times.size() - 1]) - int(times[0])
 
 
 ## Локальный матч с ботом за 0-м местом и ригнутой рукой (красные

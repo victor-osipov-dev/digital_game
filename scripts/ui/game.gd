@@ -1385,7 +1385,13 @@ func _apply_state(view: Dictionary, grace: float, paused: bool, waiting: bool = 
 	var prev := state
 	state = ViewBuilder.build(view)
 	# Прошлым ходил сетевой бот — его коммит раскладываем поэтапно.
-	_anim_stagger = prev != null and prev.is_bot_player(prev.current)
+	# Ход опознаём и по новому состоянию (место прямо перед current +
+	# непустой lastTurn), а не только по прошлому: промежуточное
+	# «ходит бот» могло не дойти — вход посреди чужого хода, сбой,
+	# старый сервер без lastTurn. Тихий пропуск stagger тут чинился
+	# бы только чудом, поэтому оба признака работают через «или».
+	_anim_stagger = _is_bot_commit(prev, view) \
+		or (prev != null and prev.is_bot_player(prev.current))
 	# Рассылка посреди нашего хода (обрыв/возврат соперника, реджойн)
 	# пришла с тем же серверным столом — локальную раскладку возвращаем,
 	# иначе автор теряет фишки и перестаёт повторять черновик.
@@ -1400,6 +1406,22 @@ func _apply_state(view: Dictionary, grace: float, paused: bool, waiting: bool = 
 	elif _draft_from >= 0:
 		_clear_draft()
 	_show_wait(_wait_text(grace, paused, waiting))
+
+
+## Коммит сетевого бота по новому состоянию: место прямо перед current
+## — бот, и в этом состоянии есть выставленные им фишки (lastTurn).
+## Прошлое состояние для этого не нужно — оно могло пропасть по дороге.
+func _is_bot_commit(prev: GameState, view: Dictionary) -> bool:
+	if prev == null:
+		return false
+	var n := prev.player_count()
+	if n <= 0:
+		return false
+	var cur := clampi(int(view.get("current", 0)), 0, n - 1)
+	var mover := (cur - 1 + n) % n
+	if not prev.is_bot_player(mover):
+		return false
+	return not (view.get("lastTurn", []) as Array).is_empty()
 
 
 func _on_net_error(reason: String, hard: bool, errors: Array) -> void:
