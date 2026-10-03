@@ -118,6 +118,7 @@ func _boot() -> void:
 	_prop("Control", "mouse_filter")
 	_prop("Control", "theme_type_variation")
 	_prop("OptionButton", "selected")
+	_prop("Button", "clip_text")
 	_prop("CheckBox", "button_pressed")
 
 	# ================================================== сигналы

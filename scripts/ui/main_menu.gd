@@ -212,7 +212,7 @@ func _build_ui() -> void:
 	box.add_child(_room_actions)
 
 	_return_room_btn = Button.new()
-	_return_room_btn.text = "Вернуться в игру"
+	_return_room_btn.text = "Вернуться"
 	_return_room_btn.custom_minimum_size = Vector2(0, Settings.touch(46))
 	_return_room_btn.add_theme_font_size_override("font_size", Settings.fs(15))
 	_return_room_btn.pressed.connect(_on_return_room_pressed)
@@ -220,7 +220,7 @@ func _build_ui() -> void:
 	_room_actions.add_child(_return_room_btn)
 
 	_drop_room_btn = Button.new()
-	_drop_room_btn.text = "Покинуть комнату"
+	_drop_room_btn.text = "Покинуть"
 	_drop_room_btn.custom_minimum_size = Vector2(0, Settings.touch(46))
 	_drop_room_btn.add_theme_font_size_override("font_size", Settings.fs(15))
 	_drop_room_btn.pressed.connect(_on_drop_room_pressed)
@@ -278,7 +278,7 @@ func _build_ui() -> void:
 	box.add_child(_make_option_row("Сложность ботов:", Settings.BOT_LEVEL_NAMES, Settings.bot_level, _on_bot_level))
 
 	var start_btn := Button.new()
-	start_btn.text = "Начать игру"
+	start_btn.text = "Начать"
 	start_btn.custom_minimum_size = Vector2(0, Settings.touch(58))
 	start_btn.add_theme_font_size_override("font_size", Settings.fs(20))
 	start_btn.pressed.connect(_on_start_pressed)
@@ -289,7 +289,7 @@ func _build_ui() -> void:
 	# отдельный режим, и человек, который хочет поиграть с соседом за
 	# одним столом, не должен промахиваться мимо привычной кнопки.
 	var online_btn := Button.new()
-	online_btn.text = "Играть по сети"
+	online_btn.text = "По сети"
 	online_btn.custom_minimum_size = Vector2(0, Settings.touch(50))
 	online_btn.add_theme_font_size_override("font_size", Settings.fs(17))
 	online_btn.pressed.connect(_on_online_pressed)
@@ -315,6 +315,7 @@ func _build_ui() -> void:
 
 	var rules_btn := Button.new()
 	rules_btn.text = "Как играть"
+	rules_btn.clip_text = true
 	rules_btn.custom_minimum_size = Vector2(200, Settings.touch(50))
 	rules_btn.add_theme_font_size_override("font_size", Settings.fs(16))
 	rules_btn.pressed.connect(func(): help_overlay.visible = true)
@@ -322,6 +323,7 @@ func _build_ui() -> void:
 
 	var quit_btn := Button.new()
 	quit_btn.text = "Выход"
+	quit_btn.clip_text = true
 	quit_btn.custom_minimum_size = Vector2(200, Settings.touch(50))
 	quit_btn.add_theme_font_size_override("font_size", Settings.fs(16))
 	quit_btn.pressed.connect(func(): get_tree().quit())
@@ -457,7 +459,8 @@ func _build_help_overlay() -> void:
 
 	var close_btn := Button.new()
 	close_btn.text = "Закрыть"
-	close_btn.custom_minimum_size = Vector2(200, Settings.touch(52))
+	close_btn.clip_text = true
+	close_btn.custom_minimum_size = Vector2(Settings.touch_w(200), Settings.touch(52))
 	close_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	close_btn.add_theme_font_size_override("font_size", Settings.fs(17))
 	close_btn.pressed.connect(func(): help_overlay.visible = false)

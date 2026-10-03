@@ -1,14 +1,14 @@
 extends SceneTree
 
 # ==============================================================
-#  Черновик стола (game.draft) и превью нового ряда (game.peek)
-#  на стороне КЛИЕНТА.
+#  Черновик стола (game.draft) на стороне КЛИЕНТА.
 #
-#  Серверную ретрансляцию проверяет run_tests.js, а здесь — то, что
-#  видит игрок: серые фишки чужого хода, их накопление до конца хода
-#  (черновик обязан переживать промежуточные game.state), гашение при
-#  смене хода и по таймауту, плюс врезку нового ряда под призраком —
-#  без неё призрак лёг бы поверх соседней карточки.
+#  Живого превью наведения (game.peek) клиент не рисует: пока карточку
+#  держат, соперникам ничего не показываем. Серверную ретрансляцию
+#  проверяет run_tests.js, а здесь — то, что видит игрок: выставленные
+#  фишки чужого хода — прозрачными с жирной зелёной рамкой, их накопление
+#  до конца хода (черновик обязан переживать промежуточные game.state),
+#  гашение при смене хода и по таймауту.
 #
 #  Состояние берётся из tests/fixtures/views.json — того самого, что
 #  присылает сервер (seat0: мы за 0-м, ходит 2-й).
@@ -26,8 +26,8 @@ var view: Dictionary = {}
 # Конкретные номера фишек в фикстуре случайны (переснимается с раздачей),
 # поэтому тест берёт их из неё, а не из констант: иначе переснял фикстуру —
 # и тест разом посыпался. Нужны три вещи:
-#   _tbl  — фишка, которая уже на серверном столе (не серая в черновике);
-#   _na/_nb — фишки, которых на столе нет (серые);
+#   _tbl  — фишка, которая уже на серверном столе (без метки в черновике);
+#   _na/_nb — фишки, которых на столе нет (новые, с зелёной рамкой);
 #   _ha/_hb — фишки из своей руки (для выкладки).
 var _tbl := 0
 var _na := 0
@@ -90,7 +90,7 @@ func _boot() -> void:
 	test_draft_arrives()
 	test_draft_survives_state()
 	test_draft_recolor_on_base_change()
-	await test_peek_new_row()
+	test_no_hover_preview()
 	test_turn_change_clears()
 	test_expiry()
 	test_invariant()
@@ -107,18 +107,18 @@ func _boot() -> void:
 # ------------------------------------------------------------------ проверки
 
 func test_draft_arrives() -> void:
-	section("приём черновика: серые и рисунок стола")
+	section("приём черновика: новые фишки и рисунок стола")
 	game._on_net_draft(2, [
 		{"id": 900, "tiles": [_tbl, _na]},
 		{"id": 901, "tiles": [_nb]},
 	])
 	ok("черновик активен", game._draft_active(), "from=%d" % game._draft_from)
-	ok("серыми ровно новые фишки",
-		game._draft_grey_ids.size() == 2 and game._draft_grey_ids.has(_na)
-			and game._draft_grey_ids.has(_nb),
-		"grey=%s" % [game._draft_grey_ids.keys()])
-	ok("фишка из серверного стола не серая", not game.get_tile_marks(_tbl).get("draft", false))
-	ok("новая фишка помечена серой", game.get_tile_marks(_na).get("draft", false))
+	ok("новых ровно две фишки",
+		game._draft_new_ids.size() == 2 and game._draft_new_ids.has(_na)
+			and game._draft_new_ids.has(_nb),
+		"new=%s" % [game._draft_new_ids.keys()])
+	ok("фишка из серверного стола без метки", not game.get_tile_marks(_tbl).has("last"))
+	_check_placed_style(_na, "новая фишка прозрачная с зелёной рамкой")
 	var rows: Array = game._table_rows()
 	ok("стол показан целиком из черновика (2 ряда)",
 		rows.size() == 2 and int(rows[0]["id"]) == 900 and int(rows[1]["id"]) == 901,
@@ -133,24 +133,24 @@ func test_draft_survives_state() -> void:
 	ok("черновик пережил состояние тем же ходом",
 		game._draft_from == 2 and game._draft_active(),
 		"from=%d" % game._draft_from)
-	ok("серые на месте", game._draft_grey_ids.size() == 2,
-		"grey=%d" % game._draft_grey_ids.size())
+	ok("новые на месте", game._draft_new_ids.size() == 2,
+		"new=%d" % game._draft_new_ids.size())
 	ok("стол всё ещё из черновика", game.row_blocks.size() == 2
 		and game.row_blocks[0].row_id == 900)
 
 
 func test_draft_recolor_on_base_change() -> void:
-	section("серые пересчитываются по новой серверной базе")
+	section("новые пересчитываются по новой серверной базе")
 	var v: Dictionary = view.duplicate(true)
-	v["table"] = [] # база пуста — теперь серой становится и 72
+	v["table"] = [] # база пуста — теперь новой становится и 72
 	_apply(v)
 	ok("черновик пережил даже пустую базу", game._draft_from == 2 and game._draft_active(),
 		"from=%d" % game._draft_from)
-	ok("серые пересчитаны: стол пуст, серы все три",
-		game._draft_grey_ids.size() == 3 and game._draft_grey_ids.has(_tbl)
-			and game._draft_grey_ids.has(_na) and game._draft_grey_ids.has(_nb),
-		"grey=%s" % [game._draft_grey_ids.keys()])
-	ok("фишка с пустого стола теперь серая", game.get_tile_marks(_tbl).get("draft", false))
+	ok("новые пересчитаны: стол пуст, новых три",
+		game._draft_new_ids.size() == 3 and game._draft_new_ids.has(_tbl)
+			and game._draft_new_ids.has(_na) and game._draft_new_ids.has(_nb),
+		"new=%s" % [game._draft_new_ids.keys()])
+	_check_placed_style(_tbl, "фишка с пустого стола тоже с зелёной рамкой")
 
 
 func test_turn_change_clears() -> void:
@@ -234,63 +234,45 @@ func _row_tiles(rows: Array, row_id: int) -> Array:
 	return []
 
 
-# --------------------------------------------------- превью нового ряда
+# --------------------------------------------------- без живого превью
 
-func test_peek_new_row() -> void:
-	section("призрак нового ряда врезает ряд, а не ложится поверх")
+func test_no_hover_preview() -> void:
+	section("наведение не вставляет слоты и призраки")
 	_apply(view)
 	game._on_net_draft(2, [{"id": 900, "tiles": [_tbl, _na]}, {"id": 901, "tiles": [_nb]}])
-	# Ряды на экране: 900, 901. Соперник наводит на разряд ПЕРЕД вторым.
-	game._on_net_peek(_na, "new", -1, -1, 1)
-	ok("врезка создана", game._peek_slot != null)
-	ok("призрак создан", game._peek_ghost != null)
-	ok("врезка встала между рядами (child index 1)",
-		game._peek_slot.get_index() == 1,
-		"index=%d" % game._peek_slot.get_index())
-	ok("детей table_box = ряды + врезка + подсказка",
-		game.table_box.get_child_count() == game.row_blocks.size() + 2,
-		"детей %d, рядов %d" % [game.table_box.get_child_count(), game.row_blocks.size()])
-	# Разметке нужно кадр-два; дальше меряем уже разложенные позиции.
-	await process_frame
-	await process_frame
-	var slot: Control = game._peek_slot
-	var first: Control = game.row_blocks[0]
-	var second: Control = game.row_blocks[1]
-	ok("врезка лежит ниже первого ряда", slot.global_position.y > first.global_position.y,
-		"slot.y=%.1f first.y=%.1f" % [slot.global_position.y, first.global_position.y])
-	ok("врезка лежит выше второго ряда (тот расступился)",
-		slot.global_position.y < second.global_position.y,
-		"slot.y=%.1f second.y=%.1f" % [slot.global_position.y, second.global_position.y])
-	game._sync_peek_slot()
-	ok("призрак держится на врезке",
-		game._peek_ghost.global_position == slot.global_position,
-		"ghost=%s slot=%s" % [game._peek_ghost.global_position, slot.global_position])
-	# Смена цели: into по черновому ряду — врезки быть не должно.
-	game._on_net_peek(_tbl, "into", 900, 0, -1)
-	ok("into не оставляет врезку", game._peek_slot == null and game._peek_ghost != null)
-	# Вернулись к новому ряду и тут же пришёл повтор черновика:
-	# пересборка стола обязана вернуть врезку на её место.
-	game._on_net_peek(_na, "new", -1, -1, 1)
-	ok("врезка снова создана", game._peek_slot != null)
-	game._on_net_draft(2, [
-		{"id": 900, "tiles": [_tbl, _na, _nb]},
-		{"id": 901, "tiles": [_nb]},
-	])
-	ok("после пересборки черновика врезка на месте (child index 1)",
-		game._peek_slot != null and game._peek_slot.get_index() == 1,
-		"index=%d" % (game._peek_slot.get_index()
-			if game._peek_slot != null else -1))
-	game._sync_peek_slot()
-	ok("призрак по-прежнему на врезке",
-		game._peek_ghost != null and game._peek_slot != null
-			and game._peek_ghost.global_position == game._peek_slot.global_position)
-	# clear гасит и врезку, и призрак.
-	game._on_net_peek(0, "clear", -1, -1, -1)
-	ok("clear убрал врезку и призрак",
-		game._peek_slot == null and game._peek_ghost == null)
-	ok("дети table_box вернулись к рядам + подсказке",
+	ok("в столе только ряды и подсказка",
 		game.table_box.get_child_count() == game.row_blocks.size() + 1,
 		"детей %d, рядов %d" % [game.table_box.get_child_count(), game.row_blocks.size()])
+	for block in game.row_blocks:
+		var flow = block.get("flow")
+		var views: Array = flow.get("tile_views") if flow != null else []
+		ok("ряд не растянут призраком", flow != null and views.size() <= 2)
+
+
+func _placed_view(tile_id: int) -> Control:
+	for block in game.row_blocks:
+		var flow = block.get("flow")
+		if flow == null:
+			continue
+		for item in flow.get("tile_views"):
+			var view := item as Control
+			var tile = view.get("tile") if view != null else null
+			if tile != null and int(tile.get("id")) == tile_id:
+				return view
+	return null
+
+
+func _check_placed_style(tile_id: int, msg: String) -> void:
+	var marks: Dictionary = game.get_tile_marks(tile_id)
+	ok(msg, bool(marks.get("last", false)) and not marks.has("draft"))
+	var view := _placed_view(tile_id)
+	ok("поставленная фишка есть на столе", view != null)
+	if view == null:
+		return
+	ok("поставленная фишка прозрачная, alpha=%f" % view.modulate.a, view.modulate.a < 0.99)
+	var sb := view.get_theme_stylebox("panel")
+	ok("у поставленной фишки зелёная рамка",
+		sb is StyleBoxFlat and (sb as StyleBoxFlat).border_color == Color("43A047"))
 
 
 # ------------------------------------------------------------------ служебное

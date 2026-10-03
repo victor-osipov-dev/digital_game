@@ -1,9 +1,6 @@
 extends Control
 
-const SLOT_HOVER_DELAY_MS := 400
-const SLOT_HOVER_MOVE_PX := 6.0
 const SLOT_HOVER_EDGE := 10.0
-const SLOT_GRACE_MS := 1500
 const HINT_MIN_H := 100.0
 const DRAG_SCROLL_ZONE := 64.0
 const DRAG_SCROLL_OVERSHOOT := 40.0
@@ -12,10 +9,6 @@ const DRAG_SCROLL_SPEED := 480.0
 # редактора и на новом файле отстаёт — см. «Identifier "ScrollDrag" not
 # declared in the current scope».
 const ScrollDragClass := preload("res://scripts/ui/scroll_drag.gd")
-# Превью хода шлём повторно, пока тянем, — иначе соперник не отличит
-# долгое «он думает тут» от брошенного призрака упавшего клиента.
-const PEEK_RESEND_MS := 2000
-const PEEK_EXPIRE_MS := 5000
 # Черновик стола шлём повторно, пока ход не завершён, — иначе соперник
 # с потерянным пакетом или вошедший посреди хода увидит пустой стол.
 const DRAFT_RESEND_MS := 3000
@@ -56,16 +49,21 @@ var menu_dialog: ConfirmationDialog = null
 var toast_tween: Tween = null
 var title_tween: Tween = null
 var _again_btn: Button = null
+var _settings_panel: PanelContainer = null
+var _settings_rows: Array = []
+var _top_actions: BoxContainer = null
+var _top_action_buttons: Array = []
+var _burger_btn: Button = null
+var _burger_panel: PanelContainer = null
+var _burger_box: VBoxContainer = null
+var _burger_open := false
+var _top_collapsed := false
+var _burger_tween: Tween = null
 
 var _drag_view: TileView = null
-var _row_slots: Array = []
 var _bot_active: bool = false
 var _bot_seq: int = 0
 var _hint_ids: Array = []
-var _slot_hover_pos: int = -1
-var _slot_hover_time: int = 0
-var _slot_hover_last: Vector2 = Vector2.ZERO
-var _slot_grace_until: int = 0
 var _pan_pressed: bool = false
 var _pan_pos: Vector2 = Vector2.ZERO
 var _pan_press_on_tile: bool = false
@@ -91,7 +89,8 @@ var _waiting: bool = false
 # соперник расставлял фишки. Поэтому перед перерисовкой, заказанной
 # состоянием с сервера, запоминаем, где каждая показанная фишка стояла
 # (снимок), а после раскладки двигаем новые твины: новые фишки прилетают
-# сверху, сдвинутые переезжают, ушедшие улетают вверх призраком.
+# из верхнего правого угла, сдвинутые переезжают, ушедшие улетают туда же
+# призраком и уменьшаются.
 var _anim_pending: bool = false
 
 # --- отсчёт хода (сетевая партия) ---------------------------------------
@@ -103,26 +102,14 @@ var _turn_deadline_ms: int = 0
 var _turn_timer_panel: PanelContainer = null
 var _turn_timer_label: Label = null
 
-# --- превью ходов соперника (game.peek) ----------------------------------
-#
-# Пока игрок перебирает варианты, сервер пересылает остальным, куда он
-# смотрит; здесь это рисуется призраком фишки над столом.
-var _peek_layer: Control = null
-var _peek_ghost: TileView = null
-var _peek_slot: Control = null
-var _peek_drag: Dictionary = {}
-var _last_peek: Dictionary = {}
-var _peek_resent_ms: int = 0
-var _peek_at_ms: int = 0
-
 # --- черновик стола (game.draft) ------------------------------------------
 #
 # Соперник шлёт ВЕСЬ свой стол после каждого локального изменения: пока
-# он раскладывает, показываем его вместо базового, выложенные в этот ход
-# фишки — серыми. Принятая сторона:
+# он раскладывает, показываем его вместо базового, а выставленные в этом
+# ходе фишки — прозрачными с жирной зелёной рамкой. Принятая сторона:
 var _draft_rows: Array = []          # ряды соперника [{id, tiles}, ...]
 var _draft_from: int = -1            # сид автора, -1 — черновика нет
-var _draft_grey_ids: Dictionary = {} # id фишек, которые показываем серыми
+var _draft_new_ids: Dictionary = {} # id фишек, выставленных в этом черновике
 var _draft_at_ms: int = 0            # когда пришёл последний пакет
 # Отправная сторона (своё окно): таблица последнего отправленного стола —
 # чтобы шлём только при изменении, а не на каждом кадре.
@@ -151,7 +138,6 @@ func _ready() -> void:
 		Net.game_error.connect(_on_net_error)
 		Net.game_lost.connect(_on_net_lost)
 		Net.connection_changed.connect(_on_net_connection)
-		Net.game_peek.connect(_on_net_peek)
 		Net.game_draft.connect(_on_net_draft)
 		# TOAST от сервера (например, «время хода вышло») — обычным тостом.
 		Net.notice.connect(toast)
@@ -165,13 +151,9 @@ func _process(_delta: float) -> void:
 	if _drag_view != null and not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
 		_end_drag()
 	if _drag_view != null and is_instance_valid(_drag_view):
-		_update_row_slot_hover()
 		_auto_scroll_drag(_delta)
-		_update_peek()
 	_update_hint_zone_size()
 	_update_turn_timer()
-	_expire_peek()
-	_sync_peek_slot()
 	_expire_draft()
 	# Раз в секунду — шанс повторить висящий черновик (только если он уже
 	# был отправлен: чистый стол отправлять нечего).
@@ -210,7 +192,8 @@ func _build_ui() -> void:
 	layout.add_child(top)
 
 	deck_button = Button.new()
-	deck_button.custom_minimum_size = Vector2(92, Settings.touch(52))
+	deck_button.clip_text = true
+	deck_button.custom_minimum_size = Vector2(Settings.touch_w(92), Settings.touch(52))
 	deck_button.add_theme_font_size_override("font_size", Settings.fs(16))
 	deck_button.pressed.connect(_on_deck_pressed)
 	var deck_sb := StyleBoxFlat.new()
@@ -239,31 +222,63 @@ func _build_ui() -> void:
 	top_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	top.add_child(top_spacer)
 
-	cp_save_btn = _make_top_button("Сохр.", "Сохранить расклад (чекпоинт)", _on_cp_save_pressed)
-	top.add_child(cp_save_btn)
+	_top_actions = BoxContainer.new()
+	_top_actions.add_theme_constant_override("separation", 6)
+	top.add_child(_top_actions)
+	cp_save_btn = _make_top_button("Сохр.", "Сохранить расклад (чекпоинт)",
+		_on_cp_save_pressed, "Сохранить")
+	_top_actions.add_child(cp_save_btn)
 
-	cp_restore_btn = _make_top_button("Вернуть", "Вернуться к чекпоинту", _on_cp_restore_pressed)
-	top.add_child(cp_restore_btn)
+	cp_restore_btn = _make_top_button("Вернуть", "Вернуться к чекпоинту",
+		_on_cp_restore_pressed, "Вернуть")
+	_top_actions.add_child(cp_restore_btn)
 
-	hint_btn = _make_top_button("Подск.", "Подсказка - показать возможный ход", _on_hint_pressed)
-	top.add_child(hint_btn)
+	hint_btn = _make_top_button("Подск.", "Подсказка - показать возможный ход",
+		_on_hint_pressed, "Подсказка")
+	_top_actions.add_child(hint_btn)
 
-	var help_btn := Button.new()
-	help_btn.text = "?"
-	help_btn.custom_minimum_size = Vector2(44, Settings.touch(46))
-	help_btn.add_theme_font_size_override("font_size", Settings.fs(20))
-	help_btn.pressed.connect(_open_help)
-	top.add_child(help_btn)
+	var help_btn := _make_top_button("?", "Помощь", _open_help, "Помощь")
+	_top_actions.add_child(help_btn)
 
-	var settings_btn := _make_top_button("Настр.", "Размер текста и карточек", _open_settings)
-	top.add_child(settings_btn)
+	var settings_btn := _make_top_button("Настр.", "Размер текста и карточек",
+		_open_settings, "Настройки")
+	_top_actions.add_child(settings_btn)
 
-	var menu_btn := Button.new()
-	menu_btn.text = "Меню"
-	menu_btn.custom_minimum_size = Vector2(68, Settings.touch(46))
-	menu_btn.add_theme_font_size_override("font_size", Settings.fs(16))
-	menu_btn.pressed.connect(func(): menu_dialog.popup_centered())
-	top.add_child(menu_btn)
+	var menu_btn := _make_top_button("Меню", "Выход в меню",
+		func(): menu_dialog.popup_centered(), "Меню")
+	_top_actions.add_child(menu_btn)
+	_top_action_buttons = [
+		cp_save_btn, cp_restore_btn, hint_btn, help_btn, settings_btn, menu_btn,
+	]
+	_burger_btn = Button.new()
+	_burger_btn.text = "☰"
+	_burger_btn.tooltip_text = "Действия"
+	_burger_btn.custom_minimum_size = Vector2(60, Settings.touch(46))
+	_burger_btn.clip_text = true
+	_burger_btn.add_theme_font_size_override("font_size", Settings.fs(18))
+	_burger_btn.pressed.connect(_toggle_burger_menu)
+	_burger_btn.visible = false
+	top.add_child(_burger_btn)
+
+	# Бургер — та же шестёрка кнопок, только столбиком: узкий экран не
+	# должен ни резать их, ни раскидывать в две неровные строки.
+	_burger_panel = PanelContainer.new()
+	var bsb := StyleBoxFlat.new()
+	bsb.bg_color = Color(0.09, 0.12, 0.19, 0.97)
+	bsb.border_color = Color(1, 1, 1, 0.22)
+	bsb.set_border_width_all(2)
+	bsb.set_corner_radius_all(12)
+	bsb.content_margin_left = 8.0
+	bsb.content_margin_right = 8.0
+	bsb.content_margin_top = 8.0
+	bsb.content_margin_bottom = 8.0
+	_burger_panel.add_theme_stylebox_override("panel", bsb)
+	_burger_panel.visible = false
+	_burger_panel.modulate.a = 0.0
+	layout.add_child(_burger_panel)
+	_burger_box = VBoxContainer.new()
+	_burger_box.add_theme_constant_override("separation", 8)
+	_burger_panel.add_child(_burger_box)
 
 	# Строка состояния хода («Ход соперника», «Нет связи…») — отдельная
 	# панель в потоке раскладки, а не абсолютная накладка: на телефоне
@@ -316,13 +331,6 @@ func _build_ui() -> void:
 	_turn_timer_label.add_theme_font_size_override("font_size", Settings.fs(15))
 	_turn_timer_label.add_theme_color_override("font_color", Color("FFD54F"))
 	_turn_timer_panel.add_child(_turn_timer_label)
-
-	# Превью хода соперника — призрак фишки над столом. Накладка вне
-	# раскладки: не двигает стол, не перехватывает касания.
-	_peek_layer = Control.new()
-	_peek_layer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_peek_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(_peek_layer)
 
 	# Подсказки и короткие сообщения — оверлей ПОВЕРХ поля: ничего не добавляют
 	# в раскладку и не сдвигают её, крупный текст с фоном читается поверх стола.
@@ -410,15 +418,17 @@ func _build_ui() -> void:
 	hint_zone.add_child(hlab)
 	table_box.add_child(hint_zone)
 
-	# Рука — в собственной панели, а не просто на общем фоне: без
-	# подложки и рамки её фишки визуально сливаются с рядами стола,
+	# Рука — в собственной зелёной панели, а не просто на общем фоне: без
+	# заливки и рамки её фишки визуально сливаются с рядами стола,
 	# особенно когда стол короткий и обе зоны стоят вплотную. Панель
 	# ловит клики только в своих отступах — зона фишек осталась у
 	# hand_flow, drop-проверки работают по её global_rect как раньше.
 	var hand_panel := PanelContainer.new()
 	var hpsb := StyleBoxFlat.new()
-	hpsb.bg_color = Color(1, 1, 1, 0.07)
-	hpsb.border_color = Color(1, 1, 1, 0.30)
+	# Своя рука — отдельным заливным полем, а не серой подложкой: иначе она
+	# визуально сливается со столом.
+	hpsb.bg_color = Color(0.10, 0.34, 0.22, 0.72)
+	hpsb.border_color = Color(0.48, 0.86, 0.55, 0.85)
 	hpsb.set_border_width_all(2)
 	hpsb.set_corner_radius_all(12)
 	hpsb.content_margin_left = 8.0
@@ -477,6 +487,7 @@ func _build_ui() -> void:
 	menu_dialog.confirmed.connect(_on_leave_to_menu)
 	_style_dialog(menu_dialog)
 	add_child(menu_dialog)
+	_sync_top_bar()
 
 ## Смена сцены с проверкой, что нас ещё есть в дереве.
 ##
@@ -519,14 +530,98 @@ func _style_dialog(dialog: ConfirmationDialog) -> void:
 			b.add_theme_font_size_override("font_size", Settings.fs(16))
 			b.custom_minimum_size = Vector2(Settings.touch_w(120), Settings.touch(52))
 
-func _make_top_button(text_value: String, tip: String, handler: Callable) -> Button:
+func _make_top_button(text_value: String, tip: String, handler: Callable, full_value: String = "") -> Button:
 	var btn := Button.new()
 	btn.text = text_value
 	btn.tooltip_text = tip
 	btn.custom_minimum_size = Vector2(60, Settings.touch(46))
+	btn.clip_text = true
 	btn.add_theme_font_size_override("font_size", Settings.fs(15))
+	btn.set_meta("short_text", text_value)
+	btn.set_meta("full_text", full_value if not full_value.is_empty() else text_value)
 	btn.pressed.connect(handler)
+	btn.pressed.connect(_close_burger_menu)
 	return btn
+
+
+## Верхние кнопки либо стоят в один ряд, либо уезжают в бургер: считать
+## надо по минимальной ширине, иначе при гигантском тексте ряд либо
+## разъезжается на две линии, либо уезжает за правый край.
+func _sync_top_bar() -> void:
+	if deck_button == null or _top_actions == null or _burger_btn == null \
+			or _burger_panel == null or _burger_box == null:
+		return
+	for btn in _top_action_buttons:
+		(btn as Button).text = String((btn as Button).get_meta("short_text"))
+	var have := maxf(get_viewport_rect().size.x - 20.0, 200.0)
+	var need := deck_button.get_combined_minimum_size().x
+	for btn in _top_action_buttons:
+		need += 6.0 + (btn as Button).get_combined_minimum_size().x
+	var collapse := need > have
+	for btn in _top_action_buttons:
+		var key := "full_text" if collapse else "short_text"
+		(btn as Button).text = String((btn as Button).get_meta(key))
+	var target: Control = _burger_box if collapse else _top_actions
+	for btn in _top_action_buttons:
+		if (btn as Button).get_parent() != target:
+			(btn as Button).get_parent().remove_child(btn)
+			target.add_child(btn)
+	_top_actions.visible = not collapse
+	_burger_btn.visible = collapse
+	var was_collapsed := _top_collapsed
+	_top_collapsed = collapse
+	if not collapse:
+		_set_burger_open(false, false)
+	elif not was_collapsed:
+		_set_burger_open(false, false)
+
+
+func _toggle_burger_menu() -> void:
+	_set_burger_open(not _burger_open)
+
+
+func _close_burger_menu() -> void:
+	_set_burger_open(false)
+
+
+func _set_burger_open(open: bool, animate := true) -> void:
+	if _burger_panel == null:
+		return
+	if not _top_collapsed:
+		open = false
+	if open == _burger_open and _burger_panel.visible == open:
+		return
+	_burger_open = open
+	if _burger_tween != null and _burger_tween.is_valid():
+		_burger_tween.kill()
+	if not open and not animate:
+		_burger_panel.visible = false
+		return
+	_burger_panel.visible = true
+	_burger_panel.pivot_offset = Vector2(_burger_panel.size.x * 0.5, 0.0)
+	_burger_panel.modulate.a = 1.0 if open else _burger_panel.modulate.a
+	_burger_panel.scale = Vector2.ONE if open else _burger_panel.scale
+	if not animate:
+		_burger_panel.modulate.a = 1.0 if open else 0.0
+		_burger_panel.visible = open
+		return
+	_burger_tween = create_tween()
+	_burger_tween.set_parallel(true)
+	if open:
+		_burger_panel.modulate.a = 0.0
+		_burger_panel.scale = Vector2(1.0, 0.82)
+		_burger_tween.tween_property(_burger_panel, "modulate:a", 1.0, 0.22)
+		_burger_tween.tween_property(_burger_panel, "scale", Vector2.ONE, 0.24) \
+			.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	else:
+		_burger_tween.tween_property(_burger_panel, "modulate:a", 0.0, 0.18)
+		_burger_tween.tween_property(_burger_panel, "scale", Vector2(1.0, 0.82), 0.20)
+		_burger_tween.tween_callback(_hide_burger_panel)
+
+
+func _hide_burger_panel() -> void:
+	if not _burger_open and _burger_panel != null:
+		_burger_panel.visible = false
 
 func _apply_accent_style(button: Button, normal: Color, hover: Color, pressed: Color) -> void:
 	var sb_normal := StyleBoxFlat.new()
@@ -715,7 +810,8 @@ func _build_help_overlay() -> void:
 
 	var close_btn := Button.new()
 	close_btn.text = "Закрыть"
-	close_btn.custom_minimum_size = Vector2(200, Settings.touch(52))
+	close_btn.clip_text = true
+	close_btn.custom_minimum_size = Vector2(Settings.touch_w(200), Settings.touch(52))
 	close_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	close_btn.add_theme_font_size_override("font_size", Settings.fs(17))
 	close_btn.pressed.connect(func(): help_overlay.visible = false)
@@ -743,6 +839,9 @@ func _open_help() -> void:
 	help_overlay.visible = true
 
 func _open_settings() -> void:
+	if _settings_panel != null:
+		_settings_panel.custom_minimum_size = Vector2(_settings_panel_width(), 0)
+	_sync_settings_rows()
 	settings_overlay.visible = true
 
 func _on_settings_text_scale(index: int) -> void:
@@ -761,11 +860,12 @@ func _rebuild_ui() -> void:
 		title_tween.kill()
 	if toast_tween != null and toast_tween.is_running():
 		toast_tween.kill()
+	if _burger_tween != null and _burger_tween.is_valid():
+		_burger_tween.kill()
+	_burger_open = false
+	_top_collapsed = false
+	_burger_tween = null
 	_drag_view = null
-	_slot_hover_pos = -1
-	_slot_hover_time = 0
-	_slot_grace_until = 0
-	_row_slots.clear()
 	row_blocks.clear()
 	var was_pass := pass_overlay != null and pass_overlay.visible
 	var was_win := win_overlay != null and win_overlay.visible
@@ -803,9 +903,11 @@ func _build_settings_overlay() -> void:
 	var center := CenterContainer.new()
 	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	settings_overlay.add_child(center)
+	_settings_rows.clear()
 
 	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(460, 0)
+	_settings_panel = panel
+	panel.custom_minimum_size = Vector2(_settings_panel_width(), 0)
 	var psb := StyleBoxFlat.new()
 	psb.bg_color = Color("1B2029")
 	psb.set_corner_radius_all(14)
@@ -834,14 +936,18 @@ func _build_settings_overlay() -> void:
 
 	var close_btn := Button.new()
 	close_btn.text = "Закрыть"
-	close_btn.custom_minimum_size = Vector2(200, Settings.touch(52))
+	close_btn.clip_text = true
+	close_btn.custom_minimum_size = Vector2(Settings.touch_w(200), Settings.touch(52))
 	close_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	close_btn.add_theme_font_size_override("font_size", Settings.fs(17))
 	close_btn.pressed.connect(func(): settings_overlay.visible = false)
 	box.add_child(close_btn)
 
-func _make_settings_row(label_text: String, names: PackedStringArray, current: int, handler: Callable) -> HBoxContainer:
-	var row := HBoxContainer.new()
+func _make_settings_row(label_text: String, names: PackedStringArray, current: int, handler: Callable) -> BoxContainer:
+	# BoxContainer, а не HBoxContainer: на узком экране подпись и список
+	# встают столбиком, иначе ряд растягивает панель шире окна.
+	var row := BoxContainer.new()
+	_settings_rows.append(row)
 	row.add_theme_constant_override("separation", 10)
 	var lab := Label.new()
 	lab.text = label_text
@@ -858,6 +964,33 @@ func _make_settings_row(label_text: String, names: PackedStringArray, current: i
 	option.item_selected.connect(handler)
 	row.add_child(option)
 	return row
+
+
+func _settings_panel_width() -> float:
+	# Панель настроек не шире окна: фиксированные 460 px на узком телефоне
+	# уезжали за оба края сразу — CenterContainer её не ужмёт.
+	return minf(460.0, maxf(get_viewport_rect().size.x - 20.0, 240.0))
+
+
+func _sync_settings_rows() -> void:
+	if _settings_panel == null:
+		return
+	var avail := _settings_panel_width() - 32.0
+	for row in _settings_rows:
+		var box := row as BoxContainer
+		if box == null:
+			continue
+		var need := 0.0
+		var first := true
+		for item in box.get_children():
+			var c := item as Control
+			if c == null:
+				continue
+			need += c.get_combined_minimum_size().x
+			if not first:
+				need += float(box.get_theme_constant("separation"))
+			first = false
+		box.vertical = need > avail
 
 # ---------------------------------------------------------------- match flow
 
@@ -927,13 +1060,10 @@ func _net_unwatch() -> void:
 		Net.game_lost.disconnect(_on_net_lost)
 	if Net.connection_changed.is_connected(_on_net_connection):
 		Net.connection_changed.disconnect(_on_net_connection)
-	if Net.game_peek.is_connected(_on_net_peek):
-		Net.game_peek.disconnect(_on_net_peek)
 	if Net.game_draft.is_connected(_on_net_draft):
 		Net.game_draft.disconnect(_on_net_draft)
 	if Net.notice.is_connected(toast):
 		Net.notice.disconnect(toast)
-	_clear_peek()
 	_clear_draft()
 
 
@@ -1017,9 +1147,6 @@ func _apply_state(view: Dictionary, grace: float, paused: bool, waiting: bool = 
 	_grace = grace
 	_paused = paused
 	_waiting = waiting
-	# Превью чужого хода после нового состояния уже лож: строки могли
-	# сдвинуться, а перебирать перестали.
-	_clear_peek()
 	# Промежуточные game.state (реждойн, пауза, обновление отсчёта) не
 	# гасят чужой черновик, пока ход его автора не кончился: иначе серые
 	# фишки пропадали бы от любого состояния, прилетевшего посреди хода.
@@ -1045,7 +1172,7 @@ func _apply_state(view: Dictionary, grace: float, paused: bool, waiting: bool = 
 		else:
 			# База сервера могла обновиться — серые пересчитываем
 			# относительно неё, срок жизни черновика остаётся прежним.
-			_draft_grey_ids = _draft_grey_of(_draft_rows)
+			_draft_new_ids = _draft_new_of(_draft_rows)
 	elif _draft_from >= 0:
 		_clear_draft()
 	_show_wait(_wait_text(grace, paused, waiting))
@@ -1404,24 +1531,13 @@ func _on_hint_pressed() -> void:
 
 func _on_resized() -> void:
 	_update_hint_zone_size()
+	_sync_top_bar()
 
 # ---------------------------------------------------------------- drag & drop
 
 func on_drag_started(view: TileView) -> void:
 	_drag_view = view
 	_hint_ids.clear()
-	_slot_hover_pos = -1
-	_slot_hover_time = 0
-	_slot_grace_until = 0
-	# Что тянем — для превью сопернику (game.peek).
-	_peek_drag = {
-		"kind": "tile",
-		"tile_id": view.tile.id,
-		"from": view.src_kind,
-		"row_id": view.src_row_id,
-	}
-	_last_peek = {}
-	_peek_resent_ms = 0
 	# Пока тянем карточку, стол не должен сам ловить touch-скролл:
 	# ScrollContainer перехватывает жест в щели между плитками, карточка
 	# отстаёт от пальца, а ряды начинают уезжать. Своё листание по краям
@@ -1432,61 +1548,15 @@ func _end_drag() -> void:
 	if _drag_view != null and is_instance_valid(_drag_view):
 		_drag_view.modulate = Color.WHITE
 	_drag_view = null
-	_slot_hover_pos = -1
-	_slot_hover_time = 0
-	_slot_grace_until = 0
-	_clear_row_slots()
 	_set_drag_scroll_locked(false)
 	_pan_pressed = false
 	_pan_press_on_tile = false
-	# Конец перебирания — сопернику больше нечего показывать.
-	_send_peek({ "kind": "clear" })
-	_peek_drag = {}
 
 func _set_drag_scroll_locked(locked: bool) -> void:
 	if table_scroll == null:
 		return
 	table_scroll.mouse_filter = (
 		Control.MOUSE_FILTER_IGNORE if locked else Control.MOUSE_FILTER_STOP)
-
-func _update_row_slot_hover() -> void:
-	if state == null or state.finished:
-		return
-	var mouse := get_global_mouse_position()
-	var now := Time.get_ticks_msec()
-	if not _row_slots.is_empty():
-		# слот показан: держим его, пока курсор в его зоне;
-		# при уходе прячем с задержкой, чтобы успеть попасть
-		var slot_pos := int(_row_slots[0].get_meta("slot_pos", -1))
-		if _hover_slot_pos(mouse) == slot_pos:
-			_slot_grace_until = 0
-			return
-		if _slot_grace_until == 0:
-			_slot_grace_until = now + SLOT_GRACE_MS
-		elif now >= _slot_grace_until:
-			_slot_grace_until = 0
-			_slot_hover_pos = -1
-			_slot_hover_time = 0
-			_clear_row_slots()
-		return
-	_slot_grace_until = 0
-	var pos := _hover_slot_pos(mouse)
-	if pos < 0:
-		if _slot_hover_pos >= 0:
-			_slot_hover_pos = -1
-			_slot_hover_time = 0
-		return
-	if pos != _slot_hover_pos:
-		_slot_hover_pos = pos
-		_slot_hover_time = now
-		_slot_hover_last = mouse
-		return
-	if mouse.distance_to(_slot_hover_last) > SLOT_HOVER_MOVE_PX:
-		_slot_hover_last = mouse
-		_slot_hover_time = now
-		return
-	if now - _slot_hover_time >= SLOT_HOVER_DELAY_MS:
-		_show_row_slot(pos)
 
 func _auto_scroll_drag(delta: float) -> void:
 	if table_scroll == null:
@@ -1539,272 +1609,12 @@ func _hover_slot_pos(global_pos: Vector2) -> int:
 			best = j
 	return best
 
-func _show_row_slot(pos: int) -> void:
-	_clear_row_slots()
-	if state == null or state.finished:
-		return
-	var h := maxf(Settings.tile_size().y + 16.0, 36.0)
-	var slot := DropLayer.new()
-	slot.controller = self
-	slot.custom_minimum_size = Vector2(0, h)
-	slot.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(1, 1, 1, 0.03)
-	sb.border_color = Color(1, 1, 1, 0.25)
-	sb.set_border_width_all(2)
-	sb.set_corner_radius_all(10)
-	slot.add_theme_stylebox_override("panel", sb)
-	var lab := Label.new()
-	lab.text = "+ новый ряд"
-	lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	lab.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	lab.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	lab.add_theme_font_size_override("font_size", Settings.fs(15))
-	lab.add_theme_color_override("font_color", Color(1, 1, 1, 0.5))
-	slot.add_child(lab)
-	slot.set_meta("slot_pos", pos)
-	table_box.add_child(slot)
-	table_box.move_child(slot, clampi(pos, 0, table_box.get_child_count() - 1))
-	_row_slots.append(slot)
-
-func _clear_row_slots() -> void:
-	for slot in _row_slots:
-		if is_instance_valid(slot):
-			table_box.remove_child(slot)
-			slot.free()
-	_row_slots.clear()
-
-func _slot_position(global_pos: Vector2) -> int:
-	for slot in _row_slots:
-		if is_instance_valid(slot) and slot.get_global_rect().grow(SLOT_HOVER_EDGE * 2.0).has_point(global_pos):
-			return int(slot.get_meta("slot_pos", -1))
-	return -1
-
-# -------------------------------------------------------------- превью хода
-
-## Цель под пальцем в терминах протокола game.peek. Зеркалит gui_can_drop:
-## превью показываем только там, куда фишка реально могла бы лечь, иначе
-## соперник увидит «он думает сюда» про заведомо невозможный вариант.
-func _peek_target(global_pos: Vector2) -> Dictionary:
-	var out := { "kind": "clear" }
-	if _peek_drag.is_empty() or state == null or state.finished:
-		return out
-	var from := String(_peek_drag.get("from", ""))
-	var tile_id := int(_peek_drag.get("tile_id", -1))
-	if hand_flow != null and hand_flow.get_global_rect().has_point(global_pos):
-		# Забирает в руку: чужой руки не видно, но саму фишку показать
-		# можно — призраком поверх её текущего места.
-		if from == "row":
-			var src := _find_tile(tile_id)
-			if src != null and state.can_take_back(src):
-				out = { "kind": "back" }
-	elif table_scroll != null and table_scroll.get_global_rect().has_point(global_pos):
-		var hit := _table_hit(global_pos)
-		var target: GameState.Row = hit["row"]
-		if target != null:
-			var ok := false
-			if from == "hand":
-				ok = state.can_place_into(target)
-			else:
-				var src_row := state.row_by_id(int(_peek_drag.get("row_id", -1)))
-				ok = src_row != null and (target == src_row or state.can_touch_row(target))
-			if ok:
-				out = { "kind": "into", "row": target.id, "index": int(hit["index"]) }
-		else:
-			var gap := _hover_slot_pos(global_pos)
-			if gap >= 0:
-				out = { "kind": "new", "at": gap }
-			elif _in_hint_zone(global_pos):
-				out = { "kind": "new", "at": row_blocks.size() }
-	return out
-
-
-## Шлём превью, только когда цель изменилась; живую цель повторяем раз в
-## PEEK_RESEND_MS — иначе призрак соперника протухнет, пока мы молчим,
-## думая над позицией, а упавший клиент оставит призрак навсегда.
-func _update_peek() -> void:
-	if not _online or _peek_drag.is_empty():
-		return
-	var target := _peek_target(get_global_mouse_position())
-	var now := Time.get_ticks_msec()
-	if target != _last_peek:
-		_send_peek(target)
-	elif String(target.get("kind", "clear")) != "clear" \
-			and now - _peek_resent_ms >= PEEK_RESEND_MS:
-		_send_peek(target)
-
-
-func _send_peek(target: Dictionary) -> void:
-	if not _online:
-		return
-	_last_peek = target
-	_peek_resent_ms = Time.get_ticks_msec()
-	if not Net.is_linked():
-		return
-	var payload := {
-		"tile": int(_peek_drag.get("tile_id", 0)),
-		"kind": String(target.get("kind", "clear")),
-	}
-	if target.has("row"):
-		payload["row"] = int(target["row"])
-	if target.has("index"):
-		payload["index"] = int(target["index"])
-	if target.has("at"):
-		payload["at"] = int(target["at"])
-	Net.peek_place(payload)
-
-
-## Соперник прислал превью: рисуем призрак фишки в целевой точке.
-func _on_net_peek(tile_id: int, kind: String, row: int, index: int, at: int) -> void:
-	_clear_peek()
-	if kind == "clear" or tile_id <= 0 or state == null or state.finished:
-		return
-	if _peek_layer == null:
-		return
-	var pos: Variant = _peek_position(kind, tile_id, row, index, at)
-	if pos == null:
-		return
-	if kind == "new":
-		# Врезаем в наш стол прозрачный ряд той же высоты: призрак ляжет
-		# в разрыв, а не поверх соседней карточки — соперник видит, что
-		# у того открывается новый ряд. Позиция уже посчитана по
-		# _peek_new_pos — врезка встанет именно туда после переразметки,
-		# а держать призрак на ней будет _sync_peek_slot каждый кадр.
-		_show_peek_slot(at)
-		if _peek_slot == null:
-			return
-	var ghost := TileView.make(ViewBuilder.tile(tile_id), false, self)
-	ghost.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	ghost.modulate = Color(1, 1, 1, 0.7)
-	_peek_layer.add_child(ghost)
-	ghost.global_position = pos as Vector2
-	_peek_ghost = ghost
-	_peek_at_ms = Time.get_ticks_msec()
-
-
-## Куда положить призрак. null — в текущем состоянии этой точки нет
-## (например, ряд уже разобрали): превью просто не показываем.
-func _peek_position(kind: String, tile_id: int, row: int, index: int, at: int) -> Variant:
-	match kind:
-		"into":
-			return _peek_into_pos(row, index)
-		"new":
-			return _peek_new_pos(at)
-		"back":
-			return _peek_back_pos(tile_id)
-	return null
-
-
-func _peek_into_pos(row_id: int, index: int) -> Variant:
-	var rb := _row_block_by_id(row_id)
-	if rb == null or rb.flow == null:
-		return null
-	var tile_views := rb.flow.tile_views
-	if tile_views.is_empty():
-		return rb.global_position
-	if index >= tile_views.size():
-		var last: TileView = tile_views[tile_views.size() - 1]
-		return last.global_position + Vector2(Settings.tile_size().x + 8.0, 0.0)
-	return (tile_views[index] as TileView).global_position
-
-
-func _peek_new_pos(at: int) -> Variant:
-	var n := row_blocks.size()
-	var slot := clampi(at, 0, n)
-	if slot < n:
-		return (row_blocks[slot] as RowBlock).global_position
-	if n > 0:
-		var last_row := row_blocks[n - 1] as RowBlock
-		return last_row.global_position + Vector2(0.0, last_row.size.y + 6.0)
-	if table_box != null:
-		return table_box.global_position
-	return null
-
-
-func _peek_back_pos(tile_id: int) -> Variant:
-	for block in row_blocks:
-		var rb := block as RowBlock
-		if rb == null or rb.flow == null:
-			continue
-		for v in rb.flow.tile_views:
-			var tv := v as TileView
-			if tv != null and tv.tile != null and tv.tile.id == tile_id:
-				return tv.global_position + Vector2(0.0, -4.0)
-	return null
-
-
-func _row_block_by_id(row_id: int) -> RowBlock:
-	for block in row_blocks:
-		var rb := block as RowBlock
-		if rb != null and rb.row_id == row_id:
-			return rb
-	return null
-
-
-## Врезка «нового ряда» под призрак соперника (game.peek kind=new).
-## Без неё призрак лёг бы поверх существующей карточки; с врезкой стол
-## расступается, и видно, что тот открывает новый ряд. Это картинка —
-## мышь её не ловит, в отличие от авторской _show_row_slot.
-func _show_peek_slot(at: int) -> void:
-	_clear_peek_slot()
-	if state == null or state.finished or table_box == null:
-		return
-	var h := maxf(Settings.tile_size().y + 16.0, 36.0)
-	var slot := Panel.new()
-	slot.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	slot.custom_minimum_size = Vector2(0, h)
-	slot.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(1, 1, 1, 0.03)
-	sb.border_color = Color(1, 1, 1, 0.18)
-	sb.set_border_width_all(2)
-	sb.set_corner_radius_all(10)
-	slot.add_theme_stylebox_override("panel", sb)
-	slot.set_meta("slot_at", at)
-	table_box.add_child(slot)
-	table_box.move_child(slot, clampi(at, 0, table_box.get_child_count() - 1))
-	_peek_slot = slot
-
-
-func _clear_peek_slot() -> void:
-	if _peek_slot != null and is_instance_valid(_peek_slot):
-		var p := _peek_slot.get_parent()
-		if p != null:
-			p.remove_child(_peek_slot)
-		_peek_slot.free()
-	_peek_slot = null
-
-
-## Держим призрак нового ряда на врезке: та переезжает при каждой
-## переразметке стола (черновик приходит повторами каждые 3 с), и
-## координаты призрака обязаны следовать за ней.
-func _sync_peek_slot() -> void:
-	if _peek_slot == null or not is_instance_valid(_peek_slot):
-		return
-	if _peek_ghost != null and is_instance_valid(_peek_ghost):
-		_peek_ghost.global_position = _peek_slot.global_position
-
-
-func _clear_peek() -> void:
-	_clear_peek_slot()
-	if _peek_ghost != null and is_instance_valid(_peek_ghost):
-		_peek_ghost.queue_free()
-	_peek_ghost = null
-	_peek_at_ms = 0
-
-
-## Превью протухает само: если соперник перестал повторять цель
-## (упал, вышел), призрак не должен висеть вечно.
-func _expire_peek() -> void:
-	if _peek_ghost != null and (
-			not is_instance_valid(_peek_ghost)
-			or Time.get_ticks_msec() - _peek_at_ms > PEEK_EXPIRE_MS):
-		_clear_peek()
-
-
+## Живое превью наведения отключено: пока карточку держат, соперникам
+## ничего не показываем. Постановка видна только после отпускания — через
+## черновик и подтверждённое состояние сервера.
 ## Соперник прислал весь свой стол: показываем его вместо базового, а
-## выложенные в этот ход фишки (нет в серверном столе) — серыми.
+## выложенные в этот ход фишки (нет в серверном столе) — прозрачными
+## с жирной зелёной рамкой.
 func _on_net_draft(from: int, rows: Array) -> void:
 	if state == null or state.finished or from < 0:
 		return
@@ -1814,30 +1624,30 @@ func _on_net_draft(from: int, rows: Array) -> void:
 		return
 	_draft_from = from
 	_draft_rows = rows
-	_draft_grey_ids = _draft_grey_of(rows)
+	_draft_new_ids = _draft_new_of(rows)
 	_draft_at_ms = Time.get_ticks_msec()
 	refresh()
 
 
-## Серые фишки черновика: все присланные, которых нет в серверной базе.
-## Отдельной функцией — та же пересчёт вызывается при каждом промежуточном
+## Новые фишки черновика: все присланные, которых нет в серверной базе.
+## Отдельной функцией — тот же пересчёт вызывается при каждом промежуточном
 ## game.state, пока ход автора не кончился.
-func _draft_grey_of(rows: Array) -> Dictionary:
+func _draft_new_of(rows: Array) -> Dictionary:
 	var base := {}
 	for row in state.table:
 		var r := row as GameState.Row
 		if r != null:
 			for t in r.tiles:
 				base[(t as Tile).id] = true
-	var grey := {}
+	var placed := {}
 	for d in rows:
 		if not (d is Dictionary):
 			continue
 		for tid in (d.get("tiles", []) as Array):
 			var id := int(tid)
 			if id > 0 and not base.has(id):
-				grey[id] = true
-	return grey
+				placed[id] = true
+	return placed
 
 
 ## Гасим черновик. Без перерисовки: нас вызывают и в _apply_state, где
@@ -1845,7 +1655,7 @@ func _draft_grey_of(rows: Array) -> Dictionary:
 func _clear_draft() -> void:
 	_draft_from = -1
 	_draft_rows = []
-	_draft_grey_ids = {}
+	_draft_new_ids = {}
 	_draft_at_ms = 0
 
 
@@ -1923,14 +1733,14 @@ func gui_can_drop(data: Dictionary, global_pos: Vector2) -> bool:
 	var from := String(data.get("from", ""))
 	if from == "hand":
 		if hit["row"] == null:
-			return _slot_position(global_pos) >= 0 or _in_hint_zone(global_pos)
+			return _hover_slot_pos(global_pos) >= 0 or _in_hint_zone(global_pos)
 		return state.can_place_into(hit["row"])
 	elif from == "row":
 		var src := state.row_by_id(int(data.get("row_id", -1)))
 		if src == null or not state.can_touch_row(src):
 			return false
 		if hit["row"] == null:
-			return _slot_position(global_pos) >= 0 or _in_hint_zone(global_pos)
+			return _hover_slot_pos(global_pos) >= 0 or _in_hint_zone(global_pos)
 		return hit["row"] == src or state.can_touch_row(hit["row"])
 	return false
 
@@ -1950,9 +1760,7 @@ func gui_do_drop(data: Dictionary, global_pos: Vector2) -> void:
 		var target: GameState.Row = hit["row"]
 		var index := int(hit["index"])
 		if target == null:
-			var slot_pos := _slot_position(global_pos)
-			if slot_pos < 0 and not _row_slots.is_empty():
-				slot_pos = int(_row_slots[0].get_meta("slot_pos", -1))
+			var slot_pos := _hover_slot_pos(global_pos)
 			target = state.add_row()
 			if slot_pos >= 0:
 				state.table.erase(target)
@@ -1963,6 +1771,9 @@ func gui_do_drop(data: Dictionary, global_pos: Vector2) -> void:
 		else:
 			state.move_tile(int(data.get("row_id", -1)), tile_id, target.id, index)
 	invalid_row_ids.clear()
+	# Локальная постановка/возврат — тоже событие для анимации: refresh
+	# снимет позиции до пересборки и проиграет появление/уход карточки.
+	_anim_pending = true
 	call_deferred("refresh")
 
 func _table_hit(global_pos: Vector2) -> Dictionary:
@@ -1995,12 +1806,12 @@ func get_tile_marks(tile_id: int) -> Dictionary:
 		return m
 	for t in state.turn_placed:
 		if (t as Tile).id == tile_id:
-			m["self"] = true
+			m["last"] = true
 			break
 	if state.last_turn_tile_ids.has(tile_id):
 		m["last"] = true
-	if _draft_grey_ids.has(tile_id):
-		m["draft"] = true
+	if _draft_new_ids.has(tile_id):
+		m["last"] = true
 	if _hint_ids.has(tile_id):
 		m["hint"] = true
 	return m
@@ -2018,15 +1829,12 @@ func refresh() -> void:
 		shots = _capture_tiles()
 	_anim_pending = false
 	_drag_view = null
-	_slot_hover_pos = -1
-	_slot_hover_time = 0
-	_slot_grace_until = 0
-	_clear_row_slots()
 	_set_drag_scroll_locked(false)
 	_update_chips()
 	_update_table()
 	_update_hand()
 	_update_buttons()
+	_sync_top_bar()
 	_update_hint_zone_size()
 	if not shots.is_empty():
 		_play_place_anim(shots)
@@ -2047,7 +1855,12 @@ func _capture_flow(flow: FlowTiles, out: Array) -> void:
 	for v in flow.tile_views:
 		var tv := v as TileView
 		if tv != null and tv.tile != null:
-			out.append({ "id": tv.tile.id, "tile": tv.tile, "gpos": tv.global_position })
+			out.append({
+				"id": tv.tile.id,
+				"tile": tv.tile,
+				"gpos": tv.global_position,
+				"alpha": tv.modulate.a,
+			})
 
 ## Разница старого и нового состояния в живых view: id -> TileView.
 func _collect_live(cur: Dictionary) -> void:
@@ -2094,26 +1907,37 @@ func _play_place_anim(shots: Array) -> void:
 	# Остались только ушедшие фишки.
 	for id in prev.keys():
 		var s: Dictionary = prev[id]
-		_fly_out_tile(s["tile"], s["gpos"])
+		_fly_out_tile(s["tile"], s["gpos"], float(s.get("alpha", 1.0)))
 
-## Новая фишка: прилетает сверху — от края экрана в свой слот.
+## Верхний правый угол экрана — общая точка появления/ухода карточек.
+func _corner_spawn_global() -> Vector2:
+	var vp := get_viewport().get_visible_rect()
+	var ts := Settings.tile_size()
+	return Vector2(vp.end.x - ts.x * 1.2, vp.position.y - ts.y * 1.5)
+
+
+## Новая фишка: прилетает из верхнего правого угла в свой слот.
 func _fly_in_tile(tv: TileView, step: int) -> void:
 	var parent := tv.get_parent()
 	if parent == null:
 		return
 	var final_local := tv.position
-	var top_y := get_viewport().get_visible_rect().position.y - tv.size.y * 1.5
-	var start_global := Vector2(tv.global_position.x, top_y)
+	var final_alpha := tv.modulate.a
+	var start_global := _corner_spawn_global()
 	tv.position = parent.get_global_transform().affine_inverse() * start_global
+	tv.pivot_offset = tv.size * 0.5
+	tv.scale = Vector2(0.45, 0.45)
 	tv.modulate.a = 0.0
 	var delay := minf(step * 0.05, 0.4)
 	var tw := create_tween()
 	tw.bind_node(tv)
 	tw.set_parallel(true)
-	tw.tween_property(tv, "position", final_local, 0.35) \
+	tw.tween_property(tv, "position", final_local, 0.38) \
 		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT).set_delay(delay)
-	tw.tween_property(tv, "modulate:a", 1.0, 0.25) \
+	tw.tween_property(tv, "modulate:a", final_alpha, 0.28) \
 		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT).set_delay(delay)
+	tw.tween_property(tv, "scale", Vector2.ONE, 0.32) \
+		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT).set_delay(delay)
 
 ## Фишка сменила место: переезжает из старого положения в новое.
 func _slide_tile(tv: TileView, from_global: Vector2) -> void:
@@ -2127,19 +1951,24 @@ func _slide_tile(tv: TileView, from_global: Vector2) -> void:
 	tw.tween_property(tv, "position", final_local, 0.3) \
 		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 
-## Ушедшая фишка: призрак взлетает вверх и гаснет — под ней уже пусто.
-func _fly_out_tile(tile: Tile, gpos: Vector2) -> void:
+## Ушедшая фишка: призрак улетает в верхний правый угол и уменьшается —
+## под ней уже пусто.
+func _fly_out_tile(tile: Tile, gpos: Vector2, alpha: float = 1.0) -> void:
 	var ghost := TileView.make(tile, false, null, false)
 	add_child(ghost)
 	ghost.top_level = true
 	ghost.position = gpos
+	ghost.modulate.a = clampf(alpha, 0.0, 1.0)
+	ghost.pivot_offset = ghost.size * 0.5
 	ghost.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var tw := create_tween()
 	tw.bind_node(ghost)
 	tw.set_parallel(true)
-	tw.tween_property(ghost, "position:y", gpos.y - Settings.tile_size().y * 1.8, 0.4) \
+	tw.tween_property(ghost, "position", _corner_spawn_global(), 0.42) \
 		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-	tw.tween_property(ghost, "modulate:a", 0.0, 0.35) \
+	tw.tween_property(ghost, "modulate:a", 0.0, 0.38) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tw.tween_property(ghost, "scale", Vector2(0.25, 0.25), 0.42) \
 		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 	tw.tween_callback(_on_ghost_done.bind(ghost))
 
@@ -2207,12 +2036,6 @@ func _update_table() -> void:
 		table_box.add_child(block)
 		row_blocks.append(block)
 	table_box.move_child(hint_zone, table_box.get_child_count() - 1)
-	# Пересобирали детей — врезка чужого нового ряда могла уехать в конец
-	# списка. Возвращаем её на её место среди рядов, иначе призрак
-	# соперника сядет не туда.
-	if _peek_slot != null and is_instance_valid(_peek_slot):
-		var slot_at := int(_peek_slot.get_meta("slot_at", 0))
-		table_box.move_child(_peek_slot, clampi(slot_at, 0, table_box.get_child_count() - 1))
 
 
 ## Что рисуем на столе: черновик соперника, пока он висит, иначе — наше

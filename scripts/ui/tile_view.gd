@@ -6,10 +6,8 @@ var draggable: bool = false
 var src_kind: String = ""
 var src_row_id: int = 0
 var controller: Object = null
-var mark_self: bool = false
 var mark_last: bool = false
 var mark_hint: bool = false
-var mark_draft: bool = false
 var face_down: bool = false
 
 static func make(p_tile: Tile, p_draggable: bool, p_controller: Object, p_face_down: bool = false) -> TileView:
@@ -43,26 +41,19 @@ func _build() -> void:
 	var marks := {}
 	if controller != null and controller.has_method("get_tile_marks"):
 		marks = controller.get_tile_marks(tile.id)
-	mark_self = bool(marks.get("self", false))
 	mark_last = bool(marks.get("last", false))
 	mark_hint = bool(marks.get("hint", false))
-	mark_draft = bool(marks.get("draft", false))
 
 	sb.bg_color = Color(Tile.color_hex(tile.color))
 	if mark_hint:
 		sb.border_color = Color("FFFFFF")
 		sb.set_border_width_all(maxi(bw + 2, 5))
 	elif mark_last:
-		# Фишки, добавленные в прошлый ход, — зелёным и жирно, чтобы
-		# было видно, куда ушли карты соперника.
+		# Выставленная фишка — прозрачная с жирной зелёной рамкой, чтобы
+		# было видно и свою постановку, и куда ушли карты соперника.
 		sb.border_color = Color("43A047")
 		sb.set_border_width_all(maxi(bw + 3, 5))
-	elif mark_draft:
-		# Соперник только раскладывает (черновик game.draft): фишка ещё
-		# не на сервере, поэтому серым — «лежит, но ещё не факт».
-		sb.bg_color = Color(0.55, 0.55, 0.58)
-		sb.border_color = Color(1, 1, 1, 0.18)
-		sb.set_border_width_all(bw)
+		modulate = Color(1, 1, 1, 0.72)
 	else:
 		sb.border_color = Color(1, 1, 1, 0.35 if tile.is_joker else 0.18)
 		sb.set_border_width_all(maxi(bw, 2) if tile.is_joker else bw)
@@ -102,15 +93,6 @@ func _draw() -> void:
 			c + Vector2(0, r), c + Vector2(-r, 0),
 		]), Color("FFD54F"))
 		return
-	if not mark_self:
-		return
-	var ts := Settings.tile_size()
-	var center := Vector2(ts.x - ts.x * 0.2, ts.y * 0.2)
-	var rad := maxf(5.0, ts.x * 0.16)
-	draw_circle(center, rad, Color("2E7D32"))
-	var w := maxf(1.5, rad * 0.28)
-	draw_line(center + Vector2(-rad * 0.5, -rad * 0.05), center + Vector2(-rad * 0.1, rad * 0.4), Color.WHITE, w)
-	draw_line(center + Vector2(-rad * 0.1, rad * 0.4), center + Vector2(rad * 0.55, -rad * 0.4), Color.WHITE, w)
 
 func _get_drag_data(pos: Vector2) -> Variant:
 	if not draggable or tile == null or controller == null:

@@ -68,13 +68,8 @@ func _row_checks() -> void:
 	check(hover.call("_hover_slot_pos", Vector2(r.get_center().x, r.end.y + 3.0)) == 1, "gap below row -> 1")
 	if r.position.y > box.position.y + 4.0:
 		check(hover.call("_hover_slot_pos", Vector2(r.get_center().x, r.position.y - 3.0)) == 0, "gap above row -> 0")
-	hover.call("_show_row_slot", 1)
-	var slots: Array = inst.get("_row_slots")
-	check(slots.size() == 1, "one slot shown, got %d" % slots.size())
-	if slots.size() == 1:
-		check(int(slots[0].get_meta("slot_pos", -1)) == 1, "slot meta pos = 1")
-	hover.call("_clear_row_slots")
-	check((inst.get("_row_slots") as Array).is_empty(), "slots cleared")
+	check(not hover.has_method("_show_row_slot"), "no visual hover slot while dragging")
+	check(not hover.has_method("_slot_position"), "no slot lookup while dragging")
 
 	var state = inst.get("state")
 	var tile_id: int = state.hand()[0].id
@@ -86,15 +81,16 @@ func _row_checks() -> void:
 		check(hzr.size.y > 0.0, "hint_zone has height, h=%s" % hzr.size.y)
 		check(hover.call("gui_can_drop", data, hzr.get_center()) == true,
 			"drop allowed on hint zone")
-		check(hover.call("gui_can_drop", data, Vector2(r.get_center().x, r.end.y + 5.0)) == false,
-			"drop in bare gap without slot rejected")
+		check(hover.call("gui_can_drop", data, Vector2(r.get_center().x, r.end.y + 5.0)) == true,
+			"drop in bare gap targets nearest slot without visual placeholder")
 
 	var state_ref = inst.get("state")
 	hover.call("_rebuild_ui")
 	check(inst.get("state") == state_ref, "rebuild keeps the same state")
 	var rbs2: Array = inst.get("row_blocks")
 	check(rbs2.size() == 1, "table rebuilt with same rows, got %d" % rbs2.size())
-	check((inst.get("_row_slots") as Array).is_empty(), "no row slots after rebuild")
+	check(inst.get("table_box").get_child_count() == rbs2.size() + 1,
+		"table has only rows and hint after rebuild")
 
 	var dd = inst.get("draw_dialog")
 	check(dd != null, "draw dialog exists")

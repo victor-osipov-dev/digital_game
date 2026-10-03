@@ -1103,6 +1103,7 @@ func _field(placeholder: String, secret := false) -> LineEdit:
 func _button(text: String, size: int = 15) -> Button:
 	var b := Button.new()
 	b.text = text
+	b.clip_text = true
 	b.custom_minimum_size = Vector2(0, Settings.touch(48))
 	b.add_theme_font_size_override("font_size", Settings.fs(size))
 	return b
@@ -1284,7 +1285,7 @@ func _build_auth() -> VBoxContainer:
 	_apply_accent(_login_btn, Color("1565C0"), Color("1976D2"), Color("0D47A1"))
 	page.add_child(_login_btn)
 
-	_register_btn = _button("Создать аккаунт", 15)
+	_register_btn = _button("Регистрация", 15)
 	_register_btn.pressed.connect(_do_register)
 	page.add_child(_register_btn)
 
@@ -1344,7 +1345,7 @@ func _build_rooms() -> VBoxContainer:
 	_return_btn.pressed.connect(_do_return_room)
 	_apply_accent(_return_btn, Color("2E7D32"), Color("388E3C"), Color("1B5E20"))
 	stuck_row.add_child(_return_btn)
-	_drop_btn = _button("Покинуть комнату", 16)
+	_drop_btn = _button("Покинуть", 16)
 	_drop_btn.pressed.connect(_do_drop_room)
 	stuck_row.add_child(_drop_btn)
 
@@ -1386,7 +1387,7 @@ func _build_rooms() -> VBoxContainer:
 	_apply_accent(_create_btn, Color("2E7D32"), Color("388E3C"), Color("1B5E20"))
 	page.add_child(_create_btn)
 
-	_quick_btn = _button("Быстрый матч", 15)
+	_quick_btn = _button("Быстрый", 15)
 	_quick_btn.pressed.connect(_do_quick)
 	page.add_child(_quick_btn)
 
@@ -1442,8 +1443,9 @@ func _logout_row(page: VBoxContainer) -> void:
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_END
 	page.add_child(row)
-	var out := _button("Выйти из аккаунта", 15)
-	out.custom_minimum_size = Vector2(200, Settings.touch(40))
+	var out := _button("Выйти", 15)
+	out.custom_minimum_size = Vector2(0, Settings.touch(40))
+	out.size_flags_horizontal = Control.SIZE_SHRINK_END
 	out.pressed.connect(_do_logout)
 	row.add_child(out)
 
@@ -1480,12 +1482,12 @@ func _build_lobby() -> VBoxContainer:
 	_lobby_note.visible = false
 	page.add_child(_lobby_note)
 
-	_start_btn = _button("Начать партию", 18)
+	_start_btn = _button("Начать", 18)
 	_start_btn.pressed.connect(_do_start)
 	_apply_accent(_start_btn, Color("2E7D32"), Color("388E3C"), Color("1B5E20"))
 	page.add_child(_start_btn)
 
-	_leave_btn = _button("Выйти из комнаты", 15)
+	_leave_btn = _button("Выйти", 15)
 	_leave_btn.pressed.connect(_do_leave_room)
 	page.add_child(_leave_btn)
 	return page

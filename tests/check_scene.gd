@@ -112,6 +112,9 @@ func _after_title_checks() -> void:
 	var pass_overlay = inst.get("pass_overlay")
 	if pass_overlay != null:
 		check(not pass_overlay.visible, "pass overlay hidden after ready")
+	_hand_panel_checks()
+	_flow_center_checks()
+	await _burger_checks()
 	inst.free()
 	inst = null
 	if fails == 0:
@@ -120,3 +123,89 @@ func _after_title_checks() -> void:
 	else:
 		printerr("SCENE CHECK: %d FAILED" % fails)
 		quit(1)
+
+
+func _hand_panel_checks() -> void:
+	var hf = inst.get("hand_flow")
+	check(hf != null, "hand_flow exists for panel check")
+	if hf == null:
+		return
+	var panel := (hf as Control).get_parent()
+	check(panel != null, "hand tiles live in their own panel")
+	if panel == null:
+		return
+	var sb := (panel as PanelContainer).get_theme_stylebox("panel")
+	check(sb is StyleBoxFlat, "hand panel has flat fill")
+	if sb is StyleBoxFlat:
+		var want := Color(0.10, 0.34, 0.22, 0.72)
+		var got_color: Color = (sb as StyleBoxFlat).bg_color
+		check(got_color == want, "hand panel is filled green, got %s" % str(got_color))
+
+
+func _flow_center_checks() -> void:
+	# Через load(), а не FlowTiles.new(): прямая ссылка на класс тянет
+	# цепочку компиляции до автозагрузки Settings, которой ещё нет на
+	# момент компиляции главного скрипта теста.
+	var flow = load("res://scripts/ui/flow_tiles.gd").new()
+	root.add_child(flow)
+	flow.size = Vector2(600, 60)
+	var tiles: Array = []
+	for i in range(3):
+		tiles.append(Tile.new(900 + i, Tile.TColor.RED, 1 + i, false))
+	flow.set_tiles(tiles, "test", 0, false)
+	flow.force_relayout()
+	var views: Array = flow.get("tile_views")
+	check(views.size() == 3, "centering probe has 3 tiles, got %d" % views.size())
+	if views.size() == 3:
+		var first = views[0] as Control
+		var last = views[views.size() - 1] as Control
+		var left: float = first.position.x
+		var right: float = flow.size.x - (last.position.x + last.size.x)
+		check(absf(left - right) < 2.0, "row is centered: left=%.1f right=%.1f" % [left, right])
+	flow.queue_free()
+
+
+func _burger_checks() -> void:
+	if settings == null:
+		check(false, "Settings missing for burger check")
+		return
+	# Фиксируем окно под проектную базу 576x1024: иначе headless-viewport
+	# шире, и бургер нечем спровоцировать.
+	var saved_size := root.size
+	root.size = Vector2i(576, 1024)
+	for i in range(3):
+		await process_frame
+	var saved_scale: int = settings.text_scale
+	settings.text_scale = 1
+	inst.call("_rebuild_ui")
+	for i in range(4):
+		await process_frame
+	check(not bool(inst.get("_top_collapsed")), "normal text keeps buttons inline")
+	settings.text_scale = 3
+	inst.call("_rebuild_ui")
+	for i in range(4):
+		await process_frame
+	check(bool(inst.get("_top_collapsed")), "giant text collapses top buttons into burger")
+	var burger = inst.get("_burger_btn")
+	check(burger != null and (burger as Control).visible, "burger button visible when collapsed")
+	var box = inst.get("_burger_box")
+	var moved := true
+	for b in (inst.get("_top_action_buttons") as Array):
+		if (b as Control).get_parent() != box:
+			moved = false
+	check(moved, "all six actions moved into burger box")
+	(burger as Button).pressed.emit()
+	await create_timer(0.5).timeout
+	var panel = inst.get("_burger_panel")
+	check(bool(inst.get("_burger_open")), "burger opens on press")
+	check((panel as Control).visible and (panel as Control).modulate.a > 0.9,
+		"burger panel faded in, alpha=%.2f" % (panel as Control).modulate.a)
+	(burger as Button).pressed.emit()
+	await create_timer(0.5).timeout
+	check(not bool(inst.get("_burger_open")), "burger closes on second press")
+	check(not (panel as Control).visible, "burger panel hidden after close")
+	settings.text_scale = saved_scale
+	inst.call("_rebuild_ui")
+	for i in range(3):
+		await process_frame
+	root.size = saved_size

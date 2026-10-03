@@ -48,17 +48,37 @@ func _relayout() -> void:
 	var vgap := clampf(ts.x * 0.1, 3.0, 8.0)
 	var x := 0.0
 	var y := 0.0
-	for view in tile_views:
-		var v: TileView = view
+	# Карточки центрируем по каждой визуальной строке: иначе ряды липнут
+	# к левому краю и на широком поле выглядят неровно.
+	var line_start := 0
+	var line_width := 0.0
+	for i in tile_views.size():
+		var v: TileView = tile_views[i]
 		if x > 0.0 and x + ts.x > size.x:
+			_center_line(line_start, i, line_width)
+			line_start = i
+			line_width = 0.0
 			x = 0.0
 			y += ts.y + vgap
 		v.position = Vector2(x, y)
 		v.size = ts
 		x += ts.x + hgap
+		line_width += ts.x + hgap
+	_center_line(line_start, tile_views.size(), line_width)
 	var new_height := y + ts.y
 	if not is_equal_approx(custom_minimum_size.y, new_height):
 		custom_minimum_size.y = new_height
+
+func _center_line(first: int, end: int, width_with_gap: float) -> void:
+	if end <= first or size.x <= 1.0:
+		return
+	var hgap := clampf(Settings.tile_size().x * 0.1, 3.0, 8.0)
+	var width := maxf(width_with_gap - hgap, 0.0)
+	var shift := maxf((size.x - width) * 0.5, 0.0)
+	for i in range(first, end):
+		var v: TileView = tile_views[i]
+		v.position.x += shift
+
 
 func index_at(global_pos: Vector2) -> int:
 	if tile_views.is_empty():

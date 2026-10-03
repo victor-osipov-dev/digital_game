@@ -157,9 +157,9 @@ func _menu() -> Node:
 	var menu_box: Node = menu.get("menu_box")
 	if menu_box != null:
 		_edge(menu_box, "main_menu")
-	var btn := _find_button(menu, "Играть по сети")
+	var btn := _find_button(menu, "По сети")
 	if btn == null:
-		_fail("нет кнопки «Играть по сети»")
+		_fail("нет кнопки «По сети»")
 		return null
 	btn.pressed.emit()
 	await process_frame

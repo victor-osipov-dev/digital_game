@@ -387,7 +387,7 @@ func _run_match_guest(ts: String) -> void:
 
 # ------------------------------------- матч: черновик стола (guest — зритель)
 
-## Ждём черновик от хоста, проверяем серые фишки и главное — что они
+## Ждём черновик от хоста, проверяем новые фишки и главное — что они
 ## НЕ пропадают, пока автор молчит: повтор каждые 3 с обязан приходить
 ## дольше 15 с, иначе экспайр бы их съел.
 func _guest_draft_steps(game: Node) -> void:
@@ -396,21 +396,22 @@ func _guest_draft_steps(game: Node) -> void:
 		"" if got else "from=%d" % game._draft_from)
 	if not got:
 		return
-	_step("guest: черновик активен: рядов >= 3, серых >= 3",
+	_step("guest: черновик активен: рядов >= 3, новых >= 3",
 		game._draft_active() and game._draft_rows.size() >= 3
-			and game._draft_grey_ids.size() >= 3,
-		"рядов %d, серых %d" % [game._draft_rows.size(), game._draft_grey_ids.size()])
-	var grey_id := -1
-	for k in game._draft_grey_ids.keys():
-		grey_id = int(k)
+			and game._draft_new_ids.size() >= 3,
+		"рядов %d, новых %d" % [game._draft_rows.size(), game._draft_new_ids.size()])
+	var placed_id := -1
+	for k in game._draft_new_ids.keys():
+		placed_id = int(k)
 		break
-	_step("guest: серая фишка помечена на столе",
-		grey_id > 0 and game.get_tile_marks(grey_id).get("draft", false),
-		"fid=%d" % grey_id)
+	_step("guest: новая фишка помечена зелёным на столе",
+		placed_id > 0 and game.get_tile_marks(placed_id).get("last", false)
+			and not game.get_tile_marks(placed_id).has("draft"),
+		"fid=%d" % placed_id)
 	# Ничего не трогаем 17 с — дольше экспайра 15 с. Если бы автор
-	# перестал повторять, серые бы тут и пропали.
+	# перестал повторять, новые фишки бы тут и пропали.
 	await get_tree().create_timer(17.0).timeout
-	_step("guest: серые фишки не пропали через 17 с",
+	_step("guest: новые фишки не пропали через 17 с",
 		game._draft_from >= 0 and game._draft_active(),
 		"from=%d активен=%s" % [game._draft_from, game._draft_active()])
 	_step("guest: повторы продолжают приходить (пакет свежий)",

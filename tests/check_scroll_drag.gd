@@ -225,6 +225,34 @@ func _boot() -> void:
 			check(cb.button_pressed == was_cb,
 				"в растянутом окне тап не переключил чекбокс «Первый ход»")
 		root.size = Vector2i(576, 1024)
+		for i in range(3):
+			await process_frame
+
+	# --- 11) повторный клик по открытому списку закрывает его -------
+	# Проверяем логику кнопки в том же порядке, что у живого клика:
+	# button_down (снимок видимости) → показ списка → pressed.
+	# Свежее открытие своим же кликом не закрывается, а повторный клик
+	# по открытому списку — закрывает.
+	var opt: OptionButton = menu.get("count_option")
+	check(opt != null, "опция «Игроков» есть")
+	if opt != null:
+		var popup = opt.get_popup()
+		popup.hide()
+		await process_frame
+		check(not popup.visible, "список изначально закрыт")
+		opt.button_down.emit()
+		popup.show()
+		await process_frame
+		opt.pressed.emit()
+		await process_frame
+		await process_frame
+		check(popup.visible, "свежее открытие не закрывается своим же кликом")
+		opt.button_down.emit()
+		opt.pressed.emit()
+		await process_frame
+		await process_frame
+		check(not popup.visible, "повторный клик закрывает список")
+		popup.hide()
 
 	# Настройки возвращаем как были: тап по чекбоксу пишет конфиг.
 	settings.require_30 = saved_req

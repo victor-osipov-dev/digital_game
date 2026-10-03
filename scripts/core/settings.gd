@@ -70,6 +70,40 @@ func style_option(option: OptionButton, font_base: int) -> void:
 	popup.add_theme_font_size_override("font_size", fs(font_base + 1))
 	popup.add_theme_constant_override("item_height", touch(46))
 	popup.add_theme_constant_override("v_separation", touch(2))
+	# Повторный клик по открытой кнопке закрывает список: по умолчанию он
+	# остаётся висеть. Свежее открытие отличаем от повторного клика снимком
+	# видимости в button_down: about_to_popup для этого не годится — движок
+	# стреляет им при каждом нажатии, даже когда список уже открыт.
+	if not option.has_meta("toggle_close"):
+		option.set_meta("toggle_close", true)
+		option.set_meta("popup_was_open", false)
+		option.button_down.connect(_snap_option_open.bind(option))
+		option.pressed.connect(_close_option_popup.bind(option))
+
+
+func _snap_option_open(option: OptionButton) -> void:
+	if option == null or not is_instance_valid(option):
+		return
+	var popup := option.get_popup()
+	if popup == null:
+		return
+	option.set_meta("popup_was_open", popup.visible)
+
+
+func _close_option_popup(option: OptionButton) -> void:
+	call_deferred("_close_option_popup_deferred", option)
+
+
+func _close_option_popup_deferred(option: OptionButton) -> void:
+	if option == null or not is_instance_valid(option):
+		return
+	var popup := option.get_popup()
+	if popup == null:
+		return
+	var was_open := bool(option.get_meta("popup_was_open", false))
+	option.set_meta("popup_was_open", false)
+	if was_open and popup.visible:
+		popup.hide()
 
 func tile_size() -> Vector2:
 	var idx := clampi(tile_step, 0, TILE_WIDTHS.size() - 1)
