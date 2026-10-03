@@ -11,6 +11,10 @@ extends Control
 # Кто где настоящий: сервер держит партию, здесь мы только спрашиваем
 # «что там» и отправляем «хочу».
 
+# Комнат на странице списка: строкам с названиями нужно место, а
+# страница не резиновая — остальное листается пагинацией.
+const ROOMS_PAGE_SIZE := 5
+
 var _overlay: ColorRect = null
 var _page_auth: VBoxContainer = null
 var _page_rooms: VBoxContainer = null
@@ -54,7 +58,23 @@ var _room_name: LineEdit = null
 var _room_pass: LineEdit = null
 var _require_30: CheckBox = null
 var _create_btn: Button = null
-var _quick_btn: Button = null
+var _play_btn: Button = null
+var _quick_row: BoxContainer = null
+var _quick_note: Label = null
+var _quick_leave_btn: Button = null
+var _in_queue := false
+var _tabs_row: BoxContainer = null
+var _tab_group: ButtonGroup = null
+var _tab_create_btn: Button = null
+var _tab_code_btn: Button = null
+var _create_box: VBoxContainer = null
+var _code_box: VBoxContainer = null
+var _rooms_tab := ""
+var _page_row: BoxContainer = null
+var _page_prev: Button = null
+var _page_next: Button = null
+var _page_label: Label = null
+var _rooms_page := 0
 var _join_code: LineEdit = null
 var _join_pass: LineEdit = null
 var _join_btn: Button = null
@@ -263,6 +283,9 @@ func _enter_auth() -> void:
 	_set_page(_page_auth)
 	_update_status()
 	_update_buttons()
+	# Вышли из аккаунта — очередь быстрого матча за нами не держится.
+	_in_queue = false
+	_quick_row.visible = false
 	# Надпись о связи сюда не переносится: на странице входа она была бы
 	# не к месту и залипала бы после успешного подключения, потому что
 	# чистится только вместе с busy-задачей.
@@ -403,6 +426,9 @@ func _load_rooms() -> void:
 	# подходит любому другому, и отдельный вход не требуется.
 	var got := await Net.servers.list_rooms(Net.session_token())
 	_rooms = got.get("rooms", [])
+	# Данные новые — смотрим с первой страницы, иначе список мог
+	# ужаться и показать пустую страницу в конце.
+	_rooms_page = 0
 	var failed: Array = got.get("failedServers", [])
 	if failed.is_empty():
 		_rooms_note.text = "Комнат найдено: %d" % _rooms.size()
@@ -429,7 +455,10 @@ func _render_rooms() -> void:
 	for child in _rooms_box.get_children():
 		_rooms_box.remove_child(child)
 		child.free()
-	if _rooms.is_empty():
+	var total := _rooms.size()
+	var pages := maxi(1, int(ceil(float(total) / float(ROOMS_PAGE_SIZE))))
+	_rooms_page = clampi(_rooms_page, 0, pages - 1)
+	if total == 0:
 		var empty := Label.new()
 		empty.text = "Пока никто не создал комнату. Создайте свою."
 		empty.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -440,10 +469,23 @@ func _render_rooms() -> void:
 		empty.add_theme_font_size_override("font_size", Settings.fs(16))
 		empty.add_theme_color_override("font_color", Color(1, 1, 1, 0.5))
 		_rooms_box.add_child(empty)
-		return
-	for room in _rooms:
-		_rooms_box.add_child(_make_room_row(room as Dictionary))
+	else:
+		var start := _rooms_page * ROOMS_PAGE_SIZE
+		for i in range(start, mini(start + ROOMS_PAGE_SIZE, total)):
+			_rooms_box.add_child(_make_room_row(_rooms[i] as Dictionary))
+	# Пагинацию прячем, пока всё влезает на одну страницу: бабушке
+	# лишние кнопки ни к чему.
+	_page_row.visible = pages > 1
+	_page_label.text = "Стр. %d из %d" % [_rooms_page + 1, pages]
+	_page_prev.disabled = _rooms_page <= 0
+	_page_next.disabled = _rooms_page >= pages - 1
 	ScrollFix.relax(_rooms_box)
+
+
+func _page_step(dir: int) -> void:
+	var pages := maxi(1, int(ceil(float(_rooms.size()) / float(ROOMS_PAGE_SIZE))))
+	_rooms_page = clampi(_rooms_page + dir, 0, pages - 1)
+	_render_rooms()
 
 
 func _make_room_row(room: Dictionary) -> Control:
@@ -618,21 +660,64 @@ func _do_quick() -> void:
 	if not Net.is_logged_in():
 		_enter_auth()
 		return
+	# Параметры очереди — из формы создания (места и «от 30»): она может
+	# быть скрыта за вкладкой, но значения в контролах живут.
 	_set_busy("Ищем соперника…")
 	var res := await Net.quick_join(_seats_option.get_selected_id(), _create_require_30())
 	_set_busy("")
 	match String(res.get("t", "")):
 		NetProtocol.QUICK_STATE:
-			if bool(res.get("started", false)):
-				_set_note(_rooms_note, "Партия началась!", false)
-			else:
-				_set_note(_rooms_note,
-					"В очереди %d. Ждём соперника." % int(res.get("waiting", 1)), false)
+			_show_quick_queue(res.get("queue", {}))
 		NetProtocol.ROOM_STATE:
 			# Сервер собрал комнату и посадил нас: значит, пора в партию.
 			_show_lobby(res.get("room", {}))
 		_:
 			_set_note(_rooms_note, _reason(res, "Быстрый матч недоступен"), true)
+
+
+## Состояние очереди: строка видна, только пока мы в ней стоим.
+func _show_quick_queue(queue: Dictionary) -> void:
+	_in_queue = bool(queue.get("inQueue", false))
+	_quick_row.visible = _in_queue
+	if _in_queue:
+		_quick_note.text = "В очереди %d. Ждём соперника." % maxi(1, int(queue.get("waiting", 1)))
+	_restack_rooms()
+	_update_buttons()
+
+
+func _on_net_quick_state(queue: Dictionary) -> void:
+	# Живые обновления очереди (кто-то встал/ушёл/собралась комната):
+	# без подписки строка «В очереди N» врала бы до следующего клика.
+	if visible and _page_rooms.visible:
+		_show_quick_queue(queue)
+
+
+func _do_quick_leave() -> void:
+	_set_busy("Выходим из очереди…")
+	await Net.quick_leave()
+	_set_busy("")
+	_in_queue = false
+	_quick_row.visible = false
+	_restack_rooms()
+	_update_buttons()
+
+
+## Вкладки «Создать комнату» / «Войти по коду»: видна одна форма,
+## в начале — ни одной. Список комнат при этом показывается всегда.
+func _on_rooms_tab_toggled(_on: bool) -> void:
+	_sync_rooms_tab()
+
+
+func _sync_rooms_tab() -> void:
+	var tab := ""
+	if _tab_create_btn != null and _tab_create_btn.button_pressed:
+		tab = "create"
+	elif _tab_code_btn != null and _tab_code_btn.button_pressed:
+		tab = "code"
+	_rooms_tab = tab
+	_create_box.visible = tab == "create"
+	_code_box.visible = tab == "code"
+	_restack_rooms()
 
 
 func _create_require_30() -> bool:
@@ -649,6 +734,9 @@ func _show_lobby(room: Dictionary) -> void:
 		return
 	_current_room = room
 	_lobby_room_code = String(room.get("code", ""))
+	# Мы в комнате — из очереди быстрого матча нас уже вывели на сервере.
+	_in_queue = false
+	_quick_row.visible = false
 	if visible:
 		# Мы смотрим на комнату — «застрявшей» больше нет, баннеру нечего
 		# показывать, а кнопки «вернуться» не нужны: мы уже внутри.
@@ -711,7 +799,10 @@ func _show_lobby(room: Dictionary) -> void:
 		_start_btn.text = "Начать партию" if _lobby_ready \
 			else "Ждём игроков (%d из %d)" % [taken, seats]
 	_update_buttons()
-	_auto_hint.text = "Не дождались второго — начнём с ботами."
+	# Правило лобби: для начала нужны двое живых игроков, остальные
+	# места занимают боты. Раньше тут вралось про «начнём с ботами»,
+	# хотя сервер без двух людей партию не начинает.
+	_auto_hint.text = "Для начала нужны двое живых игроков — остальные места займут боты."
 	# Сервер всё равно не начнёт, пока не придут двое и не все будут на
 	# связи, — но сказать об этом заранее честнее, чем ловить отказ.
 	_set_note(_lobby_note,
@@ -893,6 +984,17 @@ func _relayout() -> void:
 	ScrollFix.relax(_root)
 
 
+## Пересчитать складывание рядов под текущую видимость: вкладки
+## показывают формы, очередь — строку статуса, и решение «влезает ли
+## ряд», принятое при другой видимости, уже врёт.
+func _restack_rooms() -> void:
+	if _avail_w <= 0.0:
+		return
+	for row in _stack_rows:
+		var box := row as BoxContainer
+		_stack(box, not _fits(box, _avail_w))
+
+
 ## Влезают ли дети ряда в строку шириной avail. Считаем минимальные
 ## ширины тех же шрифтов и размеров, что и движок, иначе решение
 ## принималось бы по старым значениям.
@@ -1012,7 +1114,9 @@ func _update_buttons() -> void:
 	_register_btn.disabled = busy or not linked
 	_refresh_btn.disabled = busy or not linked
 	_create_btn.disabled = busy or not authed
-	_quick_btn.disabled = busy or not authed
+	# Пока стоим в очереди быстрого матча — не встаём в неё дважды:
+	# выйти можно кнопкой «Не ждать» рядом.
+	_play_btn.disabled = busy or not authed or _in_queue
 	_join_btn.disabled = busy or not authed
 	_start_btn.disabled = busy or not authed or not _lobby_ready
 	_leave_btn.disabled = busy or not authed
@@ -1293,6 +1397,7 @@ func _build() -> void:
 	Net.room_state.connect(_on_net_room_state)
 	Net.room_closed.connect(_on_net_room_left)
 	Net.game_state.connect(_on_net_game_state)
+	Net.quick_state.connect(_on_net_quick_state)
 	Net.pending_room_changed.connect(_refresh_stuck)
 	_tick = Timer.new()
 	_tick.wait_time = HEALTH_TICK_S
@@ -1421,12 +1526,63 @@ func _build_rooms() -> VBoxContainer:
 	_drop_btn.pressed.connect(_do_drop_room)
 	stuck_row.add_child(_drop_btn)
 
-	# --- создать
-	page.add_child(_header("Своя комната", 19))
+	# --- быстрая игра: одна большая кнопка вместо мелкого «Быстрый».
+	# Параметры очереди (места, «от 30») берутся из формы создания ниже:
+	# она может быть скрыта за вкладкой, но значения в контролах живут.
+	_play_btn = _button("Играть по сети", 20)
+	_play_btn.custom_minimum_size = Vector2(0, Settings.touch(58))
+	_play_btn.pressed.connect(_do_quick)
+	_apply_accent(_play_btn, Color("2E7D32"), Color("388E3C"), Color("1B5E20"))
+	page.add_child(_play_btn)
+	# Строка очереди видна, только пока мы в ней стоим: подпись — сколько
+	# нас ждёт, рядом выход из очереди.
+	_quick_row = BoxContainer.new()
+	_quick_row.add_theme_constant_override("separation", 8)
+	page.add_child(_quick_row)
+	_stack_rows.append(_quick_row)
+	_quick_note = Label.new()
+	_quick_note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_quick_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_quick_note.add_theme_font_size_override("font_size", Settings.fs(15))
+	_quick_note.add_theme_color_override("font_color", Color(1, 1, 1, 0.9))
+	_quick_row.add_child(_quick_note)
+	_quick_leave_btn = _button("Не ждать", 15)
+	_quick_leave_btn.pressed.connect(_do_quick_leave)
+	_quick_row.add_child(_quick_leave_btn)
+	_quick_row.visible = false
+
+	# --- вкладки: создать комнату или войти по коду. Видна только одна
+	# форма, а в начале — ни одной: список комнат при этом показывается
+	# всегда. Кнопки-переключатели в группе: движок сам держит нажатое
+	# состояние, тексты не меняем (иначе поплыли бы минимумы).
+	_tab_group = ButtonGroup.new()
+	_tab_group.allow_unpress = true
+	_tabs_row = BoxContainer.new()
+	_tabs_row.add_theme_constant_override("separation", 8)
+	_tabs_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	page.add_child(_tabs_row)
+	_stack_rows.append(_tabs_row)
+	_tab_create_btn = _button("Создать комнату", 15)
+	_tab_create_btn.toggle_mode = true
+	_tab_create_btn.button_group = _tab_group
+	_tab_create_btn.toggled.connect(_on_rooms_tab_toggled)
+	_tabs_row.add_child(_tab_create_btn)
+	_tab_code_btn = _button("Войти по коду", 15)
+	_tab_code_btn.toggle_mode = true
+	_tab_code_btn.button_group = _tab_group
+	_tab_code_btn.toggled.connect(_on_rooms_tab_toggled)
+	_tabs_row.add_child(_tab_code_btn)
+
+	# --- создать (форма за вкладкой)
+	_create_box = VBoxContainer.new()
+	_create_box.add_theme_constant_override("separation", 8)
+	_create_box.visible = false
+	page.add_child(_create_box)
+	_create_box.add_child(_header("Своя комната", 19))
 	var create_row := BoxContainer.new()
 	_create_row = create_row
 	create_row.add_theme_constant_override("separation", 8)
-	page.add_child(create_row)
+	_create_box.add_child(create_row)
 	_stack_rows.append(create_row)
 	# Название, пароль и выбор мест — три контрола в ряд: на телефоне в
 	# узком портрете каждый из них сжимается до нечитаемой полоски, так
@@ -1454,15 +1610,11 @@ func _build_rooms() -> VBoxContainer:
 	_require_30.button_pressed = Settings.require_30
 	_require_30.add_theme_font_size_override("font_size", Settings.fs(15))
 	_require_30.add_theme_color_override("font_color", Color(1, 1, 1, 0.9))
-	page.add_child(_require_30)
+	_create_box.add_child(_require_30)
 	_create_btn = _button("Создать", 16)
 	_create_btn.pressed.connect(_do_create)
 	_apply_accent(_create_btn, Color("2E7D32"), Color("388E3C"), Color("1B5E20"))
-	page.add_child(_create_btn)
-
-	_quick_btn = _button("Быстрый", 15)
-	_quick_btn.pressed.connect(_do_quick)
-	page.add_child(_quick_btn)
+	_create_box.add_child(_create_btn)
 
 	# --- список
 	page.add_child(_header("Все комнаты", 19))
@@ -1492,11 +1644,34 @@ func _build_rooms() -> VBoxContainer:
 	_rooms_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	page.add_child(_rooms_box)
 
-	# --- по коду
-	page.add_child(_header("Войти по коду", 15))
+	# --- пагинация списка: видна, только если страниц больше одной.
+	_page_row = BoxContainer.new()
+	_page_row.add_theme_constant_override("separation", 8)
+	_page_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	page.add_child(_page_row)
+	_stack_rows.append(_page_row)
+	_page_prev = _button("‹", 16)
+	_page_prev.pressed.connect(_page_step.bind(-1))
+	_page_row.add_child(_page_prev)
+	_page_label = Label.new()
+	_page_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_page_label.add_theme_font_size_override("font_size", Settings.fs(15))
+	_page_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.7))
+	_page_row.add_child(_page_label)
+	_page_next = _button("›", 16)
+	_page_next.pressed.connect(_page_step.bind(1))
+	_page_row.add_child(_page_next)
+	_page_row.visible = false
+
+	# --- по коду (форма за вкладкой)
+	_code_box = VBoxContainer.new()
+	_code_box.add_theme_constant_override("separation", 8)
+	_code_box.visible = false
+	page.add_child(_code_box)
+	_code_box.add_child(_header("Войти по коду", 15))
 	var code_row := BoxContainer.new()
 	code_row.add_theme_constant_override("separation", 8)
-	page.add_child(code_row)
+	_code_box.add_child(code_row)
 	_stack_rows.append(code_row)
 	_join_code = _field("код")
 	_join_code.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -1506,7 +1681,7 @@ func _build_rooms() -> VBoxContainer:
 	code_row.add_child(_join_pass)
 	_join_btn = _button("Войти", 15)
 	_join_btn.pressed.connect(func(): _do_join(_join_code.text.strip_edges().to_upper(), ""))
-	page.add_child(_join_btn)
+	_code_box.add_child(_join_btn)
 
 	_logout_row(page)
 	return page

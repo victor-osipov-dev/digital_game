@@ -306,6 +306,86 @@ func _stuck(menu: Node, lobby: Node) -> void:
 	lobby.call("_refresh_stuck")
 	(menu as Control).call("_refresh_online_note")
 	await process_frame
+## Вкладки, пагинация и большая кнопка игры по сети.
+## Вкладки показывают одну форму (в начале — ни одной), список при
+## этом виден всегда; страницы режут длинные списки.
+func _tabs_and_pages(lobby: Node, rooms_page: Control) -> void:
+	var play := _find_button_in(rooms_page, "Играть по сети")
+	if play == null:
+		_fail("нет большой кнопки «Играть по сети»")
+	elif not play.visible:
+		_fail("кнопка «Играть по сети» скрыта")
+	if _find_button_in(rooms_page, "Быстрый") != null:
+		_fail("старая кнопка «Быстрый» осталась")
+	var create_box := lobby.get("_create_box") as Control
+	var code_box := lobby.get("_code_box") as Control
+	if create_box == null or code_box == null:
+		_fail("нет коробок вкладок")
+		return
+	if create_box.visible or code_box.visible:
+		_fail("в начале не показана ни одна форма")
+		return
+	var tab_create := lobby.get("_tab_create_btn") as Button
+	var tab_code := lobby.get("_tab_code_btn") as Button
+	if tab_create == null or tab_code == null:
+		_fail("нет кнопок вкладок")
+		return
+	tab_create.button_pressed = true
+	await process_frame
+	if not create_box.visible or code_box.visible:
+		_fail("вкладка создания не показала свою форму")
+	tab_code.button_pressed = true
+	await process_frame
+	if create_box.visible or not code_box.visible:
+		_fail("вкладка кода не переключила форму")
+	tab_code.button_pressed = false
+	await process_frame
+	if create_box.visible or code_box.visible:
+		_fail("снятие вкладки не спрятало обе формы")
+	# Пагинация: 7 комнат режутся 5 + 2.
+	var rooms := []
+	for i in range(7):
+		rooms.append({"name": "Комната %d" % (i + 1), "filled": 1,
+			"seats": 3, "code": "C%d" % i, "state": "lobby",
+			"bots": 0, "hasPassword": false})
+	lobby.set("_rooms", rooms)
+	lobby.set("_rooms_page", 0)
+	lobby.call("_render_rooms")
+	for i in range(2):
+		await process_frame
+	var box := lobby.get("_rooms_box") as Control
+	var label := lobby.get("_page_label") as Label
+	if box == null or label == null:
+		_fail("нет списка или подписи страниц")
+		return
+	if box.get_child_count() != 5:
+		_fail("на первой странице не 5 комнат (%d)" % box.get_child_count())
+	if label.text != "Стр. 1 из 2":
+		_fail("подпись первой страницы: «%s»" % label.text)
+	var next := lobby.get("_page_next") as Button
+	if next == null:
+		_fail("нет кнопки следующей страницы")
+		return
+	next.pressed.emit()
+	for i in range(2):
+		await process_frame
+	if box.get_child_count() != 2:
+		_fail("на второй странице не 2 комнаты (%d)" % box.get_child_count())
+	if label.text != "Стр. 2 из 2":
+		_fail("подпись второй страницы: «%s»" % label.text)
+	var prev := lobby.get("_page_prev") as Button
+	if prev == null:
+		_fail("нет кнопки предыдущей страницы")
+		return
+	prev.pressed.emit()
+	for i in range(2):
+		await process_frame
+	if box.get_child_count() != 5 or label.text != "Стр. 1 из 2":
+		_fail("возврат на первую страницу не сработал")
+	lobby.set("_rooms", [])
+	lobby.call("_render_rooms")
+	for i in range(2):
+		await process_frame
 ## Динамический контент приезжает через секунды после открытия
 ## (список комнат, ники) и раньше раздвигал страницу шире экрана:
 ## правый край (Назад, Обновить) уезжал. Проверяем после подгрузки.
@@ -331,6 +411,7 @@ func _dynamic_content(lobby: Node) -> void:
 			logout_btn.get_parent() as BoxContainer)
 	else:
 		_fail("нет кнопки «Выйти» в подвале комнат")
+	await _tabs_and_pages(lobby, rooms_page)
 	lobby.call("_show_lobby", {
 		"code": "ABC12", "you": 0, "seats": 3, "isHost": false, "require30": true,
 		"players": [
