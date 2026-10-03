@@ -10,6 +10,7 @@ var controller: Object = null
 var mark_last: bool = false
 var mark_draft: bool = false
 var mark_hint: bool = false
+var mark_drawn: bool = false
 var face_down: bool = false
 ## Итоговая прозрачность по меткам: прилёт анимирует modulate, и если
 ## два прилёта наложатся, второй обязан целиться сюда, а не в текущий
@@ -50,6 +51,7 @@ func _build() -> void:
 	mark_last = bool(marks.get("last", false))
 	mark_draft = bool(marks.get("draft", false))
 	mark_hint = bool(marks.get("hint", false))
+	mark_drawn = bool(marks.get("drawn", false))
 
 	sb.bg_color = Color(Tile.color_hex(tile.color))
 	if mark_hint:
@@ -92,6 +94,29 @@ func _build() -> void:
 		tooltip_text = Lang.t("Джокер — заменяет любое число любого цвета")
 	else:
 		tooltip_text = "%s %d" % [Tile.color_name(tile.color), tile.value]
+	if mark_drawn and not face_down:
+		# Взята из колоды: галочка в правом верхнем углу. Отдельным
+		# потомком, а не рамкой, — рамки уже заняты черновиком, прошлым
+		# ходом и подсказкой, а галочка сочетается с любой из них.
+		var badge := Label.new()
+		badge.text = "✓"
+		badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		badge.anchor_left = 1.0
+		badge.anchor_right = 1.0
+		badge.anchor_top = 0.0
+		badge.anchor_bottom = 0.0
+		var bsize := clampi(int(ts.y * 0.34), 10, 30)
+		badge.offset_left = -float(bsize) - 2.0
+		badge.offset_right = -2.0
+		badge.offset_top = 0.0
+		badge.offset_bottom = float(bsize)
+		badge.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		badge.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		badge.add_theme_font_size_override("font_size", bsize)
+		badge.add_theme_color_override("font_color", Color("69F0AE"))
+		badge.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+		badge.add_theme_constant_override("outline_size", maxi(2, bsize / 5))
+		add_child(badge)
 	base_alpha = modulate.a
 
 	queue_redraw()

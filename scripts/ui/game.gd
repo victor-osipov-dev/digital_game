@@ -82,6 +82,13 @@ var _slot_grace_until: int = 0
 var _bot_active: bool = false
 var _bot_seq: int = 0
 var _hint_ids: Array = []
+## Кто последним брал из колоды (место): чипы показывают «· взял».
+## Держится до следующего взятия или новой партии — это правда и через
+## пять ходов: другого взятия с тех пор не было.
+var _drew_seat: int = -1
+## Чья взятая фишка (место -> id): рука помечает её галочкой, пока она
+## в руке смотрящего. Выложил — убралась сама; взял новую — заменилась.
+var _draw_marks := {}
 ## Чьи подсказки уже потрачены (место -> true): за одним устройством в
 ## локальной игре могут сидеть несколько живых игроков, и общий флаг
 ## «раз за партию» отбирал бы подсказку у остальных. В сети место одно.
@@ -1240,6 +1247,8 @@ func _new_match() -> void:
 	_hint_ids.clear()
 	_hints_used.clear()
 	_stagger_debt.clear()
+	_drew_seat = -1
+	_draw_marks.clear()
 	state = GameState.create(Settings.player_count, Array(Settings.player_names), Settings.require_30)
 	invalid_row_ids.clear()
 	win_overlay.visible = false
@@ -1285,6 +1294,8 @@ func _net_begin() -> void:
 	_hint_ids.clear()
 	_hints_used.clear()
 	_stagger_debt.clear()
+	_drew_seat = -1
+	_draw_marks.clear()
 	# «Заново» на экране победы — это про локальную партию: сервер не умеет
 	# «сыграть ещё раз в той же комнате». В сетевой игре кнопка скрывается,
 	# иначе после конца партии она молча запускала локальную игру поверх
@@ -1417,6 +1428,17 @@ func _apply_state(view: Dictionary, grace: float, paused: bool, waiting: bool = 
 	# бы только чудом, поэтому оба признака работают через «или».
 	_anim_stagger = _is_bot_commit(prev, view) \
 		or (prev != null and prev.is_bot_player(prev.current))
+	# Кто брал из колоды: рука выросла на одну при том же столе и пустом
+	# lastTurn — ни выкладки, ни пропуска. Помечаем место, пока его не
+	# перекрыло следующее взятие. Своё взятие точнее знает diff в
+	# _mark_drawn_diff (там же номер фишки), здесь — все остальные.
+	_drew_seat = -1
+	if _online and prev != null:
+		var seats := prev.player_count()
+		if seats > 0:
+			var mover := (clampi(int(view.get("current", 0)), 0, seats - 1) - 1 + seats) % seats
+			if _seat_drew(prev, view, mover):
+				_drew_seat = mover
 	# Рассылка посреди нашего хода (обрыв/возврат соперника, реджойн)
 	# пришла с тем же серверным столом — локальную раскладку возвращаем,
 	# иначе автор теряет фишки и перестаёт повторять черновик.
@@ -1447,6 +1469,50 @@ func _is_bot_commit(prev: GameState, view: Dictionary) -> bool:
 	if not prev.is_bot_player(mover):
 		return false
 	return not (view.get("lastTurn", []) as Array).is_empty()
+
+
+## Место брало из колоды: рука выросла ровно на одну при том же столе
+## и пустом lastTurn — ни выкладки (там lastTurn не пуст), ни пропуска
+## (рука та же). Стол сравниваем наборами id: порядок рядов не важен.
+func _seat_drew(prev: GameState, view: Dictionary, seat: int) -> bool:
+	if prev == null or seat < 0 or seat >= prev.player_count():
+		return false
+	if not (view.get("lastTurn", []) as Array).is_empty():
+		return false
+	if prev.hand_size(seat) + 1 != _view_hand_count(view, seat):
+		return false
+	return _view_table_ids(view) == _prev_table_ids(prev)
+
+
+func _view_hand_count(view: Dictionary, seat: int) -> int:
+	for raw in view.get("players", []):
+		if raw is Dictionary and int((raw as Dictionary).get("seat", -1)) == seat:
+			return maxi(0, int((raw as Dictionary).get("handCount", 0)))
+	var arr: Array = view.get("players", [])
+	if seat >= 0 and seat < arr.size() and arr[seat] is Dictionary:
+		return maxi(0, int((arr[seat] as Dictionary).get("handCount", 0)))
+	return -1
+
+
+func _view_table_ids(view: Dictionary) -> Array:
+	var out := []
+	for raw in view.get("table", []):
+		if raw is Dictionary:
+			for tid in ((raw as Dictionary).get("tileIds", []) as Array):
+				out.append(int(tid))
+	out.sort()
+	return out
+
+
+func _prev_table_ids(prev: GameState) -> Array:
+	var out := []
+	for row in prev.table:
+		var r := row as GameState.Row
+		if r != null:
+			for t in r.tiles:
+				out.append((t as Tile).id)
+	out.sort()
+	return out
 
 
 func _on_net_error(reason: String, hard: bool, errors: Array) -> void:
@@ -1625,12 +1691,19 @@ func _bot_execute(seq: int) -> void:
 				return
 		state.restore_turn_snapshot()
 	elif action == "draw":
-		action_ok = bool(state.draw_from_deck().get("ok", false))
+		var bot_seat := state.current
+		var dr := state.draw_from_deck()
+		if dr.get("ok", false):
+			_note_draw(bot_seat, dr.get("tile", null))
+		action_ok = bool(dr.get("ok", false))
 	elif action == "skip":
 		action_ok = bool(state.skip_turn().get("ok", false))
 	if not action_ok:
 		if state.can_draw():
-			state.draw_from_deck()
+			var fb_seat := state.current
+			var fb := state.draw_from_deck()
+			if fb.get("ok", false):
+				_note_draw(fb_seat, fb.get("tile", null))
 		elif state.can_skip():
 			state.skip_turn()
 	invalid_row_ids.clear()
@@ -1721,15 +1794,53 @@ func _on_deck_pressed() -> void:
 func _on_draw_confirmed() -> void:
 	_hint_ids.clear()
 	if _online:
+		# Сервер в ответе номер не присылает — только новое состояние:
+		# взятая фишка ровно та, которой в руке не было.
+		var before := _hand_ids()
 		await _send_and_wait(func(): return await Net.draw_from_deck())
+		_mark_drawn_diff(before)
 		return
+	var drawer := state.current
 	var r := state.draw_from_deck()
 	if r.get("ok", false):
+		_note_draw(drawer, r.get("tile", null))
 		invalid_row_ids.clear()
 		refresh()
 		_show_pass()
 	else:
 		toast(String(r.get("reason", "")), true)
+
+
+## Запомнить взятие: чип «· взял» и галочка на фишке (пока в руке).
+func _note_draw(seat: int, tile) -> void:
+	if tile != null:
+		_draw_marks[seat] = (tile as Tile).id
+	_drew_seat = seat
+
+
+## Id фишек руки смотрящего — для опознания взятой по сети.
+func _hand_ids() -> Array:
+	var out := []
+	if state != null:
+		for t in state.hand():
+			out.append((t as Tile).id)
+	return out
+
+
+## Помечает взятую по сети: успех — ровно один новый id в руке.
+## Отказ (рука та же) или странная дельта — молча без метки.
+func _mark_drawn_diff(before: Array) -> void:
+	if state == null or state.local_seat < 0:
+		return
+	var fresh := []
+	for t in state.hand():
+		var tid := (t as Tile).id
+		if not before.has(tid) and not fresh.has(tid):
+			fresh.append(tid)
+	if fresh.size() == 1:
+		_draw_marks[state.local_seat] = fresh[0]
+		_drew_seat = state.local_seat
+		refresh()
 
 func _on_main_pressed() -> void:
 	if not _can_act():
@@ -2259,7 +2370,29 @@ func get_tile_marks(tile_id: int) -> Dictionary:
 		m["last"] = true
 	if _hint_ids.has(tile_id):
 		m["hint"] = true
+	# Взятая из колоды — галочка, пока фишка в руке взявшего (а не
+	# текущего игрока: взятие сразу передаёт ход дальше). Выложил —
+	# убралась сама (в руке её уже нет), взял новую — заменилась.
+	if not _draw_marks.is_empty() and _drawn_in_hand(tile_id):
+		m["drawn"] = true
 	return m
+
+
+## Фишка ещё в руке того, кто её брал.
+func _drawn_in_hand(tile_id: int) -> bool:
+	if state == null:
+		return false
+	for seat in _draw_marks:
+		if int(_draw_marks[seat]) != tile_id:
+			continue
+		var i := int(seat)
+		if i < 0 or i >= state.players.size():
+			return false
+		for t in (state.players[i] as GameState.Player).hand:
+			if (t as Tile).id == tile_id:
+				return true
+		return false
+	return false
 
 func refresh() -> void:
 	if state == null:
@@ -2539,6 +2672,10 @@ func _update_chips() -> void:
 		# партии не понять, чья очередь, а текст читается сразу.
 		if is_now and not state.finished:
 			lab.text += Lang.t(" · ходит")
+		# Кто последним брал из колоды: своё взятие видно галочкой на
+		# фишке, а чужое (бот или соперник) — только здесь.
+		if i == _drew_seat:
+			lab.text += Lang.t(" · взял")
 		if _online and not state.is_connected_player(i):
 			lab.text += Lang.t(" · нет связи")
 		lab.add_theme_font_size_override("font_size", Settings.fs(16))
