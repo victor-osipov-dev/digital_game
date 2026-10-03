@@ -38,6 +38,14 @@ func fs(base: int) -> int:
 	var idx := clampi(text_scale, 0, TEXT_SCALES.size() - 1)
 	return maxi(FS_MIN, int(round(base * TEXT_SCALES[idx])))
 
+
+## Тот же размер, но с потолком по шкале: частые кнопки строки не должны
+## расти дальше «Большого» — иначе на гигантском они меньше, чем могли
+## бы (компакт резал бы их ещё сильнее), и ряд не влезал бы в телефон.
+func fs_capped(base: int, cap_scale: int) -> int:
+	var idx := clampi(mini(text_scale, cap_scale), 0, TEXT_SCALES.size() - 1)
+	return maxi(FS_MIN, int(round(base * TEXT_SCALES[idx])))
+
 ## Размер интерактивного контроля (кнопки, поля ввода, переключатели).
 ## Растёт вместе с выбранным размером текста, чтобы пальцем было легко:
 ## большой шрифт бессмыслен, если кнопки по нему остались крошечными.

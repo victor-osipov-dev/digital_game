@@ -687,23 +687,17 @@ func _sync_top_bar() -> void:
 	for btn in _top_action_buttons:
 		(btn as Button).text = String((btn as Button).get_meta("short_text"))
 		(btn as Button).add_theme_font_size_override("font_size", Settings.fs(15))
+	# Частые кнопки растут только до «Большого»: на гигантском остаются
+	# как на большом (иначе они там меньше, чем могли бы), и ряд влезает
+	# даже в телефон.
+	for b in _top_pinned:
+		(b as Button).add_theme_font_size_override("font_size", Settings.fs_capped(15, 2))
 	var have := maxf(get_viewport_rect().size.x - 20.0, 200.0)
 	var deck_need := deck_button.get_combined_minimum_size().x
 	var need := deck_need
 	for btn in _top_action_buttons:
 		need += 6.0 + _top_button_need(btn as Button)
 	var collapse := need > have
-	# Частые кнопки всегда в строке и всегда горизонтально: если они
-	# не влезают даже без редких, ужимаем шрифт (высоту не трогаем) —
-	# на телефоне три компактные кнопки лучше столбика.
-	if collapse:
-		var need_pinned := deck_need + 6.0 + 60.0
-		for b in _top_pinned:
-			need_pinned += 6.0 + _top_button_need(b as Button)
-		if need_pinned > have:
-			for b in _top_pinned:
-				(b as Button).add_theme_font_size_override("font_size",
-					mini(Settings.fs(15), 14))
 	for btn in _top_action_buttons:
 		var b := btn as Button
 		var in_overflow := _top_overflow.has(b)

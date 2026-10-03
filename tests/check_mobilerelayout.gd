@@ -114,9 +114,11 @@ func _round(size: Vector2i, base: Vector2i, scale: int) -> void:
 	if not _audited:
 		_audited = true
 		_audit_buttons(menu, "main_menu")
+		_audit_checks(menu, "main_menu")
 		var lob: Node = menu.get("online_lobby")
 		if lob != null:
 			_audit_buttons(lob, "online_lobby")
+			_audit_checks(lob, "online_lobby")
 	var lobby: Node = menu.get("online_lobby")
 	if lobby == null:
 		_fail("нет сетевого меню")
@@ -482,6 +484,38 @@ func _audit_buttons(node: Node, where: String) -> void:
 			_fail("%s: кнопка «%s» без плоского стиля" % [where, b.text.left(20)])
 	for child in node.get_children():
 		_audit_buttons(child, where)
+
+
+## Свои галки чекбоксов: дефолтные на тёмной теме нечитаемы (пустой
+## квадрат буквально чёрный, галка без рамки растворяется). Проверяем
+## наши: рамка есть, внутри пусто, у включённой — галка (пикселей больше).
+func _audit_checks(node: Node, where: String) -> void:
+	if node is CheckBox:
+		var cb := node as CheckBox
+		var un := cb.get_theme_icon("unchecked")
+		var ch := cb.get_theme_icon("checked")
+		if un == null or ch == null:
+			_fail("%s: у чекбокса нет своих иконок" % where)
+		else:
+			var ui := un.get_image()
+			var ci := ch.get_image()
+			if ui.get_size() != Vector2i(18, 18) or ci.get_size() != Vector2i(18, 18):
+				_fail("%s: иконки чекбокса не 18x18" % where)
+			elif ui.get_pixel(9, 9).a > 0.1:
+				_fail("%s: выключенный чекбокс залит" % where)
+			elif _opaque_count(ci) <= _opaque_count(ui):
+				_fail("%s: у включённого чекбокса нет галки" % where)
+	for child in node.get_children():
+		_audit_checks(child, where)
+
+
+func _opaque_count(img: Image) -> int:
+	var n := 0
+	for y in range(img.get_height()):
+		for x in range(img.get_width()):
+			if img.get_pixel(x, y).a > 0.5:
+				n += 1
+	return n
 
 
 ## Баннер «вы всё ещё в комнате» не врёт про толпу: один игрок —

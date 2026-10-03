@@ -116,7 +116,7 @@ func _after_title_checks() -> void:
 	_flow_center_checks()
 	await _burger_checks()
 	await _topbar_width_checks()
-	await _topbar_compact_checks()
+	await _topbar_capped_checks()
 	_button_radius_audit(inst)
 	_confirm_checks()
 	inst.free()
@@ -281,12 +281,15 @@ func _topbar_width_checks() -> void:
 		await process_frame
 
 
-func _topbar_compact_checks() -> void:
+func _topbar_capped_checks() -> void:
 	# Узкий экран + гигантский текст: частые кнопки остаются в строке
-	# (компактные, в одну линию), редкие — в бургере.
+	# в одну линию, редкие — в бургере. Шрифт частых capped на «Большом»:
+	# на гигантском они такие же, как на большом, а не мельче.
 	var saved_base := root.content_scale_size
 	var saved_size := root.size
 	var saved_scale: int = settings.text_scale
+	settings.text_scale = 2
+	var big_font: int = settings.fs(15)
 	settings.text_scale = 3
 	root.content_scale_size = Vector2i(320, 640)
 	root.size = Vector2i(360, 800)
@@ -306,13 +309,15 @@ func _topbar_compact_checks() -> void:
 		else:
 			check(btn.get_parent() == bar, "frequent action stays in bar on narrow")
 			ys.append(btn.get_global_rect().position.y)
+			check(btn.get_theme_font_size("font_size") == big_font,
+				"frequent button «%s» capped at Большой size (%d)" % [btn.text, big_font])
 			var font: Font = btn.get_theme_font("font")
 			var want := 0.0
 			if font != null:
 				want = font.get_string_size(btn.text, HORIZONTAL_ALIGNMENT_LEFT, -1,
 					btn.get_theme_font_size("font_size")).x
 			check(btn.size.x + 1.0 >= want,
-				"compact button «%s» fits text (%.0f vs %.0f)" % [btn.text, btn.size.x, want])
+				"capped button «%s» fits text (%.0f vs %.0f)" % [btn.text, btn.size.x, want])
 	var flat := true
 	for y in ys:
 		if absf(float(y) - float(ys[0])) > 2.0:

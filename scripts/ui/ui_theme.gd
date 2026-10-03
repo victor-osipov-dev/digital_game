@@ -33,4 +33,44 @@ static func shared() -> Theme:
 				_theme.set_stylebox(state, cls, sb)
 	probe.free()
 	probe_opt.free()
+	# Свои галки чекбоксов: дефолтные на тёмной теме нечитаемы —
+	# пустой квадрат там буквально чёрный, а галка без рамки
+	# растворяется в фоне. Рисуем светлую рамку и зелёную галку.
+	_theme.set_icon("checked", "CheckBox", _checkbox_icon(true, false))
+	_theme.set_icon("unchecked", "CheckBox", _checkbox_icon(false, false))
+	_theme.set_icon("checked_disabled", "CheckBox", _checkbox_icon(true, true))
+	_theme.set_icon("unchecked_disabled", "CheckBox", _checkbox_icon(false, true))
 	return _theme
+
+
+## Иконка чекбокса 18 px: скруглённая рамка + зелёная галка.
+## Рисуем попиксельно — везти PNG ради двух иконок незачем.
+static func _checkbox_icon(check: bool, dim: bool) -> ImageTexture:
+	var s := 18
+	var img := Image.create(s, s, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0, 0, 0, 0))
+	var edge := Color(1, 1, 1, 0.35 if dim else 0.9)
+	var mark := Color(0.4, 0.73, 0.42, 0.35 if dim else 1.0)
+	for y in range(s):
+		for x in range(s):
+			var p := Vector2(x + 0.5, y + 0.5)
+			if absf(_rr_sd(p, float(s), 5.0)) <= 1.0:
+				img.set_pixel(x, y, edge)
+			elif check and _seg_dist(p, Vector2(5, 9.5), Vector2(8, 12.5)) < 1.7 \
+					or check and _seg_dist(p, Vector2(8, 12.5), Vector2(13, 5.5)) < 1.7:
+				img.set_pixel(x, y, mark)
+	return ImageTexture.create_from_image(img)
+
+
+## Знаковое расстояние до скруглённого квадрата (минус — внутри).
+static func _rr_sd(p: Vector2, s: float, r: float) -> float:
+	var q := (p - Vector2(s * 0.5, s * 0.5)).abs() - Vector2(s * 0.5 - r, s * 0.5 - r)
+	var ax := Vector2(maxf(q.x, 0.0), maxf(q.y, 0.0))
+	return minf(maxf(q.x, q.y), 0.0) + ax.length() - r
+
+
+## Расстояние от точки до отрезка.
+static func _seg_dist(p: Vector2, a: Vector2, b: Vector2) -> float:
+	var ab := b - a
+	var t := clampf((p - a).dot(ab) / maxf(ab.length_squared(), 0.0001), 0.0, 1.0)
+	return (a + ab * t - p).length()
