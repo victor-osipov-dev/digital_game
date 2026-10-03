@@ -336,6 +336,7 @@ const _EN := {
 "Введите логин": "Enter login",
 "Введите ник": "Enter nickname",
 "Время хода вышло — фишка взята из колоды": "Turn time out — drew from the deck",
+"Время хода вышло — ваш стол принят как ход": "Turn time out — your table accepted as the move",
 "Время хода вышло — ход пропущен автоматически": "Turn time out — turn skipped automatically",
 "Внутренняя ошибка сервера": "Server internal error",
 "Логин: 3–20 символов, латиница, цифры, _ . -": "Login: 3-20 chars, latin, digits, _ . -",

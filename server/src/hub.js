@@ -532,6 +532,14 @@ class Hub {
         if (!room._draftAt) room._draftAt = new Map();
         room._draftAt.set(seat, now);
         const draft = { t: S2C.GAME_DRAFT, from: seat, rows };
+        // Последний черновик помним: если дедлайн застанет готовый стол,
+        // примем его как ход, а не будем брать из колоды поверх выкладки.
+        // Черновик свежий по построению: принимается только от текущего
+        // игрока, а ход текущего закрывает любое его изменение (коммит,
+        // взятие, пропуск, автоход) — протухший дальше не переживёт
+        // валидацию хода и откатится.
+        if (!room._draftRows) room._draftRows = new Map();
+        room._draftRows.set(seat, rows);
         for (let s = 0; s < room.seats; s += 1) {
           if (s === seat) continue;            // автору не шлём
           const c = this.ctxOfSeat(room, s);
@@ -638,6 +646,8 @@ class Hub {
 
   afterMove(r, rid) {
     const room = r.room;
+    // Ход закрыт своим действием — черновик автора больше не черновик.
+    if (room && room._draftRows) room._draftRows.delete(r.seat);
     // Дедлайн нового хода — до рассылки: клиенты должны получить состояние
     // с уже запущенным отсчётом, а не с погашенным таймером.
     this.maybeRunBots(room);
@@ -657,6 +667,8 @@ class Hub {
    * кнопка «начать», и автостарт по таймеру дают ровно одно событие.
    */
   onRoomPlay(room) {
+    // Новая партия — старые черновики (места те же) недействительны.
+    room._draftRows = new Map();
     // Старт: сначала отсчёт (и планирование ботов), потом рассылка —
     // первый кадр партии у всех клиентов уже с живым таймером.
     this.maybeRunBots(room);
@@ -756,6 +768,15 @@ class Hub {
     const g = room.game;
     const seat = g.current;
     if (!g.players[seat]) return;
+    // Дедлайн застал готовый стол: игрок разложил валидный черновик, но
+    // не успел нажать «Продолжить». Принимаем его как ход — так честнее,
+    // чем молча брать из колоды поверх готовой выкладки. Невалидный
+    // черновик (или его отсутствие) — обычный автовзят.
+    if (this._acceptDraftTurn(room, seat)) {
+      this.maybeRunBots(room);
+      this.broadcastRoom(room, null);
+      return;
+    }
     let drew = false;
     try {
       g.beginTurn();
@@ -791,6 +812,46 @@ class Hub {
     log.info(`комната ${room.code}: время хода игрока ${seat} вышло — авто-взятие из колоды`);
     this.maybeRunBots(room);
     this.broadcastRoom(room, null);
+  }
+
+  /**
+   * Дедлайн при готовом черновике: стол игрока уже валиден — засчитываем
+   * ход, а не берём из колоды. Проверка та же, что у обычного коммита
+   * (set_table + endTurn с откатом), мутации при отказе нет.
+   */
+  _acceptDraftTurn(room, seat) {
+    const g = room.game;
+    const rows = room._draftRows ? room._draftRows.get(seat) : null;
+    if (room._draftRows) room._draftRows.delete(seat);
+    if (!rows || rows.length === 0) return false;
+    let win = false;
+    try {
+      g.beginTurn();
+      const applied = g.applyOps([{ op: 'set_table', rows }]);
+      const res = applied ? g.endTurn() : { ok: false };
+      if (!applied || !res.ok) {
+        g.rollback();
+        return false;
+      }
+      g.commit();
+      room.touch();
+      win = res.win === true;
+      const rec = room.players[seat];
+      if (rec && rec.login) this.db.addResult(rec.login, win);
+    } catch (e) {
+      log.warn(`комната ${room.code}: черновик к дедлайну не встал (${e.message})`);
+      try { g.rollback(); } catch (_) { /* транзакции могло не быть */ }
+      return false;
+    }
+    const ctx = this.ctxOfSeat(room, seat);
+    if (ctx) {
+      this.send(ctx, {
+        t: S2C.TOAST,
+        text: 'Время хода вышло — ваш стол принят как ход',
+      });
+    }
+    log.info(`комната ${room.code}: время хода игрока ${seat} вышло — готовый стол засчитан`);
+    return true;
   }
 
   /**

@@ -1755,6 +1755,7 @@ function playingRoom(host, guest, seats = 2) {
 
 for (let i = 1; i <= 18; i += 1) accounts.register(`tm${i}`, 'secret123', `Таймер${i}`);
 for (let i = 1; i <= 10; i += 1) accounts.register(`pk${i}`, 'secret123', `Превью${i}`);
+for (let i = 1; i <= 6; i += 1) accounts.register(`to${i}`, 'secret123', `Таймаут${i}`);
 
 test('старт партии открывает отсчёт хода', () => {
   const hub = newHub();
@@ -1878,7 +1879,88 @@ test('колода пуста: время вышло — ход пропуска
   hub.stop();
 });
 
+/** Перекладывает готовый ряд в руку места, сохраняя 106 уникальных фишек. */
+function rigRun(room, seat, color, v0) {
+  const g = room.game;
+  const run = [findTile(color, v0), findTile(color, v0 + 1), findTile(color, v0 + 2)];
+  const want = new Set(run);
+  const keep = g.players[seat].handIds.filter((id) => !want.has(id));
+  for (const p of g.players) p.handIds = p.handIds.filter((id) => !want.has(id));
+  g.deck.ids = g.deck.ids.filter((id) => !want.has(id));
+  g.deck.ids.push(...keep);
+  g.players[seat].handIds = run.concat(keep);
+  return run;
+}
+
+test('время вышло с готовым черновиком: стол засчитан как ход', () => {
+  const hub = newHub();
+  const room = playingRoom('to1', 'to2');
+  const a = fakeSock(hub, room, 0, userOf('to1'));
+  const b = fakeSock(hub, room, 1, userOf('to2'));
+  room.game.current = 0;
+  const run = rigRun(room, 0, 0, 5);
+  const rows = [{ id: 0, tiles: run.slice() }];
+  hub.onMessage(a.ctx, Buffer.from(JSON.stringify({ t: C2S.GAME_DRAFT, rows })));
+  hub.maybeRunBots(room);
+  room.turnDeadlineMs = Date.now() - 10; // просрочили вручную
+  const handBefore = room.game.handSize(0);
+  hub._onTurnTimeout(room);
+  assert.strictEqual(room.game.current, 1, 'ход должен передаться дальше');
+  assert.strictEqual(room.game.handSize(0), handBefore - 3, 'три фишки ушли из руки на стол');
+  assert.deepStrictEqual(room.game.lastTurnTileIds.slice().sort((x, y) => x - y),
+    run.slice().sort((x, y) => x - y), 'выставленное — в lastTurn');
+  const flat = room.game.table.flatMap((r) => r.tileIds);
+  for (const id of run) assert.ok(flat.includes(id), `фишка ${id} на столе`);
+  const toasts = (f) => f.msgs.filter((m) => m.t === S2C.TOAST);
+  assert.strictEqual(toasts(a).length, 1, 'тост ушёл автору черновика');
+  assert.ok(toasts(a)[0].text.includes('принят'), toasts(a)[0].text);
+  assert.strictEqual(toasts(b).length, 0, 'соперник тост не получает');
+  assert.notStrictEqual(room.turnDeadlineMs, null, 'новый отсчёт запущен');
+  hub.stop();
+});
+
+test('время вышло с невалидным черновиком: обычный автовзят', () => {
+  const hub = newHub();
+  const room = playingRoom('to3', 'to4');
+  const a = fakeSock(hub, room, 0, userOf('to3'));
+  fakeSock(hub, room, 1, userOf('to4'));
+  room.game.current = 0;
+  // Ряд из двух чисел столом не станет — геометрия черновика такое пропускает.
+  const owned = [...new Set(room.game.players[0].handIds)].slice(0, 2);
+  hub.onMessage(a.ctx, Buffer.from(JSON.stringify({ t: C2S.GAME_DRAFT, rows: [{ id: 0, tiles: owned }] })));
+  hub.maybeRunBots(room);
+  room.turnDeadlineMs = Date.now() - 10;
+  const handBefore = room.game.handSize(0);
+  hub._onTurnTimeout(room);
+  assert.strictEqual(room.game.current, 1, 'ход должен передаться дальше');
+  assert.strictEqual(room.game.handSize(0), handBefore + 1, 'невалидный черновик — взятие из колоды');
+  const toasts = (f) => f.msgs.filter((m) => m.t === S2C.TOAST);
+  assert.strictEqual(toasts(a).length, 1);
+  assert.ok(toasts(a)[0].text.includes('из колоды'), toasts(a)[0].text);
+  assert.strictEqual(room._draftRows && room._draftRows.get(0), undefined, 'черновик потрачен');
+  hub.stop();
+});
+
+test('успешный коммит гасит черновик автора', () => {
+  const hub = newHub();
+  const room = playingRoom('to5', 'to6');
+  const a = fakeSock(hub, room, 0, userOf('to5'));
+  fakeSock(hub, room, 1, userOf('to6'));
+  room.game.current = 0;
+  const run = rigRun(room, 0, 1, 7);
+  const rows = [{ id: 0, tiles: run.slice() }];
+  hub.onMessage(a.ctx, Buffer.from(JSON.stringify({ t: C2S.GAME_DRAFT, rows })));
+  assert.ok(room._draftRows && room._draftRows.has(0), 'черновик запомнен');
+  hub.onMessage(a.ctx, Buffer.from(JSON.stringify({
+    t: C2S.GAME_COMMIT, rid: 'c1', ops: [{ op: 'set_table', rows }],
+  })));
+  assert.strictEqual(room.game.current, 1, 'коммит прошёл');
+  assert.strictEqual(room._draftRows && room._draftRows.get(0), undefined, 'черновик сброшен ходом');
+  hub.stop();
+});
+
 test('на паузе просроченный таймер ничего не делает', () => {
+
   const hub = newHub();
   const room = playingRoom('tm15', 'tm16');
   hub.maybeRunBots(room);
