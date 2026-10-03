@@ -426,6 +426,9 @@ func test_bot_move_flies() -> void:
 func test_bot_commit_staggered() -> void:
 	section("коммит сетевого бота идёт поэтапно")
 	game._clear_draft()
+	# Сценарий — наш ход: плашки «Ход» нет. Чужую, зависшую с прошлого
+	# теста, гасим — иначе stagger честно ждёт её и в бюджет не влезает.
+	game.turn_title_overlay.visible = false
 	_apply(view)
 	(game.state.players[2] as GameState.Player).is_bot = true
 	var v2: Dictionary = view.duplicate(true)
@@ -490,21 +493,36 @@ func test_bot_commit_no_mid_state() -> void:
 	s2["lastTurn"] = [_na, _nb, _nc]
 	s2["current"] = 2
 	game._on_state_received(s2, 0.0, false, false)
-	var spread := await _landing_spread([_na, _nb, _nc])
-	ok("все три долетели", spread >= 0, "spread=%d" % spread)
-	if spread >= 0:
-		ok("посадки разнесены во времени", spread >= 300,
-			"разброс %d мс" % spread)
+	var r := await _landing_spread([_na, _nb, _nc], game.turn_title_overlay)
+	ok("все три долетели", int(r["landed"]) == 3, "сели %d" % int(r["landed"]))
+	ok("плашка «Ход» показывалась", bool(r["seen_title"]))
+	if int(r["landed"]) == 3 and bool(r["seen_title"]):
+		ok("посадки только после плашки",
+			int(r["first_frame"]) >= int(r["hide_frame"]) and int(r["hide_frame"]) >= 0,
+			"сели на кадре %d, плашка ушла на %d"
+				% [int(r["first_frame"]), int(r["hide_frame"])])
+		ok("посадки разнесены во времени", int(r["spread_ms"]) >= 300,
+			"разброс %d мс" % int(r["spread_ms"]))
 	game._online = false
 
 
-## Разброс посадок в мс (-1, если не все сели): «приземлился» значит
-## позиция встала И alpha доросла (ждущий в углу неподвижен, но сер).
-func _landing_spread(need: Array) -> int:
+## Посадки фишек: разброс по времени, кадр первой посадки и кадр ухода
+## плашки «Ход» (если передана). «Приземлился» значит позиция встала
+## И alpha доросла (ждущий в углу неподвижен, но сер).
+func _landing_spread(need: Array, title_ov: Control = null) -> Dictionary:
 	var hist := {}
 	var landed_at := {}
-	for i in range(300):
+	var land_frame := {}
+	var flying := {}
+	var seen_title := false
+	var hide_frame := -1
+	for i in range(600):
 		await process_frame
+		if title_ov != null:
+			if title_ov.visible:
+				seen_title = true
+			elif seen_title and hide_frame < 0:
+				hide_frame = i
 		var now := Time.get_ticks_msec()
 		for tid in need:
 			var a: int = int(tid)
@@ -512,6 +530,12 @@ func _landing_spread(need: Array) -> int:
 				continue
 			var v := _placed_view(a)
 			if v == null:
+				continue
+			# Настоящий прилёт виден: фишка сначала прозрачная в углу.
+			# Не летавшие стоят непрозрачными с постройки — их не считаем.
+			if (v as Control).modulate.a < 0.99:
+				flying[a] = true
+			if not flying.has(a):
 				continue
 			if not hist.has(a):
 				hist[a] = []
@@ -524,13 +548,19 @@ func _landing_spread(need: Array) -> int:
 				and (h[1] as Vector2).is_equal_approx(h[2])
 			if steady and (v as Control).modulate.a > 0.99:
 				landed_at[a] = now
-		if landed_at.size() == need.size():
+				land_frame[a] = i
+		if landed_at.size() == need.size() and (title_ov == null or hide_frame >= 0):
 			break
-	if landed_at.size() != need.size():
-		return -1
-	var times := landed_at.values()
-	times.sort()
-	return int(times[times.size() - 1]) - int(times[0])
+	var out := {"landed": landed_at.size(), "seen_title": seen_title,
+		"hide_frame": hide_frame, "spread_ms": -1, "first_frame": -1}
+	if landed_at.size() == need.size():
+		var times := landed_at.values()
+		times.sort()
+		out["spread_ms"] = int(times[times.size() - 1]) - int(times[0])
+		var frames := land_frame.values()
+		frames.sort()
+		out["first_frame"] = int(frames[0])
+	return out
 
 
 ## Локальный матч с ботом за 0-м местом и ригнутой рукой (красные

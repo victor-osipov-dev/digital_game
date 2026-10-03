@@ -2254,6 +2254,19 @@ func _play_place_anim(shots: Array, force: Array = [],
 		return
 	if not is_inside_tree() or (shots.is_empty() and force.is_empty()):
 		return
+	# Пошаговый прилёт ждёт, пока спадёт плашка «Ход: …»: иначе первые
+	# фишки прилетают под ней и их не видно. Ждём по флагу видимости,
+	# а не по секундам, — длительность плашки может поменяться. Плашки
+	# нет (свой ход) — едем сразу. Быстрые прилёты не ждут: они короче
+	# плашки и дёргать их паузами незачем.
+	var title_ov := turn_title_overlay as Control
+	if stagger and title_ov != null and is_instance_valid(title_ov) and title_ov.visible:
+		var hide_by := Time.get_ticks_msec() + 2500
+		while is_instance_valid(title_ov) and title_ov.visible \
+				and Time.get_ticks_msec() < hide_by:
+			await get_tree().process_frame
+			if gen >= 0 and gen != _anim_gen:
+				return
 	var prev := {}
 	for s in shots:
 		prev[int(s["id"])] = s
