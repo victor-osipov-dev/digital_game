@@ -213,7 +213,7 @@ func _build_ui() -> void:
 	layout.add_theme_constant_override("separation", 8)
 	margin.add_child(layout)
 
-	# Верхняя строка — в потоке, а не в одном ряду: при гигантском
+	# Верхняя строка — в потоке, а не в одном ряду: при большом
 	# шесть кнопок с крупным текстом не влезают в 576, и строка
 	# переезжает на вторую линию, а не уезжает за правый край.
 	var top := FlowContainer.new()
@@ -461,7 +461,7 @@ func _build_ui() -> void:
 	hlab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	hlab.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	hlab.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	# Подпись переносится: без неё её ширина на гигантской шкале (597 px)
+	# Подпись переносится: без неё её ширина на большой шкале (597 px)
 	# становилась шириной всего стола и уводила верхний ряд за край.
 	hlab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hlab.add_theme_font_size_override("font_size", Settings.fs(16))
@@ -664,7 +664,7 @@ func _make_top_button(text_value: String, tip: String, handler: Callable, full_v
 
 ## Честная ширина верхней кнопки по её подписи: у кнопок с clip_text
 ## движок минимум по тексту не считает, и ряд думал, что все кнопки
-## по 60 px — на гигантском тексте подписи срезались до двух букв,
+## по 60 px — на большом тексте подписи срезались до двух букв,
 ## хотя места на широком экране хватало. Пол 60 px оставлен: на мелких
 ## шкалах кнопки выглядят как раньше.
 func _top_button_need(btn: Button) -> float:
@@ -683,7 +683,7 @@ func _top_button_need(btn: Button) -> float:
 
 ## Верхние кнопки либо стоят в один ряд, либо редкие уезжают в бургер.
 ## Частые (сохранить/вернуть/подсказка) остаются в строке всегда.
-## Считать надо по честной ширине подписей, иначе при гигантском тексте
+## Считать надо по честной ширине подписей, иначе при большом тексте
 ## ряд либо разъезжается на две линии, либо уезжает за правый край.
 func _sync_top_bar() -> void:
 	if deck_button == null or _top_actions == null or _burger_btn == null \
@@ -692,9 +692,8 @@ func _sync_top_bar() -> void:
 	for btn in _top_action_buttons:
 		(btn as Button).text = String((btn as Button).get_meta("short_text"))
 		(btn as Button).add_theme_font_size_override("font_size", Settings.fs(15))
-	# Частые кнопки растут только до «Большого»: на гигантском остаются
-	# как на большом (иначе они там меньше, чем могли бы), и ряд влезает
-	# даже в телефон.
+	# Частые кнопки растут с потолком fs_capped (сейчас равен максимуму
+	# шкалы), и ряд влезает даже в телефон.
 	for b in _top_pinned:
 		(b as Button).add_theme_font_size_override("font_size", Settings.fs_capped(15, 2))
 	var have := maxf(get_viewport_rect().size.x - 20.0, 200.0)

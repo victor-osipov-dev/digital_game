@@ -85,7 +85,6 @@ const _EN := {
 "Выйти": "Quit",
 "Выход в меню": "Quit to menu",
 "Выход": "Quit",
-"Гигантский": "Huge",
 "Готов(-а)": "Ready",
 "Действия": "Actions",
 "Джокер заменяет любое число любого цвета.": "A joker replaces any tile of any color.",

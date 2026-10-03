@@ -80,7 +80,7 @@ func _boot() -> void:
 	var saved_base := root.content_scale_size
 	for size in SIZES:
 		for base in BASES:
-			for scale in range(4):
+			for scale in range(3):
 				settings.text_scale = scale
 				await _round(size, base, scale)
 	root.content_scale_size = saved_base

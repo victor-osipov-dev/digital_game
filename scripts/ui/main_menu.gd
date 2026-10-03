@@ -46,7 +46,7 @@ func _sync_scroll_min() -> void:
 	_avail_w = maxf(vp.x - 28.0, 200.0)
 	# Ширину задаёт вьюпорт, а не содержимое: у Label и Button без
 	# переноса минимальная ширина равна всей строке, поэтому «DIGITAL
-	# GAME» на гигантском тексте или два ряда по две кнопки растягивали
+	# GAME» на большом тексте или два ряда по две кнопки растягивали
 	# колонку шире окна, и всё меню уезжало вправо.
 	menu_box.custom_minimum_size = Vector2(_avail_w, 0)
 	var c := menu_box.get_combined_minimum_size()
@@ -202,7 +202,7 @@ func _build_ui() -> void:
 	subtitle.text = Lang.t("числа · 4 цвета · джокеры")
 	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	# Перенос: у Label без него минимальная ширина равна всей строке, и
-	# на гигантском тексте подзаголовок растягивал колонку шире окна.
+	# на большом тексте подзаголовок растягивал колонку шире окна.
 	subtitle.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	subtitle.add_theme_font_size_override("font_size", Settings.fs(16))
 	subtitle.add_theme_color_override("font_color", Color(1, 1, 1, 0.55))
@@ -285,7 +285,7 @@ func _build_ui() -> void:
 
 	check_30 = CheckBox.new()
 	# Подпись та же, что и в сетевом лобби: чекбокс не переносится, а
-	# его ширина — ширина всей колонки меню; длиннее — на гигантском
+	# его ширина — ширина всей колонки меню; длиннее — на большом
 	# строка уезжала за правый край экрана.
 	check_30.text = Lang.t("Первый ход: от 30")
 	check_30.button_pressed = Settings.require_30
@@ -297,7 +297,7 @@ func _build_ui() -> void:
 
 	bot_anim_check = CheckBox.new()
 	# Подпись короткая специально: у CheckBox нет переноса, длинная
-	# строка растягивала бы колонку шире окна на гигантском тексте.
+	# строка растягивала бы колонку шире окна на большом тексте.
 	bot_anim_check.text = Lang.t("Анимация бота")
 	bot_anim_check.button_pressed = Settings.bot_anim
 	bot_anim_check.add_theme_font_size_override("font_size", Settings.fs(15))

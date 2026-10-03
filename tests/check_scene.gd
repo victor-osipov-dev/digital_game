@@ -36,13 +36,11 @@ func _setup() -> void:
 		settings.set_bot(0, false)
 		var saved_scale: int = settings.text_scale
 		settings.text_scale = 0
-		check(settings.fs(100) == 85, "fs: small scale = 85, got %d" % settings.fs(100))
+		check(settings.fs(100) == 100, "fs: small scale = 100, got %d" % settings.fs(100))
 		settings.text_scale = 1
-		check(settings.fs(100) == 100, "fs: default scale = 100, got %d" % settings.fs(100))
+		check(settings.fs(100) == 130, "fs: default scale = 130, got %d" % settings.fs(100))
 		settings.text_scale = 2
-		check(settings.fs(100) == 130, "fs: large scale = 130, got %d" % settings.fs(100))
-		settings.text_scale = 3
-		check(settings.fs(100) == 200, "fs: giant scale = 200, got %d" % settings.fs(100))
+		check(settings.fs(100) == 200, "fs: big scale = 200, got %d" % settings.fs(100))
 		settings.text_scale = saved_scale
 		var saved_step: int = settings.tile_step
 		settings.tile_step = 0
@@ -180,16 +178,16 @@ func _burger_checks() -> void:
 	for i in range(3):
 		await process_frame
 	var saved_scale: int = settings.text_scale
-	settings.text_scale = 1
+	settings.text_scale = 0
 	inst.call("_rebuild_ui")
 	for i in range(4):
 		await process_frame
 	check(not bool(inst.get("_top_collapsed")), "normal text keeps buttons inline")
-	settings.text_scale = 3
+	settings.text_scale = 2
 	inst.call("_rebuild_ui")
 	for i in range(4):
 		await process_frame
-	check(bool(inst.get("_top_collapsed")), "giant text collapses top buttons into burger")
+	check(bool(inst.get("_top_collapsed")), "big text collapses top buttons into burger")
 	var burger = inst.get("_burger_btn")
 	check(burger != null and (burger as Control).visible, "burger button visible when collapsed")
 	var box = inst.get("_burger_box")
@@ -248,19 +246,19 @@ func _burger_checks() -> void:
 
 
 func _topbar_width_checks() -> void:
-	# Широкий экран + гигантский текст: ряд НЕ схлопывается, и каждая
+	# Широкий экран + большой текст: ряд НЕ схлопывается, и каждая
 	# кнопка влезает целиком. Ловили вживую: «Сохр./Вернуть/Подск.»
 	# показывали по две буквы — минимум кнопок с clip_text не считал
 	# текст, и ряд думал, что все кнопки по 60 px.
 	var saved_scale: int = settings.text_scale
-	settings.text_scale = 3
+	settings.text_scale = 2
 	root.size = Vector2i(1152, 1024)
 	for i in range(3):
 		await process_frame
 	inst.call("_sync_top_bar")
 	for i in range(2):
 		await process_frame
-	check(not bool(inst.get("_top_collapsed")), "giant text on wide screen keeps buttons inline")
+	check(not bool(inst.get("_top_collapsed")), "big text on wide screen keeps buttons inline")
 	for b in (inst.get("_top_action_buttons") as Array):
 		var btn := b as Button
 		var font: Font = btn.get_theme_font("font")
@@ -282,15 +280,14 @@ func _topbar_width_checks() -> void:
 
 
 func _topbar_capped_checks() -> void:
-	# Узкий экран + гигантский текст: частые кнопки остаются в строке
+	# Узкий экран + большой текст: частые кнопки остаются в строке
 	# в одну линию, редкие — в бургере. Шрифт частых capped на «Большом»:
-	# на гигантском они такие же, как на большом, а не мельче.
+	# на большом они такие же, как на среднем, а не мельче.
 	var saved_base := root.content_scale_size
 	var saved_size := root.size
 	var saved_scale: int = settings.text_scale
 	settings.text_scale = 2
 	var big_font: int = settings.fs(15)
-	settings.text_scale = 3
 	root.content_scale_size = Vector2i(320, 640)
 	root.size = Vector2i(360, 800)
 	for i in range(3):
@@ -300,7 +297,7 @@ func _topbar_capped_checks() -> void:
 		await process_frame
 	var bar = inst.get("_top_actions")
 	var box = inst.get("_burger_box")
-	check(bool(inst.get("_top_collapsed")), "narrow giant screen uses burger for rare actions")
+	check(bool(inst.get("_top_collapsed")), "narrow big screen uses burger for rare actions")
 	var ys := []
 	for b in (inst.get("_top_action_buttons") as Array):
 		var btn := b as Button

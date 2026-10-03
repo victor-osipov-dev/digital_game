@@ -37,13 +37,13 @@ func _boot() -> void:
 
 	_check_fs_bounds(settings)
 
-	for idx in range(4):
+	for idx in range(3):
 		settings.text_scale = idx
 		_scale = idx
 		await _menu_round(idx)
 		await _game_round(idx)
 
-	for idx in range(4):
+	for idx in range(3):
 		settings.text_scale = idx
 		_scale = idx
 		for step in range(6):
@@ -68,15 +68,14 @@ func _boot() -> void:
 # ---------------------------------------------------------------- fs()
 
 func _check_fs_bounds(settings) -> void:
-	# Таблица шкал: маленький/средний/большой/гигантский.
-	var expect := [85, 100, 130, 200]
-	for idx in range(4):
+	# Таблица шкал: маленький/средний/большой.
+	var expect := [100, 130, 200]
+	for idx in range(3):
 		settings.text_scale = idx
 		var got: int = settings.fs(100)
 		if got != int(expect[idx]):
 			_fail("fs(100) на масштабе %d = %d, ожидалось %d" % [idx, got, expect[idx]])
-	# Пол для мелкого текста: на «Маленьком» база 12 не опускается
-	# ниже читаемого минимума.
+	# Пол для мелкого текста: база 12 не опускается ниже читаемого минимума.
 	settings.text_scale = 0
 	var floor_got: int = settings.fs(12)
 	if floor_got < 12:

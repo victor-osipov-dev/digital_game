@@ -5,12 +5,12 @@ const CFG_PATH := "user://settings.cfg"
 const MIN_PLAYERS := 2
 const MAX_PLAYERS := 5
 
-## Лестница масштабов: средний — ровно прежний (×1.0, вёрстка под
-## него родная), гигантский — ×2, чтобы весь текст был заметно крупным.
-## Потолоков у текста нет, зато есть пол FS_MIN: на «Маленьком»
-## мелкие базы не опускаются ниже читаемого минимума.
-const TEXT_SCALES := [0.85, 1.0, 1.3, 2.0]
-const TEXT_SCALE_NAMES := ["Маленький", "Средний", "Большой", "Гигантский"]
+## Лестница масштабов: маленький — ровно прежний ×1.0 (вёрстка под
+## него родная), большой — ×2, чтобы весь текст был заметно крупным.
+## «Маленького» ×0.85 больше нет. Потолоков у текста нет, зато есть
+## пол FS_MIN: мелкие базы не опускаются ниже читаемого минимума.
+const TEXT_SCALES := [1.0, 1.3, 2.0]
+const TEXT_SCALE_NAMES := ["Маленький", "Средний", "Большой"]
 const FS_MIN := 12
 const TILE_WIDTHS := [32, 40, 48, 60, 66, 72]
 const TILE_SIZE_NAMES := ["Крошечный", "Маленький", "Средний", "Крупный", "Большой", "Максимум"]
@@ -19,7 +19,7 @@ const BOT_LEVEL_NAMES := ["Лёгкий", "Средний", "Сложный", "�
 var player_count: int = MIN_PLAYERS
 var player_names: PackedStringArray = PackedStringArray()
 var require_30: bool = true
-var text_scale: int = 2
+var text_scale: int = 1
 var tile_step: int = 5
 var bot_level: int = 1
 var bot_anim: bool = true
@@ -44,8 +44,8 @@ func fs(base: int) -> int:
 
 
 ## Тот же размер, но с потолком по шкале: частые кнопки строки не должны
-## расти дальше «Большого» — иначе на гигантском они меньше, чем могли
-## бы (компакт резал бы их ещё сильнее), и ряд не влезал бы в телефон.
+## расти дальше заданного индекса — иначе ряд не влезал бы в телефон.
+## Потолок 2 сейчас равен максимуму шкалы («Большой»).
 func fs_capped(base: int, cap_scale: int) -> int:
 	var idx := clampi(mini(text_scale, cap_scale), 0, TEXT_SCALES.size() - 1)
 	return maxi(FS_MIN, int(round(base * TEXT_SCALES[idx])))
@@ -60,7 +60,7 @@ func touch(base: int) -> int:
 
 ## Ширина контрола с потолком по ширине окна. Текстовая шкала растит
 ## ширины так же, как шрифт, а пары кнопок («Заново» + «В меню») и
-## ряды лобби на гигантском так не влезают в 576 — ширина держим в
+## ряды лобби на большом так не влезают в 576 — ширина держим в
 ## 44% окна: две таких кнопки с зазором всегда уместятся.
 func touch_w(base: int) -> int:
 	var w := touch(base)
@@ -202,7 +202,7 @@ func load_settings() -> void:
 	if cf.load(CFG_PATH) == OK:
 		player_count = clampi(int(cf.get_value("game", "player_count", MIN_PLAYERS)), MIN_PLAYERS, MAX_PLAYERS)
 		require_30 = bool(cf.get_value("game", "require_30", true))
-		text_scale = clampi(int(cf.get_value("game", "text_scale", 2)), 0, TEXT_SCALES.size() - 1)
+		text_scale = clampi(int(cf.get_value("game", "text_scale", 1)), 0, TEXT_SCALES.size() - 1)
 		tile_step = clampi(int(cf.get_value("game", "tile_step", 5)), 0, TILE_WIDTHS.size() - 1)
 		bot_level = clampi(int(cf.get_value("game", "bot_level", 1)), 0, BOT_LEVEL_NAMES.size() - 1)
 		bot_anim = bool(cf.get_value("game", "bot_anim", true))
