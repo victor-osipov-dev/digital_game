@@ -553,6 +553,25 @@ func _make_top_button(text_value: String, tip: String, handler: Callable, full_v
 	return btn
 
 
+## Честная ширина верхней кнопки по её подписи: у кнопок с clip_text
+## движок минимум по тексту не считает, и ряд думал, что все кнопки
+## по 60 px — на гигантском тексте подписи срезались до двух букв,
+## хотя места на широком экране хватало. Пол 60 px оставлен: на мелких
+## шкалах кнопки выглядят как раньше.
+func _top_button_need(btn: Button) -> float:
+	var w := 60.0
+	var font: Font = btn.get_theme_font("font")
+	if font != null:
+		w = maxf(w, font.get_string_size(btn.text, HORIZONTAL_ALIGNMENT_LEFT, -1,
+			btn.get_theme_font_size("font_size")).x)
+	var sb := btn.get_theme_stylebox("normal")
+	if sb != null:
+		w += sb.content_margin_left + sb.content_margin_right
+	else:
+		w += 16.0
+	return w
+
+
 ## Верхние кнопки либо стоят в один ряд, либо уезжают в бургер: считать
 ## надо по минимальной ширине, иначе при гигантском тексте ряд либо
 ## разъезжается на две линии, либо уезжает за правый край.
@@ -565,11 +584,16 @@ func _sync_top_bar() -> void:
 	var have := maxf(get_viewport_rect().size.x - 20.0, 200.0)
 	var need := deck_button.get_combined_minimum_size().x
 	for btn in _top_action_buttons:
-		need += 6.0 + (btn as Button).get_combined_minimum_size().x
+		need += 6.0 + _top_button_need(btn as Button)
 	var collapse := need > have
 	for btn in _top_action_buttons:
+		var b := btn as Button
 		var key := "full_text" if collapse else "short_text"
-		(btn as Button).text = String((btn as Button).get_meta(key))
+		b.text = String(b.get_meta(key))
+		var cur := b.custom_minimum_size
+		# В строке — ширина по подписи, чтобы текст влезал целиком;
+		# в бургере кнопки лежат столбиком на всю ширину, минимум малый.
+		b.custom_minimum_size = Vector2(60.0 if collapse else _top_button_need(b), cur.y)
 	var target: Control = _burger_box if collapse else _top_actions
 	for btn in _top_action_buttons:
 		if (btn as Button).get_parent() != target:
@@ -1168,7 +1192,11 @@ func _apply_state(view: Dictionary, grace: float, paused: bool, waiting: bool = 
 	# Отсчёт сервера. Пришло null (пауза/ожидание/конец) — дедлайн гаснет
 	# сам. Ключ при этом может быть и в словаре, но с null: views.js отдаёт
 	# turnLeft: null, а не пропускает ключ, поэтому int(null) падал бы.
-	var turn_left := int(view.get("turnLeft", 0) or 0)
+	# ВНИМАНИЕ: через `or` здесь нельзя — в GDScript `or` возвращает bool,
+	# а не операнд (как в Python): int(60 or 0) давал int(true) = 1, и
+	# таймер всегда показывал одну секунду.
+	var turn_raw = view.get("turnLeft", 0)
+	var turn_left := int(turn_raw) if turn_raw != null else 0
 	_turn_deadline_ms = (Time.get_ticks_msec() + turn_left * 1000) if turn_left > 0 else 0
 	var prev := state
 	state = ViewBuilder.build(view)

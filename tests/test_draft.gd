@@ -97,6 +97,7 @@ func _boot() -> void:
 	test_expiry()
 	test_invariant()
 	test_author_turn_survives_state()
+	test_turn_deadline()
 	test_committed_last_turn_opaque()
 	await test_commit_flies_in()
 	await test_draft_tile_flies_live()
@@ -243,6 +244,26 @@ func _row_tiles(rows: Array, row_id: int) -> Array:
 
 
 # --------------------------------------------------- принятый ход и прилёты
+
+## Отсчёт хода: секунды сервера, а не единица. Ловили вживую: `or`
+## в GDScript возвращает bool, и int(60 or 0) давал int(true) = 1 —
+## таймер всегда показывал одну секунду и гас.
+func test_turn_deadline() -> void:
+	section("отсчёт хода: секунды сервера")
+	var saved_online: bool = game._online
+	game._online = true
+	var v: Dictionary = view.duplicate(true)
+	v["turnLeft"] = 60
+	var before := Time.get_ticks_msec()
+	game._on_state_received(v, 0.0, false, false)
+	var span: int = int(game._turn_deadline_ms) - before
+	ok("дедлайн на 60 с вперёд", span >= 59000 and span <= 60100,
+		"через %d мс" % span)
+	var v0: Dictionary = view.duplicate(true)
+	v0["turnLeft"] = null
+	game._on_state_received(v0, 0.0, false, false)
+	ok("null гасит дедлайн", int(game._turn_deadline_ms) == 0)
+	game._online = saved_online
 
 ## Фикстура везёт lastTurn [66,68,69] прямо на столе: это принятый
 ## прошлый ход, и он обязан быть обычным (только зелёная рамка),

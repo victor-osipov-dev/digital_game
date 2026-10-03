@@ -115,6 +115,7 @@ func _after_title_checks() -> void:
 	_hand_panel_checks()
 	_flow_center_checks()
 	await _burger_checks()
+	await _topbar_width_checks()
 	inst.free()
 	inst = null
 	if fails == 0:
@@ -206,6 +207,40 @@ func _burger_checks() -> void:
 	check(not (panel as Control).visible, "burger panel hidden after close")
 	settings.text_scale = saved_scale
 	inst.call("_rebuild_ui")
-	for i in range(3):
+	for i in range(4):
 		await process_frame
 	root.size = saved_size
+
+
+func _topbar_width_checks() -> void:
+	# Широкий экран + гигантский текст: ряд НЕ схлопывается, и каждая
+	# кнопка влезает целиком. Ловили вживую: «Сохр./Вернуть/Подск.»
+	# показывали по две буквы — минимум кнопок с clip_text не считал
+	# текст, и ряд думал, что все кнопки по 60 px.
+	var saved_scale: int = settings.text_scale
+	settings.text_scale = 3
+	root.size = Vector2i(1152, 1024)
+	for i in range(3):
+		await process_frame
+	inst.call("_sync_top_bar")
+	for i in range(2):
+		await process_frame
+	check(not bool(inst.get("_top_collapsed")), "giant text on wide screen keeps buttons inline")
+	for b in (inst.get("_top_action_buttons") as Array):
+		var btn := b as Button
+		var font: Font = btn.get_theme_font("font")
+		var want := 0.0
+		if font != null:
+			want = font.get_string_size(btn.text, HORIZONTAL_ALIGNMENT_LEFT, -1,
+				btn.get_theme_font_size("font_size")).x
+		check(btn.get_combined_minimum_size().x + 1.0 >= want,
+			"button «%s» minimum fits text (min %.0f, need %.0f)"
+				% [btn.text, btn.get_combined_minimum_size().x, want])
+		check(btn.size.x + 1.0 >= want,
+			"button «%s» laid out wide enough (%.0f vs %.0f)"
+				% [btn.text, btn.size.x, want])
+	settings.text_scale = saved_scale
+	root.size = Vector2i(576, 1024)
+	inst.call("_sync_top_bar")
+	for i in range(2):
+		await process_frame
