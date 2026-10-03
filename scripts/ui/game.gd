@@ -73,7 +73,10 @@ var _drag_view: TileView = null
 var _bot_active: bool = false
 var _bot_seq: int = 0
 var _hint_ids: Array = []
-var _hint_used := false
+## Чьи подсказки уже потрачены (место -> true): за одним устройством в
+## локальной игре могут сидеть несколько живых игроков, и общий флаг
+## «раз за партию» отбирал бы подсказку у остальных. В сети место одно.
+var _hints_used := {}
 var _pan_pressed: bool = false
 var _pan_pos: Vector2 = Vector2.ZERO
 var _pan_press_on_tile: bool = false
@@ -1202,7 +1205,7 @@ func _new_match() -> void:
 	_bot_active = false
 	_stats_recorded = false
 	_hint_ids.clear()
-	_hint_used = false
+	_hints_used.clear()
 	state = GameState.create(Settings.player_count, Array(Settings.player_names), Settings.require_30)
 	invalid_row_ids.clear()
 	win_overlay.visible = false
@@ -1246,7 +1249,7 @@ func _net_begin() -> void:
 	_bot_seq += 1
 	_bot_active = false
 	_hint_ids.clear()
-	_hint_used = false
+	_hints_used.clear()
 	# «Заново» на экране победы — это про локальную партию: сервер не умеет
 	# «сыграть ещё раз в той же комнате». В сетевой игре кнопка скрывается,
 	# иначе после конца партии она молча запускала локальную игру поверх
@@ -1775,10 +1778,23 @@ func _on_cp_restore_pressed() -> void:
 	else:
 		toast("Нет сохранённых раскладов", false)
 
+## Ключ подсказки — место текущего игрока: и в локальной, и в сетевой
+## игре действует тот, чей сейчас ход (в сети чужой ход и так закрыт).
+func _hint_key() -> int:
+	if state == null:
+		return -1
+	return state.current
+
+func _is_hint_used() -> bool:
+	return bool(_hints_used.get(_hint_key(), false))
+
+func _mark_hint_used() -> void:
+	_hints_used[_hint_key()] = true
+
 func _on_hint_pressed() -> void:
-	if not _can_act() or _hint_used:
+	if not _can_act() or _is_hint_used():
 		return
-	_hint_used = true
+	_mark_hint_used()
 	_hint_ids.clear()
 	var plan := TurnPlanner.plan(state, TurnPlanner.LEVEL_IMPOSSIBLE)
 	var action := String(plan.get("action", ""))
@@ -2417,8 +2433,9 @@ func _update_buttons() -> void:
 	undo_button.disabled = locked or not state.turn_dirty
 	cp_save_btn.disabled = locked or not state.turn_dirty
 	cp_restore_btn.disabled = locked or state.checkpoint_count() == 0
-	# Подсказка — раз за партию: использованную гасим сразу.
-	hint_btn.disabled = locked or _hint_used
+	# Подсказка — одна на игрока за партию: потраченную гасим сразу,
+	# но только для того места, которое её потратило.
+	hint_btn.disabled = locked or _is_hint_used()
 	if state.finished:
 		end_button.text = "Игра окончена"
 		end_button.disabled = true

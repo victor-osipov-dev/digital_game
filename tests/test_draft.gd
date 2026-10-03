@@ -106,7 +106,7 @@ func _boot() -> void:
 	await test_bot_move_flies()
 	await test_bot_commit_staggered()
 	test_draft_resend_no_rebuild()
-	test_hint_once()
+	test_hint_per_player()
 
 	if fails == 0:
 		print("\nЧЕРНОВИК/ПРЕВЬЮ: все %d проверок прошли" % total)
@@ -618,23 +618,39 @@ func test_draft_resend_no_rebuild() -> void:
 	game._clear_draft()
 
 
-## Подсказка — раз за партию: второе нажатие ничего не делает,
-## кнопка гаснет, новый матч сбрасывает.
-func test_hint_once() -> void:
-	section("подсказка раз за партию")
+## Подсказка — одна на игрока: в локальной игре за одним устройством
+## сидят несколько живых, и потраченная одним не гасит кнопку другому.
+## Повтор того же игрока — мимо, новый матч сбрасывает всем.
+func test_hint_per_player() -> void:
+	section("подсказка одна на игрока")
 	game._clear_draft()
-	_apply(view)
-	ok("подсказка не использована", not game._hint_used)
+	var settings := root.get_node_or_null("Settings")
+	settings.set_player_count(2)
+	settings.set_bot(0, false)
+	settings.set_bot(1, false)
+	game._new_match()
+	ok("у первого подсказка не использована", not game._is_hint_used())
 	game._on_hint_pressed()
-	ok("первое нажатие сработало", game._hint_used)
+	ok("первое нажатие сработало", game._is_hint_used())
 	var hint_btn: Button = game.get("hint_btn")
 	ok("кнопка подсказки погасла", hint_btn != null and hint_btn.disabled)
+	# Второй игрок за тем же устройством — подсказка у него своя.
+	game.state.current = 1
+	game.refresh()
+	ok("у второго подсказка не использована", not game._is_hint_used())
+	hint_btn = game.get("hint_btn")
+	ok("кнопка снова активна", hint_btn != null and not hint_btn.disabled)
+	game._on_hint_pressed()
+	ok("второй тоже подсказался", game._is_hint_used())
+	# А у первого она так и потрачена: повтор мимо.
+	game.state.current = 0
+	game.refresh()
 	var marks_before: int = game._hint_ids.size()
 	game._on_hint_pressed()
-	ok("второе нажатие ничего не делает",
-		game._hint_used and game._hint_ids.size() == marks_before)
+	ok("повтор первого ничего не делает",
+		game._is_hint_used() and game._hint_ids.size() == marks_before)
 	game._new_match()
-	ok("новый матч сбрасывает подсказку", not game._hint_used)
+	ok("новый матч сбрасывает подсказки", game._hints_used.is_empty())
 
 
 func _view_ids() -> Array:
