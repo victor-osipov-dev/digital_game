@@ -301,10 +301,72 @@ func _stuck(menu: Node, lobby: Node) -> void:
 		if wide <= 360.0 and not create_row.vertical:
 			_fail("на узком экране (доступно %.0f) поля названия и пароля "
 				% wide + "обязаны стоять столбиком")
+	await _dynamic_content(lobby)
 	net.clear_pending_room()
 	lobby.call("_refresh_stuck")
 	(menu as Control).call("_refresh_online_note")
 	await process_frame
+## Динамический контент приезжает через секунды после открытия
+## (список комнат, ники) и раньше раздвигал страницу шире экрана:
+## правый край (Назад, Обновить) уезжал. Проверяем после подгрузки.
+func _dynamic_content(lobby: Node) -> void:
+	var rooms_page: Control = lobby.get("_page_rooms")
+	lobby.set("_rooms", [])
+	lobby.call("_render_rooms")
+	for i in range(2):
+		await process_frame
+	_edge(rooms_page, "rooms_empty")
+	lobby.set("_rooms", [{
+		"name": "Очень длинное название комнаты для проверки переносов",
+		"filled": 2, "seats": 5, "code": "X", "state": "playing",
+		"bots": 2, "hasPassword": true,
+	}])
+	lobby.call("_render_rooms")
+	for i in range(2):
+		await process_frame
+	_edge(rooms_page, "rooms_long")
+	var logout_btn := _find_button_in(rooms_page, "Выйти")
+	if logout_btn != null:
+		_button_text(logout_btn, "Выйти (подвал)",
+			logout_btn.get_parent() as BoxContainer)
+	else:
+		_fail("нет кнопки «Выйти» в подвале комнат")
+	lobby.call("_show_lobby", {
+		"code": "ABC12", "you": 0, "seats": 3, "isHost": false, "require30": true,
+		"players": [
+			{"seat": 0, "nick": "ОченьДлинныйНикПервогоИгрокаКоторыйНеВлезает",
+				"empty": false, "connected": true},
+			{"seat": 1, "nick": "ВторойИгрокСТожеДлиннымНиком",
+				"empty": false, "connected": false},
+			{"seat": 2, "empty": true},
+		],
+	})
+	for i in range(2):
+		await process_frame
+	_edge(lobby.get("_page_lobby"), "lobby_long_nicks")
+	# Шапка и корень после подгрузки: заголовок всё ещё влезает,
+	# «Назад» на экране (край проверяет _edge рекурсивно).
+	var title := lobby.get("_title") as Label
+	if title != null:
+		var font: Font = title.get_theme_font("font")
+		if font != null:
+			var size: int = title.get_theme_font_size("font_size")
+			var want: float = font.get_string_size(title.text,
+				HORIZONTAL_ALIGNMENT_LEFT, -1, size).x
+			if want > title.size.x + 1.0:
+				_fail("заголовок обрезан после подгрузки: нужно %.0f, есть %.0f"
+					% [want, title.size.x])
+	_edge(lobby.get("_root"), "lobby_root")
+
+
+func _find_button_in(node: Node, text: String) -> Button:
+	if node is Button and (node as Button).text == text:
+		return node as Button
+	for child in node.get_children():
+		var found := _find_button_in(child, text)
+		if found != null:
+			return found
+	return null
 
 
 ## У кнопки есть подпись, минимум покрывает её целиком, а раскладка

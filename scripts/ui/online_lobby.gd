@@ -433,6 +433,10 @@ func _render_rooms() -> void:
 		var empty := Label.new()
 		empty.text = "Пока никто не создал комнату. Создайте свою."
 		empty.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		# Перенос обязателен: без него минимальная ширина равна всей
+		# строке, и на гигантском тексте плейсхолдер растягивал
+		# страницу шире экрана — правый край (Назад, Обновить) уезжал.
+		empty.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		empty.add_theme_font_size_override("font_size", Settings.fs(16))
 		empty.add_theme_color_override("font_color", Color(1, 1, 1, 0.5))
 		_rooms_box.add_child(empty)
@@ -681,6 +685,10 @@ func _show_lobby(room: Dictionary) -> void:
 		if int(d.get("seat", -1)) == me:
 			nick = "▶ " + nick
 		line.text = "Место %d:  %s" % [int(d.get("seat", 0)) + 1, nick]
+		# Ник чужой и длинный, а без переноса строка задавала бы ширину
+		# всей странице лобби — тот же выезд вправо, что и у плейсхолдера.
+		line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		line.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		line.add_theme_font_size_override("font_size", Settings.fs(15))
 		line.add_theme_color_override("font_color",
 			Color("90CAF9") if int(d.get("seat", -1)) == me else Color(1, 1, 1, 0.85))
@@ -861,14 +869,10 @@ func _relayout() -> void:
 	# проходе разметка ещё не посчитана и size.x у кнопки нулевой —
 	# заголовок решил бы, что ему места сколько угодно.
 	var base := Settings.fs(22)
-	# Место под заголовок считаем от РЕАЛЬНОЙ ширины ряда: на первом
-	# проходе разметка ещё не посчитана, и оценка по minimum_size
-	# кнопки «Назад» получалась вдвое больше настоящей — заголовок
-	# ужимался недостаточно и всё равно обрезался.
-	var head_w := _head.size.x
-	if head_w <= 0.0:
-		head_w = avail
-	var room_for_title := head_w - _back_btn.custom_minimum_size.x - 10.0
+	# Место считаем от доступной ширины, а не от реальной ширины ряда:
+	# ряд может быть уже растянут широким содержимым, и тогда заголовок
+	# разжимался бы обратно во всю ширь, а за ним — и вся страница.
+	var room_for_title := avail - _back_btn.custom_minimum_size.x - 10.0
 	var size := base
 	var font := _title.get_theme_font("font")
 	if font != null and room_for_title > 40.0:
@@ -1058,6 +1062,7 @@ func _update_presence() -> void:
 	var lab := Label.new()
 	lab.text = "Серверов в сети: %d из %d" % [up, total]
 	lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	lab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	lab.add_theme_font_size_override("font_size", Settings.fs(13))
 	lab.add_theme_color_override("font_color", Color("FF8A80"))
 	_server_box.add_child(lab)
@@ -1512,7 +1517,10 @@ func _logout_row(page: VBoxContainer) -> void:
 	row.alignment = BoxContainer.ALIGNMENT_END
 	page.add_child(row)
 	var out := _button("Выйти", 15)
-	out.custom_minimum_size = Vector2(0, Settings.touch(40))
+	# Ряд не складывается (обычный HBox), и нулевой минимум кнопки
+	# с clip_text давал полоску в 8 px с полностью срезанной подписью.
+	out.custom_minimum_size = Vector2(
+		_text_content_width(out, out.text), Settings.touch(40))
 	out.size_flags_horizontal = Control.SIZE_SHRINK_END
 	out.pressed.connect(_do_logout)
 	row.add_child(out)
@@ -1527,6 +1535,9 @@ func _build_lobby() -> VBoxContainer:
 	page.add_child(_lobby_code)
 	_lobby_seats = Label.new()
 	_lobby_seats.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	# Строка длинная («Россия (ru) · свободно 3 из 5 · первый ход: от 30»),
+	# без переноса она же и задавала бы ширину страницы.
+	_lobby_seats.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_lobby_seats.add_theme_font_size_override("font_size", Settings.fs(15))
 	_lobby_seats.add_theme_color_override("font_color", Color(1, 1, 1, 0.6))
 	page.add_child(_lobby_seats)
