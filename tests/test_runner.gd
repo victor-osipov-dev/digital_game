@@ -405,8 +405,8 @@ func _guest_draft_steps(game: Node) -> void:
 		placed_id = int(k)
 		break
 	_step("guest: новая фишка помечена зелёным на столе",
-		placed_id > 0 and game.get_tile_marks(placed_id).get("last", false)
-			and not game.get_tile_marks(placed_id).has("draft"),
+		placed_id > 0 and game.get_tile_marks(placed_id).get("draft", false)
+			and not game.get_tile_marks(placed_id).has("last"),
 		"fid=%d" % placed_id)
 	# Ничего не трогаем 17 с — дольше экспайра 15 с. Если бы автор
 	# перестал повторять, новые фишки бы тут и пропали.

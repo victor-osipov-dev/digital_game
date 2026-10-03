@@ -92,6 +92,15 @@ var _waiting: bool = false
 # из верхнего правого угла, сдвинутые переезжают, ушедшие улетают туда же
 # призраком и уменьшаются.
 var _anim_pending: bool = false
+# Id фишек, чей прилёт анимируем принудительно, даже если снимок их уже
+# видел: черновик показывал эти фишки прозрачными до коммита, и обычное
+# сравнение «до/после» решило бы, что они никуда не прилетали.
+var _anim_force: Array = []
+# Поколение анимации: несколько перерисовок с меткой в одном кадре
+# (черновик и коммит разом) планируют столько же продолжений, а летит
+# только последнее — по самым свежим видам. Иначе дубли твинов дёргают
+# одни и те же фишки.
+var _anim_gen := 0
 
 # --- отсчёт хода (сетевая партия) ---------------------------------------
 #
@@ -1102,6 +1111,7 @@ func _on_state_received(view: Dictionary, grace: float, paused: bool, waiting: b
 	# Локальные перерисовки (перетаскивание, подсказки) анимировать нельзя:
 	# там ничего не «прилетает», фишка уже лежит на месте.
 	_anim_pending = true
+	_anim_force = _fresh_committed_ids(view)
 	_apply_state(view, grace, paused, waiting)
 	# Чужой ход — показываем, кто ходит. Наш собственный ход требует
 	# действия игрока, и подсказка с названием мешала бы.
@@ -1326,6 +1336,9 @@ func _bot_execute(seq: int) -> void:
 	if seq != _bot_seq or state == null or state.finished or not _is_bot_turn():
 		_bot_active = false
 		return
+	# Ход бота — тоже событие для анимации: иначе выставленные фишки
+	# просто появлялись бы на столе. Перерисовки ниже подхватят метку.
+	_anim_pending = true
 	var plan := TurnPlanner.plan(state, Settings.bot_level)
 	var action := String(plan.get("action", ""))
 	var action_ok := false
@@ -1626,6 +1639,9 @@ func _on_net_draft(from: int, rows: Array) -> void:
 	_draft_rows = rows
 	_draft_new_ids = _draft_new_of(rows)
 	_draft_at_ms = Time.get_ticks_msec()
+	# Живая постановка видна сразу прилётом: новые фишки черновика,
+	# которых ещё не было на экране, прилетают сверху.
+	_anim_pending = true
 	refresh()
 
 
@@ -1672,6 +1688,8 @@ func _expire_draft() -> void:
 			or Time.get_ticks_msec() - _draft_at_ms > DRAFT_EXPIRE_MS):
 		_clear_draft()
 		if state != null:
+			# Пропавшие фишки улетают туда же, откуда прилетали.
+			_anim_pending = true
 			refresh()
 
 
@@ -1804,13 +1822,17 @@ func get_tile_marks(tile_id: int) -> Dictionary:
 	var m := {}
 	if state == null:
 		return m
+	# Живой черновик (свои невыложенные ходы и чужие непринятые) —
+	# прозрачный: ход ещё можно откатить. Принятый прошлый ход —
+	# обычный, только с зелёной рамкой: прозрачность обязана гаснуть
+	# в момент коммита, а не висеть весь следующий ход.
 	for t in state.turn_placed:
 		if (t as Tile).id == tile_id:
-			m["last"] = true
+			m["draft"] = true
 			break
-	if state.last_turn_tile_ids.has(tile_id):
-		m["last"] = true
 	if _draft_new_ids.has(tile_id):
+		m["draft"] = true
+	if state.last_turn_tile_ids.has(tile_id):
 		m["last"] = true
 	if _hint_ids.has(tile_id):
 		m["hint"] = true
@@ -1836,8 +1858,11 @@ func refresh() -> void:
 	_update_buttons()
 	_sync_top_bar()
 	_update_hint_zone_size()
-	if not shots.is_empty():
-		_play_place_anim(shots)
+	var force: Array = _anim_force
+	_anim_force = []
+	if not shots.is_empty() or not force.is_empty():
+		_anim_gen += 1
+		_play_place_anim(shots, force, _anim_gen)
 
 ## Все показанные сейчас фишки: id, сама фишка и положение на экране.
 func _capture_tiles() -> Array:
@@ -1859,7 +1884,7 @@ func _capture_flow(flow: FlowTiles, out: Array) -> void:
 				"id": tv.tile.id,
 				"tile": tv.tile,
 				"gpos": tv.global_position,
-				"alpha": tv.modulate.a,
+				"alpha": tv.base_alpha,
 			})
 
 ## Разница старого и нового состояния в живых view: id -> TileView.
@@ -1878,21 +1903,60 @@ func _collect_flow(flow: FlowTiles, cur: Dictionary) -> void:
 		if tv != null and tv.tile != null:
 			cur[tv.tile.id] = tv
 
+## Id фишек, впервые попавших в серверный стол с этим состоянием.
+## Свои невыложенные ходы сюда не попадают: они уже лежат в старом
+## столе локально. Именно эти id «прилетают» при коммите — даже если
+## черновик уже показывал их прозрачными.
+func _fresh_committed_ids(view: Dictionary) -> Array:
+	var out: Array = []
+	if state == null:
+		return out
+	var old := {}
+	for row in state.table:
+		var r := row as GameState.Row
+		if r != null:
+			for t in r.tiles:
+				old[(t as Tile).id] = true
+	for raw in view.get("table", []):
+		if not (raw is Dictionary):
+			continue
+		for tid in ((raw as Dictionary).get("tileIds", []) as Array):
+			var id := int(tid)
+			if id > 0 and not old.has(id) and not out.has(id):
+				out.append(id)
+	return out
+
+
 ## Слушает раскладку кадр — только тогда у свежесобранных контейнеров
 ## есть координаты. Пустой снимок (вход в сцену) ничего не анимирует.
-func _play_place_anim(shots: Array) -> void:
+func _play_place_anim(shots: Array, force: Array = [], gen: int = -1) -> void:
 	# Рассылка могла застать сцену уже за бортом (смена сцены ещё/уже
 	# едет): вне дерева ждать кадр не на чем — просто не анимируем.
 	if not is_inside_tree():
 		return
 	await get_tree().process_frame
-	if not is_inside_tree() or shots.is_empty():
+	if gen >= 0 and gen != _anim_gen:
+		return
+	if not is_inside_tree() or (shots.is_empty() and force.is_empty()):
 		return
 	var prev := {}
 	for s in shots:
 		prev[int(s["id"])] = s
 	var cur := {}
 	_collect_live(cur)
+	if shots.is_empty():
+		# Снимать было нечего, но коммит требует прилёта: новыми
+		# считаем только форсированные id, остальные — «уже лежали».
+		for id in cur.keys():
+			if not force.has(int(id)):
+				var tv := cur[id] as TileView
+				prev[int(id)] = {
+					"tile": tv.tile,
+					"gpos": tv.global_position,
+					"alpha": tv.base_alpha,
+				}
+	for id in force:
+		prev.erase(int(id))
 	var step := 0
 	for id in cur.keys():
 		var tv: TileView = cur[id]
@@ -1922,7 +1986,10 @@ func _fly_in_tile(tv: TileView, step: int) -> void:
 	if parent == null:
 		return
 	var final_local := tv.position
-	var final_alpha := tv.modulate.a
+	# Целимся в alpha по меткам, а не в текущий modulate: его уже мог
+	# обнулить соседний прилёт той же фишки — тогда твин 0→0 гасил бы
+	# её навсегда.
+	var final_alpha := tv.base_alpha
 	var start_global := _corner_spawn_global()
 	tv.position = parent.get_global_transform().affine_inverse() * start_global
 	tv.pivot_offset = tv.size * 0.5

@@ -7,8 +7,13 @@ var src_kind: String = ""
 var src_row_id: int = 0
 var controller: Object = null
 var mark_last: bool = false
+var mark_draft: bool = false
 var mark_hint: bool = false
 var face_down: bool = false
+## Итоговая прозрачность по меткам: прилёт анимирует modulate, и если
+## два прилёта наложатся, второй обязан целиться сюда, а не в текущий
+## (уже обнулённый первым) modulate — иначе фишка гаснет навсегда.
+var base_alpha := 1.0
 
 static func make(p_tile: Tile, p_draggable: bool, p_controller: Object, p_face_down: bool = false) -> TileView:
 	var view := TileView.new()
@@ -42,18 +47,24 @@ func _build() -> void:
 	if controller != null and controller.has_method("get_tile_marks"):
 		marks = controller.get_tile_marks(tile.id)
 	mark_last = bool(marks.get("last", false))
+	mark_draft = bool(marks.get("draft", false))
 	mark_hint = bool(marks.get("hint", false))
 
 	sb.bg_color = Color(Tile.color_hex(tile.color))
 	if mark_hint:
 		sb.border_color = Color("FFFFFF")
 		sb.set_border_width_all(maxi(bw + 2, 5))
-	elif mark_last:
-		# Выставленная фишка — прозрачная с жирной зелёной рамкой, чтобы
-		# было видно и свою постановку, и куда ушли карты соперника.
+	elif mark_draft:
+		# Живой черновик — прозрачный с жирной зелёной рамкой: ход
+		# ещё не принят, его можно откатить.
 		sb.border_color = Color("43A047")
 		sb.set_border_width_all(maxi(bw + 3, 5))
 		modulate = Color(1, 1, 1, 0.72)
+	elif mark_last:
+		# Принятый прошлый ход — обычный, только обведён зелёным:
+		# прозрачность гаснет в момент коммита.
+		sb.border_color = Color("43A047")
+		sb.set_border_width_all(maxi(bw + 3, 5))
 	else:
 		sb.border_color = Color(1, 1, 1, 0.35 if tile.is_joker else 0.18)
 		sb.set_border_width_all(maxi(bw, 2) if tile.is_joker else bw)
@@ -80,6 +91,7 @@ func _build() -> void:
 		tooltip_text = "Джокер — заменяет любое число любого цвета"
 	else:
 		tooltip_text = "%s %d" % [Tile.color_name(tile.color), tile.value]
+	base_alpha = modulate.a
 
 	queue_redraw()
 

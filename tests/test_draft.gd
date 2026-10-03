@@ -22,6 +22,7 @@ var fails := 0
 var total := 0
 var game: Node = null
 var view: Dictionary = {}
+var catalog: Array = []
 
 # Конкретные номера фишек в фикстуре случайны (переснимается с раздачей),
 # поэтому тест берёт их из неё, а не из констант: иначе переснял фикстуру —
@@ -73,6 +74,7 @@ func _boot() -> void:
 		quit(1)
 		return
 	ViewBuilder.set_catalog(data["catalog"])
+	catalog = data["catalog"]
 	view = data["game"]["seat0"]
 	_pick_ids(data)
 	var packed := load("res://scenes/game.tscn") as PackedScene
@@ -95,6 +97,10 @@ func _boot() -> void:
 	test_expiry()
 	test_invariant()
 	test_author_turn_survives_state()
+	test_committed_last_turn_opaque()
+	await test_commit_flies_in()
+	await test_draft_tile_flies_live()
+	await test_bot_move_flies()
 
 	if fails == 0:
 		print("\nЧЕРНОВИК/ПРЕВЬЮ: все %d проверок прошли" % total)
@@ -117,7 +123,9 @@ func test_draft_arrives() -> void:
 		game._draft_new_ids.size() == 2 and game._draft_new_ids.has(_na)
 			and game._draft_new_ids.has(_nb),
 		"new=%s" % [game._draft_new_ids.keys()])
-	ok("фишка из серверного стола без метки", not game.get_tile_marks(_tbl).has("last"))
+	ok("фишка из серверного стола без меток",
+		not game.get_tile_marks(_tbl).has("last")
+			and not game.get_tile_marks(_tbl).has("draft"))
 	_check_placed_style(_na, "новая фишка прозрачная с зелёной рамкой")
 	var rows: Array = game._table_rows()
 	ok("стол показан целиком из черновика (2 ряда)",
@@ -234,6 +242,190 @@ func _row_tiles(rows: Array, row_id: int) -> Array:
 	return []
 
 
+# --------------------------------------------------- принятый ход и прилёты
+
+## Фикстура везёт lastTurn [66,68,69] прямо на столе: это принятый
+## прошлый ход, и он обязан быть обычным (только зелёная рамка),
+## а не прозрачным весь следующий ход.
+func test_committed_last_turn_opaque() -> void:
+	section("принятый прошлый ход непрозрачный")
+	game._clear_draft()
+	_apply(view)
+	for tid in [66, 68, 69]:
+		_check_committed_style(tid, "фишка %d прошлого хода обычная" % tid)
+	ok("свой черновик пуст", game._draft_new_ids.is_empty())
+
+
+## Коммит: принятые фишки прилетают сверху, даже если черновик уже
+## показывал их прозрачными, и гаснут до обычных с зелёной рамкой.
+## Полёт проверяем без абсолютных позиций (раскладка считается кадром
+## позже пересборки): в полёте позиция меняется между кадрами, после
+## посадки — стоит.
+func test_commit_flies_in() -> void:
+	section("коммит прилетает и гаснет до обычного")
+	game._clear_draft()
+	_apply(view)
+	var v2: Dictionary = view.duplicate(true)
+	(v2["table"] as Array).append({"id": 50, "tileIds": [_na]})
+	v2["lastTurn"] = [_na]
+	game._on_state_received(v2, 0.0, false, false)
+	ok("новая фишка построена", _placed_view(_na) != null)
+	await process_frame
+	await process_frame
+	var p1 := _flight_positions([_na])
+	await process_frame
+	await process_frame
+	var p2 := _flight_positions([_na])
+	ok("фишка в полёте (позиция меняется между кадрами)",
+		p1.has(_na) and p2.has(_na) \
+			and not (p1[_na] as Vector2).is_equal_approx(p2[_na]))
+	for i in range(70):
+		await process_frame
+	var p3 := _flight_positions([_na])
+	await process_frame
+	await process_frame
+	var p4 := _flight_positions([_na])
+	ok("фишка долетела (позиция встала)",
+		p3.has(_na) and p4.has(_na) \
+			and (p3[_na] as Vector2).is_equal_approx(p4[_na]))
+	_check_committed_style(_na, "принятая фишка обычная с зелёной рамкой")
+
+
+## Живой черновик: новая фишка соперника прилетает прозрачной.
+func test_draft_tile_flies_live() -> void:
+	section("живой черновик прилетает прозрачным")
+	game._clear_draft()
+	_apply(view)
+	game._on_net_draft(2, [{"id": 900, "tiles": [_tbl, _na]}])
+	ok("новая фишка построена", _placed_view(_na) != null)
+	await process_frame
+	await process_frame
+	var p1 := _flight_positions([_na])
+	await process_frame
+	await process_frame
+	var p2 := _flight_positions([_na])
+	ok("фишка в полёте (позиция меняется между кадрами)",
+		p1.has(_na) and p2.has(_na) \
+			and not (p1[_na] as Vector2).is_equal_approx(p2[_na]))
+	for i in range(70):
+		await process_frame
+	var p3 := _flight_positions([_na])
+	await process_frame
+	await process_frame
+	var p4 := _flight_positions([_na])
+	ok("фишка долетела (позиция встала)",
+		p3.has(_na) and p4.has(_na) \
+			and (p3[_na] as Vector2).is_equal_approx(p4[_na]))
+	_check_placed_style(_na, "долетевшая фишка черновика прозрачная")
+	game._clear_draft()
+
+
+## Бот: постановка анимируется, принятые фишки — непрозрачные.
+## Рука ригнута (ровно один выкладываемый ряд), seed фиксирован.
+func test_bot_move_flies() -> void:
+	section("ход бота прилетает")
+	var settings := root.get_node_or_null("Settings")
+	var saved_count: int = settings.player_count
+	var saved_req: bool = settings.require_30
+	var saved_level: int = settings.bot_level
+	var saved_bot0: bool = settings.is_bot(0)
+	var saved_bot1: bool = settings.is_bot(1)
+	settings.player_count = 2
+	settings.require_30 = false
+	settings.bot_level = 0
+	settings.set_player_name(0, "Бот")
+	settings.set_player_name(1, "Человек")
+	settings.set_bot(0, true)
+	settings.set_bot(1, false)
+	game._new_match()
+	for i in range(3):
+		await process_frame
+	var run := []
+	var run_values := [5, 6, 7]
+	var spare := 0
+	for t in catalog:
+		var d := t as Dictionary
+		if bool(d.get("is_joker", false)):
+			continue
+		var v := int(d.get("value", 0))
+		if int(d.get("color", -1)) == 0 and run_values.has(v):
+			run_values.erase(v)
+			run.append(int(d.get("id", 0)))
+			if run.size() >= 3:
+				break
+	# Запасная фишка в руку, чтобы бот не победил этим же ходом:
+	# одиночка ни с чем не комбинируется (нужен ряд минимум из трёх).
+	for t in catalog:
+		var d := t as Dictionary
+		if int(d.get("color", -1)) == 1 and int(d.get("value", 0)) == 9 \
+				and not bool(d.get("is_joker", false)):
+			spare = int(d.get("id", 0))
+			break
+	ok("нашли красные 5-6-7 в каталоге", run.size() == 3, "ids=%s" % [run])
+	ok("нашли запасную синюю 9", spare > 0)
+	var hand: Array = []
+	for rid in run:
+		hand.append(ViewBuilder.tile(rid))
+	hand.append(ViewBuilder.tile(spare))
+	(game.state.players[0] as GameState.Player).hand = hand
+	# Пересборка после рига: в кадре рука бота, и при ходе фишки
+	# переедут из неё на стол, а не прилетят вместе со всей раздачей.
+	game.refresh()
+	for i in range(3):
+		await process_frame
+	seed(20240517)
+	game._bot_seq = 9
+	game._bot_execute(9)
+	var ids: Array = game.state.last_turn_tile_ids.duplicate()
+	ok("бот именно выложился, а не взял", ids.size() == 3, "last=%s" % [ids])
+	ok("все три фишки на столе", _flight_positions(ids).size() == 3)
+	await process_frame
+	await process_frame
+	var p1 := _flight_positions(ids)
+	await process_frame
+	await process_frame
+	var p2 := _flight_positions(ids)
+	var moved := 0
+	for tid in ids:
+		var a: int = int(tid)
+		if p1.has(a) and p2.has(a) \
+				and not (p1[a] as Vector2).is_equal_approx(p2[a]):
+			moved += 1
+	ok("фишки в движении", moved == 3, "движется %d из 3" % moved)
+	for i in range(70):
+		await process_frame
+	var p3 := _flight_positions(ids)
+	await process_frame
+	await process_frame
+	var p4 := _flight_positions(ids)
+	var home := 0
+	for tid in ids:
+		var a: int = int(tid)
+		if p3.has(a) and p4.has(a) \
+				and (p3[a] as Vector2).is_equal_approx(p4[a]):
+			home += 1
+	ok("все долетели", home == 3, "долетело %d из 3" % home)
+	for tid in ids:
+		_check_committed_style(int(tid), "фишка бота %d обычная" % int(tid))
+	settings.player_count = saved_count
+	settings.require_30 = saved_req
+	settings.bot_level = saved_level
+	settings.set_bot(0, saved_bot0)
+	settings.set_bot(1, saved_bot1)
+
+
+## Позиции видов фишек на столе прямо сейчас (локальные): для проверки
+## движения между кадрами. Абсолютные значения не сравниваем — раскладка
+## считается кадром позже пересборки, и снимок «до» ловил бы нули.
+func _flight_positions(ids: Array) -> Dictionary:
+	var out := {}
+	for tid in ids:
+		var v := _placed_view(int(tid))
+		if v != null:
+			out[int(tid)] = (v as Control).position
+	return out
+
+
 # --------------------------------------------------- без живого превью
 
 func test_no_hover_preview() -> void:
@@ -264,7 +456,7 @@ func _placed_view(tile_id: int) -> Control:
 
 func _check_placed_style(tile_id: int, msg: String) -> void:
 	var marks: Dictionary = game.get_tile_marks(tile_id)
-	ok(msg, bool(marks.get("last", false)) and not marks.has("draft"))
+	ok(msg, bool(marks.get("draft", false)) and not marks.has("last"))
 	var view := _placed_view(tile_id)
 	ok("поставленная фишка есть на столе", view != null)
 	if view == null:
@@ -272,6 +464,22 @@ func _check_placed_style(tile_id: int, msg: String) -> void:
 	ok("поставленная фишка прозрачная, alpha=%f" % view.modulate.a, view.modulate.a < 0.99)
 	var sb := view.get_theme_stylebox("panel")
 	ok("у поставленной фишки зелёная рамка",
+		sb is StyleBoxFlat and (sb as StyleBoxFlat).border_color == Color("43A047"))
+
+
+## Принятый прошлый ход: обычный, только с зелёной рамкой. Прозрачность
+## обязана гаснуть в момент коммита, а не висеть весь следующий ход —
+## это и была жалоба («видно прозрачными до хода 3-го игрока»).
+func _check_committed_style(tile_id: int, msg: String) -> void:
+	var marks: Dictionary = game.get_tile_marks(tile_id)
+	ok(msg, bool(marks.get("last", false)) and not marks.has("draft"))
+	var view := _placed_view(tile_id)
+	ok("принятая фишка есть на столе", view != null)
+	if view == null:
+		return
+	ok("принятая фишка непрозрачная, alpha=%f" % view.modulate.a, view.modulate.a > 0.99)
+	var sb := view.get_theme_stylebox("panel")
+	ok("у принятой фишки зелёная рамка",
 		sb is StyleBoxFlat and (sb as StyleBoxFlat).border_color == Color("43A047"))
 
 
