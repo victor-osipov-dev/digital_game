@@ -1755,7 +1755,7 @@ function playingRoom(host, guest, seats = 2) {
 
 for (let i = 1; i <= 18; i += 1) accounts.register(`tm${i}`, 'secret123', `Таймер${i}`);
 for (let i = 1; i <= 10; i += 1) accounts.register(`pk${i}`, 'secret123', `Превью${i}`);
-for (let i = 1; i <= 6; i += 1) accounts.register(`to${i}`, 'secret123', `Таймаут${i}`);
+for (let i = 1; i <= 8; i += 1) accounts.register(`to${i}`, 'secret123', `Таймаут${i}`);
 
 test('старт партии открывает отсчёт хода', () => {
   const hub = newHub();
@@ -1899,7 +1899,9 @@ test('время вышло с готовым черновиком: стол з�
   const b = fakeSock(hub, room, 1, userOf('to2'));
   room.game.current = 0;
   const run = rigRun(room, 0, 0, 5);
-  const rows = [{ id: 0, tiles: run.slice() }];
+  // Живой клиент шлёт СЫРЫЕ локальные id новых рядов (в коммите он мапит
+  // их в 0, в черновике — нет): приём обязан нормализовать, а не ронять.
+  const rows = [{ id: 7, tiles: run.slice() }];
   hub.onMessage(a.ctx, Buffer.from(JSON.stringify({ t: C2S.GAME_DRAFT, rows })));
   hub.maybeRunBots(room);
   room.turnDeadlineMs = Date.now() - 10; // просрочили вручную
@@ -1938,6 +1940,38 @@ test('время вышло с невалидным черновиком: обы
   assert.strictEqual(toasts(a).length, 1);
   assert.ok(toasts(a)[0].text.includes('из колоды'), toasts(a)[0].text);
   assert.strictEqual(room._draftRows && room._draftRows.get(0), undefined, 'черновик потрачен');
+  hub.stop();
+});
+
+test('дедлайн принимает расширение существующего ряда', () => {
+  const hub = newHub();
+  const room = playingRoom('to7', 'to8');
+  const a = fakeSock(hub, room, 0, userOf('to7'));
+  const b = fakeSock(hub, room, 1, userOf('to8'));
+  const g = room.game;
+  // Фаза 1: ряд 5-6-7 встал обычным коммитом и получил серверный id.
+  g.current = 0;
+  const run = rigRun(room, 0, 0, 5);
+  const laid = rooms.commitTurn(userOf('to7'), [{ op: 'set_table', rows: [{ id: 0, tiles: run }] }]);
+  assert.ok(laid.ok, laid.reason);
+  assert.strictEqual(g.current, 1, 'ход у второго места');
+  // Фаза 2: второй игрок доложил восьмёрку в тот же ряд (id серверный).
+  const eight = findTile(0, 8);
+  for (const p of g.players) p.handIds = p.handIds.filter((id) => id !== eight);
+  g.deck.ids = g.deck.ids.filter((id) => id !== eight);
+  g.players[1].handIds.push(eight);
+  const serverRow = g.table[0];
+  const rows = [{ id: serverRow.id, tiles: serverRow.tileIds.concat([eight]) }];
+  hub.onMessage(b.ctx, Buffer.from(JSON.stringify({ t: C2S.GAME_DRAFT, rows })));
+  hub.maybeRunBots(room);
+  room.turnDeadlineMs = Date.now() - 10;
+  const handBefore = g.handSize(1);
+  hub._onTurnTimeout(room);
+  assert.strictEqual(g.current, 0, 'ход передан дальше');
+  assert.strictEqual(g.handSize(1), handBefore - 1, 'восьмёрка ушла из руки');
+  assert.ok(g.table[0].tileIds.includes(eight), 'ряд расширен на столе');
+  const toasts = (f) => f.msgs.filter((m) => m.t === S2C.TOAST);
+  assert.ok(toasts(b)[0].text.includes('принят'), toasts(b)[0].text);
   hub.stop();
 });
 

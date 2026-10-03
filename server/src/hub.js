@@ -827,7 +827,20 @@ class Hub {
     let win = false;
     try {
       g.beginTurn();
-      const applied = g.applyOps([{ op: 'set_table', rows }]);
+      // Черновик несёт СЫРЫЕ локальные id рядов (клиент в коммите мапит
+      // новые в 0, а в черновике шлёт как есть): неизвестный серверу id
+      // setTable отвергнет сразу, и валидный стол ушёл бы в автовзят.
+      // Нормализуем как клиент: известный ряд оставляем, новому, чужому
+      // и повторному даём 0. На проверку это не влияет — проверяются
+      // наборы фишек, а не номера рядов.
+      const seen = new Set();
+      const tableRows = rows.map((r) => {
+        let id = (r && Number.isInteger(r.id)) ? r.id : 0;
+        if (id <= 0 || !g.rowById(id) || seen.has(id)) id = 0;
+        else seen.add(id);
+        return { id, tiles: r.tiles };
+      });
+      const applied = g.applyOps([{ op: 'set_table', rows: tableRows }]);
       const res = applied ? g.endTurn() : { ok: false };
       if (!applied || !res.ok) {
         g.rollback();
