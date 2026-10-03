@@ -96,6 +96,10 @@ var _anim_pending: bool = false
 # видел: черновик показывал эти фишки прозрачными до коммита, и обычное
 # сравнение «до/после» решило бы, что они никуда не прилетали.
 var _anim_force: Array = []
+# Ход сетевого бота анимируем поэтапно, как локального: прилёты идут
+# друг за другом, а не все разом. Метку ставит _apply_state по прошлому
+# состоянию (ходил бот), гасится в refresh вместе с остальным.
+var _anim_stagger := false
 # Поколение анимации: несколько перерисовок с меткой в одном кадре
 # (черновик и коммит разом) планируют столько же продолжений, а летит
 # только последнее — по самым свежим видам. Иначе дубли твинов дёргают
@@ -1200,6 +1204,8 @@ func _apply_state(view: Dictionary, grace: float, paused: bool, waiting: bool = 
 	_turn_deadline_ms = (Time.get_ticks_msec() + turn_left * 1000) if turn_left > 0 else 0
 	var prev := state
 	state = ViewBuilder.build(view)
+	# Прошлым ходил сетевой бот — его коммит раскладываем поэтапно.
+	_anim_stagger = prev != null and prev.is_bot_player(prev.current)
 	# Рассылка посреди нашего хода (обрыв/возврат соперника, реджойн)
 	# пришла с тем же серверным столом — локальную раскладку возвращаем,
 	# иначе автор теряет фишки и перестаёт повторять черновик.
@@ -1941,9 +1947,11 @@ func refresh() -> void:
 	_update_hint_zone_size()
 	var force: Array = _anim_force
 	_anim_force = []
+	var stagger := _anim_stagger
+	_anim_stagger = false
 	if not shots.is_empty() or not force.is_empty():
 		_anim_gen += 1
-		_play_place_anim(shots, force, _anim_gen)
+		_play_place_anim(shots, force, _anim_gen, stagger)
 
 ## Все показанные сейчас фишки: id, сама фишка и положение на экране.
 func _capture_tiles() -> Array:
@@ -2010,7 +2018,8 @@ func _fresh_committed_ids(view: Dictionary) -> Array:
 
 ## Слушает раскладку кадр — только тогда у свежесобранных контейнеров
 ## есть координаты. Пустой снимок (вход в сцену) ничего не анимирует.
-func _play_place_anim(shots: Array, force: Array = [], gen: int = -1) -> void:
+func _play_place_anim(shots: Array, force: Array = [],
+		gen: int = -1, stagger: bool = false) -> void:
 	# Рассылка могла застать сцену уже за бортом (смена сцены ещё/уже
 	# едет): вне дерева ждать кадр не на чем — просто не анимируем.
 	if not is_inside_tree():
@@ -2038,6 +2047,10 @@ func _play_place_anim(shots: Array, force: Array = [], gen: int = -1) -> void:
 				}
 	for id in force:
 		prev.erase(int(id))
+	# Ход бота — прилёты друг за другом, как в локальной пошаговке;
+	# обычные ходы — почти разом, лишь бы не в один кадр.
+	var gap := 0.45 if stagger else 0.05
+	var cap := 2.0 if stagger else 0.4
 	var step := 0
 	for id in cur.keys():
 		var tv: TileView = cur[id]
@@ -2047,7 +2060,7 @@ func _play_place_anim(shots: Array, force: Array = [], gen: int = -1) -> void:
 			if gpos.distance_to(tv.global_position) > 2.0:
 				_slide_tile(tv, gpos)
 		else:
-			_fly_in_tile(tv, step)
+			_fly_in_tile(tv, step, gap, cap)
 			step += 1
 	# Остались только ушедшие фишки.
 	for id in prev.keys():
@@ -2062,7 +2075,7 @@ func _corner_spawn_global() -> Vector2:
 
 
 ## Новая фишка: прилетает из верхнего правого угла в свой слот.
-func _fly_in_tile(tv: TileView, step: int) -> void:
+func _fly_in_tile(tv: TileView, step: int, gap: float = 0.05, cap: float = 0.4) -> void:
 	var parent := tv.get_parent()
 	if parent == null:
 		return
@@ -2076,7 +2089,7 @@ func _fly_in_tile(tv: TileView, step: int) -> void:
 	tv.pivot_offset = tv.size * 0.5
 	tv.scale = Vector2(0.45, 0.45)
 	tv.modulate.a = 0.0
-	var delay := minf(step * 0.05, 0.4)
+	var delay := minf(step * gap, cap)
 	var tw := create_tween()
 	tw.bind_node(tv)
 	tw.set_parallel(true)

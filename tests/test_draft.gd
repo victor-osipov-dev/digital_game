@@ -35,6 +35,7 @@ var _na := 0
 var _nb := 0
 var _ha := 0
 var _hb := 0
+var _nc := 0
 
 func _pick_ids(data: Dictionary) -> void:
 	var used := {}
@@ -52,10 +53,11 @@ func _pick_ids(data: Dictionary) -> void:
 		if used.has(tid):
 			continue
 		picks.append(tid)
-		if picks.size() >= 2:
+		if picks.size() >= 3:
 			break
 	_na = picks[0]
 	_nb = picks[1]
+	_nc = picks[2]
 
 
 func _initialize() -> void:
@@ -102,6 +104,7 @@ func _boot() -> void:
 	await test_commit_flies_in()
 	await test_draft_tile_flies_live()
 	await test_bot_move_flies()
+	await test_bot_commit_staggered()
 
 	if fails == 0:
 		print("\nЧЕРНОВИК/ПРЕВЬЮ: все %d проверок прошли" % total)
@@ -410,6 +413,58 @@ func test_bot_move_flies() -> void:
 	settings.bot_anim = saved_anim
 	settings.set_bot(0, saved_bot0)
 	settings.set_bot(1, saved_bot1)
+
+
+## Сетевой бот: его коммит прилетает поэтапно, как локальный, —
+## задержки 0 / 0.45 / 0.9 с. Ловим по реальному времени: «приземлился»
+## значит позиция встала И alpha доросла до метки (ждущий в углу
+## неподвижен, но прозрачен). Разброс посадок обязан быть от 300 мс —
+## разом прилетает всё за десятки мс.
+func test_bot_commit_staggered() -> void:
+	section("коммит сетевого бота идёт поэтапно")
+	game._clear_draft()
+	_apply(view)
+	(game.state.players[2] as GameState.Player).is_bot = true
+	var v2: Dictionary = view.duplicate(true)
+	(v2["table"] as Array).append({"id": 50, "tileIds": [_na, _nb, _nc]})
+	v2["lastTurn"] = [_na, _nb, _nc]
+	v2["current"] = 0
+	game._on_state_received(v2, 0.0, false, false)
+	var need := [_na, _nb, _nc]
+	var hist := {}
+	var landed_at := {}
+	for i in range(300):
+		await process_frame
+		var now := Time.get_ticks_msec()
+		for tid in need:
+			var a: int = int(tid)
+			if landed_at.has(a):
+				continue
+			var v := _placed_view(a)
+			if v == null:
+				continue
+			if not hist.has(a):
+				hist[a] = []
+			var h: Array = hist[a]
+			h.append((v as Control).position)
+			while h.size() > 3:
+				h.remove_at(0)
+			var steady := h.size() == 3 \
+				and (h[0] as Vector2).is_equal_approx(h[1]) \
+				and (h[1] as Vector2).is_equal_approx(h[2])
+			if steady and (v as Control).modulate.a > 0.99:
+				landed_at[a] = now
+		if landed_at.size() == need.size():
+			break
+	ok("все три долетели", landed_at.size() == 3, "сели %d" % landed_at.size())
+	if landed_at.size() == 3:
+		var times := landed_at.values()
+		times.sort()
+		var spread: int = int(times[times.size() - 1]) - int(times[0])
+		ok("посадки разнесены во времени", spread >= 300,
+			"разброс %d мс" % spread)
+	for tid in need:
+		_check_committed_style(int(tid), "фишка бота %d обычная" % int(tid))
 
 
 ## Локальный матч с ботом за 0-м местом и ригнутой рукой (красные
