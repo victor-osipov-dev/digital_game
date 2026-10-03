@@ -116,6 +116,8 @@ func _after_title_checks() -> void:
 	_flow_center_checks()
 	await _burger_checks()
 	await _topbar_width_checks()
+	await _topbar_compact_checks()
+	_button_radius_audit(inst)
 	_confirm_checks()
 	inst.free()
 	inst = null
@@ -260,6 +262,67 @@ func _topbar_width_checks() -> void:
 	inst.call("_sync_top_bar")
 	for i in range(2):
 		await process_frame
+
+
+func _topbar_compact_checks() -> void:
+	# Узкий экран + гигантский текст: частые кнопки остаются в строке
+	# (компактные, в одну линию), редкие — в бургере.
+	var saved_base := root.content_scale_size
+	var saved_size := root.size
+	var saved_scale: int = settings.text_scale
+	settings.text_scale = 3
+	root.content_scale_size = Vector2i(320, 640)
+	root.size = Vector2i(360, 800)
+	for i in range(3):
+		await process_frame
+	inst.call("_sync_top_bar")
+	for i in range(2):
+		await process_frame
+	var bar = inst.get("_top_actions")
+	var box = inst.get("_burger_box")
+	check(bool(inst.get("_top_collapsed")), "narrow giant screen uses burger for rare actions")
+	var ys := []
+	for b in (inst.get("_top_action_buttons") as Array):
+		var btn := b as Button
+		if (inst.get("_top_overflow") as Array).has(btn):
+			check(btn.get_parent() == box, "rare action in burger on narrow")
+		else:
+			check(btn.get_parent() == bar, "frequent action stays in bar on narrow")
+			ys.append(btn.get_global_rect().position.y)
+			var font: Font = btn.get_theme_font("font")
+			var want := 0.0
+			if font != null:
+				want = font.get_string_size(btn.text, HORIZONTAL_ALIGNMENT_LEFT, -1,
+					btn.get_theme_font_size("font_size")).x
+			check(btn.size.x + 1.0 >= want,
+				"compact button «%s» fits text (%.0f vs %.0f)" % [btn.text, btn.size.x, want])
+	var flat := true
+	for y in ys:
+		if absf(float(y) - float(ys[0])) > 2.0:
+			flat = false
+	check(flat, "frequent actions share one line, ys=%s" % [ys])
+	root.content_scale_size = saved_base
+	root.size = saved_size
+	settings.text_scale = saved_scale
+	inst.call("_sync_top_bar")
+	for i in range(2):
+		await process_frame
+
+
+## Все кнопки — с одним скруглением: эффективный стильбокс normal
+## обязан иметь радиус UiTheme.CORNER. Чекбоксы не кнопки вида ради —
+## пропускаем, у них своя иконка.
+func _button_radius_audit(node: Node) -> void:
+	if node is Button and not (node is CheckBox):
+		var b := node as Button
+		var sb := b.get_theme_stylebox("normal")
+		if sb is StyleBoxFlat:
+			var r: int = (sb as StyleBoxFlat).corner_radius_top_left
+			check(r == 10, "button «%s» corner radius 10, got %d" % [b.text.left(20), r])
+		else:
+			check(false, "button «%s» normal stylebox is flat" % b.text.left(20))
+	for child in node.get_children():
+		_button_radius_audit(child)
 
 
 func _confirm_checks() -> void:

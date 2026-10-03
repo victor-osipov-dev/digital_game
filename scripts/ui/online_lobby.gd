@@ -10,6 +10,9 @@ extends Control
 #
 # Кто где настоящий: сервер держит партию, здесь мы только спрашиваем
 # «что там» и отправляем «хочу».
+# preload, а не class_name: глобальный список классов читается из кэша
+# редактора и на новом файле отстаёт.
+const UiThemeClass := preload("res://scripts/ui/ui_theme.gd")
 
 # Комнат на странице списка: строкам с названиями нужно место, а
 # страница не резиновая — остальное листается пагинацией.
@@ -1286,6 +1289,8 @@ func _build() -> void:
 	if _overlay != null:
 		return
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	# Единый вид кнопок (скругление 10) — дальше по дереву наследуют все.
+	theme = UiThemeClass.shared()
 	visible = false
 	mouse_filter = Control.MOUSE_FILTER_STOP
 

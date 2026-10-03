@@ -63,6 +63,7 @@ const PAGES := ["_page_auth", "_page_rooms", "_page_lobby"]
 var fails := 0
 var _bad: Array = []
 var _ctx := ""
+var _audited := false
 
 
 func _initialize() -> void:
@@ -110,6 +111,12 @@ func _round(size: Vector2i, base: Vector2i, scale: int) -> void:
 	var menu: Node = await _menu()
 	if menu == null:
 		return
+	if not _audited:
+		_audited = true
+		_audit_buttons(menu, "main_menu")
+		var lob: Node = menu.get("online_lobby")
+		if lob != null:
+			_audit_buttons(lob, "online_lobby")
 	var lobby: Node = menu.get("online_lobby")
 	if lobby == null:
 		_fail("нет сетевого меню")
@@ -458,6 +465,22 @@ func _find_button_in(node: Node, text: String) -> Button:
 		if found != null:
 			return found
 	return null
+
+
+## Единообразие кнопок: эффективный normal-стильбокс с радиусом 10
+## у каждой кнопки (чекбоксы — не в счёт, у них своя иконка).
+func _audit_buttons(node: Node, where: String) -> void:
+	if node is Button and not (node is CheckBox):
+		var b := node as Button
+		var sb := b.get_theme_stylebox("normal")
+		if sb is StyleBoxFlat:
+			var r: int = (sb as StyleBoxFlat).corner_radius_top_left
+			if r != 10:
+				_fail("%s: кнопка «%s» радиус %d, а не 10" % [where, b.text.left(20), r])
+		else:
+			_fail("%s: кнопка «%s» без плоского стиля" % [where, b.text.left(20)])
+	for child in node.get_children():
+		_audit_buttons(child, where)
 
 
 ## Автообновление списка комнат: тикает раз в 10 с, сам не стартует,

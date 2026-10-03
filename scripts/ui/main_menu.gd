@@ -4,6 +4,8 @@ extends Control
 # кэша редактора, а на новом файле кэш отстаёт — см. ошибку
 # «Identifier "ScrollDrag" not declared».
 const ScrollDragClass := preload("res://scripts/ui/scroll_drag.gd")
+# preload, а не class_name: см. комментарий выше про кэш редактора.
+const UiThemeClass := preload("res://scripts/ui/ui_theme.gd")
 
 var count_option: OptionButton = null
 var names_box: VBoxContainer = null
@@ -150,6 +152,8 @@ func _input(event: InputEvent) -> void:
 
 func _build_ui() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	# Единый вид кнопок (скругление 10) — дальше по дереву наследуют все.
+	theme = UiThemeClass.shared()
 
 	var bg := ColorRect.new()
 	bg.color = Color("12151C")

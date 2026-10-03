@@ -9,6 +9,7 @@ const DRAG_SCROLL_SPEED := 480.0
 # редактора и на новом файле отстаёт — см. «Identifier "ScrollDrag" not
 # declared in the current scope».
 const ScrollDragClass := preload("res://scripts/ui/scroll_drag.gd")
+const UiThemeClass := preload("res://scripts/ui/ui_theme.gd")
 # Черновик стола шлём повторно, пока ход не завершён, — иначе соперник
 # с потерянным пакетом или вошедший посреди хода увидит пустой стол.
 const DRAFT_RESEND_MS := 3000
@@ -57,6 +58,7 @@ var _settings_panel: PanelContainer = null
 var _settings_rows: Array = []
 var _top_actions: FlowContainer = null
 var _top_action_buttons: Array = []
+var _top_pinned: Array = []
 var _top_overflow: Array = []
 var _burger_btn: Button = null
 var _burger_panel: PanelContainer = null
@@ -184,6 +186,8 @@ func _process(_delta: float) -> void:
 
 func _build_ui() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	# Единый вид кнопок (скругление 10) — дальше по дереву наследуют все.
+	theme = UiThemeClass.shared()
 
 	var bg := ColorRect.new()
 	bg.color = Color("12151C")
@@ -274,6 +278,7 @@ func _build_ui() -> void:
 	]
 	# Частые кнопки живут в строке всегда и в бургер не уезжают:
 	# прятать «Сохранить»/«Вернуть»/«Подсказку» за тремя тапами нельзя.
+	_top_pinned = [cp_save_btn, cp_restore_btn, hint_btn]
 	_top_overflow = [help_btn, settings_btn, menu_btn]
 	_burger_btn = Button.new()
 	_burger_btn.text = "☰"
@@ -680,11 +685,24 @@ func _sync_top_bar() -> void:
 		return
 	for btn in _top_action_buttons:
 		(btn as Button).text = String((btn as Button).get_meta("short_text"))
+		(btn as Button).add_theme_font_size_override("font_size", Settings.fs(15))
 	var have := maxf(get_viewport_rect().size.x - 20.0, 200.0)
-	var need := deck_button.get_combined_minimum_size().x
+	var deck_need := deck_button.get_combined_minimum_size().x
+	var need := deck_need
 	for btn in _top_action_buttons:
 		need += 6.0 + _top_button_need(btn as Button)
 	var collapse := need > have
+	# Частые кнопки всегда в строке и всегда горизонтально: если они
+	# не влезают даже без редких, ужимаем шрифт (высоту не трогаем) —
+	# на телефоне три компактные кнопки лучше столбика.
+	if collapse:
+		var need_pinned := deck_need + 6.0 + 60.0
+		for b in _top_pinned:
+			need_pinned += 6.0 + _top_button_need(b as Button)
+		if need_pinned > have:
+			for b in _top_pinned:
+				(b as Button).add_theme_font_size_override("font_size",
+					mini(Settings.fs(15), 14))
 	for btn in _top_action_buttons:
 		var b := btn as Button
 		var in_overflow := _top_overflow.has(b)
@@ -701,6 +719,19 @@ func _sync_top_bar() -> void:
 			target.add_child(b)
 	_top_actions.visible = true
 	_burger_btn.visible = collapse
+	# Ширину ряда задаём явно суммой кнопок: вложенный FlowContainer сам
+	# ужался бы до одной кнопки, и частые снова встали бы столбиком.
+	var row_w := 0.0
+	var first_in_row := true
+	for ch in _top_actions.get_children():
+		var c := ch as Control
+		if c == null:
+			continue
+		row_w += c.get_combined_minimum_size().x
+		if not first_in_row:
+			row_w += 6.0
+		first_in_row = false
+	_top_actions.custom_minimum_size = Vector2(row_w, 0)
 	var was_collapsed := _top_collapsed
 	_top_collapsed = collapse
 	if not collapse:
