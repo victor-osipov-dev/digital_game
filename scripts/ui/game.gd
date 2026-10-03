@@ -718,10 +718,11 @@ func _sync_top_bar() -> void:
 	for btn in _top_action_buttons:
 		(btn as Button).text = String((btn as Button).get_meta("short_text"))
 		(btn as Button).add_theme_font_size_override("font_size", Settings.fs(15))
-	# Частые кнопки растут с потолком fs_capped (сейчас равен максимуму
-	# шкалы), и ряд влезает даже в телефон.
+	# Частые кнопки растут с потолком fs_capped до «Среднего»: на большом
+	# они такие же, как на среднем (иначе ряд не влезал бы в телефон),
+	# и ряд влезает даже в телефон.
 	for b in _top_pinned:
-		(b as Button).add_theme_font_size_override("font_size", Settings.fs_capped(15, 2))
+		(b as Button).add_theme_font_size_override("font_size", Settings.fs_capped(15, 1))
 	var have := maxf(get_viewport_rect().size.x - 20.0, 200.0)
 	var deck_need := deck_button.get_combined_minimum_size().x
 	var need := deck_need

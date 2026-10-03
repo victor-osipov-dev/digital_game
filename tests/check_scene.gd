@@ -286,8 +286,9 @@ func _topbar_capped_checks() -> void:
 	var saved_base := root.content_scale_size
 	var saved_size := root.size
 	var saved_scale: int = settings.text_scale
+	settings.text_scale = 1
+	var mid_font: int = settings.fs(15)
 	settings.text_scale = 2
-	var big_font: int = settings.fs(15)
 	root.content_scale_size = Vector2i(320, 640)
 	root.size = Vector2i(360, 800)
 	for i in range(3):
@@ -306,8 +307,8 @@ func _topbar_capped_checks() -> void:
 		else:
 			check(btn.get_parent() == bar, "frequent action stays in bar on narrow")
 			ys.append(btn.get_global_rect().position.y)
-			check(btn.get_theme_font_size("font_size") == big_font,
-				"frequent button «%s» capped at Большой size (%d)" % [btn.text, big_font])
+			check(btn.get_theme_font_size("font_size") == mid_font,
+				"frequent button «%s» capped at Средний size (%d)" % [btn.text, mid_font])
 			var font: Font = btn.get_theme_font("font")
 			var want := 0.0
 			if font != null:

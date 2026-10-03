@@ -45,7 +45,7 @@ func fs(base: int) -> int:
 
 ## Тот же размер, но с потолком по шкале: частые кнопки строки не должны
 ## расти дальше заданного индекса — иначе ряд не влезал бы в телефон.
-## Потолок 2 сейчас равен максимуму шкалы («Большой»).
+## Потолок 1 («Средний»): на «Большом» частые кнопки такие же.
 func fs_capped(base: int, cap_scale: int) -> int:
 	var idx := clampi(mini(text_scale, cap_scale), 0, TEXT_SCALES.size() - 1)
 	return maxi(FS_MIN, int(round(base * TEXT_SCALES[idx])))
