@@ -2,6 +2,9 @@ extends Control
 const Lang := preload("res://scripts/core/lang.gd")
 
 const SLOT_HOVER_EDGE := 10.0
+const SLOT_HOVER_DELAY_MS := 400
+const SLOT_HOVER_MOVE_PX := 6.0
+const SLOT_GRACE_MS := 1500
 const HINT_MIN_H := 100.0
 const DRAG_SCROLL_ZONE := 64.0
 const DRAG_SCROLL_OVERSHOOT := 40.0
@@ -71,6 +74,11 @@ var _top_collapsed := false
 var _burger_tween: Tween = null
 
 var _drag_view: TileView = null
+var _row_slots: Array = []
+var _slot_hover_pos: int = -1
+var _slot_hover_time: int = 0
+var _slot_hover_last: Vector2 = Vector2.ZERO
+var _slot_grace_until: int = 0
 var _bot_active: bool = false
 var _bot_seq: int = 0
 var _hint_ids: Array = []
@@ -119,6 +127,14 @@ var _anim_stagger := false
 # только последнее — по самым свежим видам. Иначе дубли твинов дёргают
 # одни и те же фишки.
 var _anim_gen := 0
+## Id фишек, которым должны пошаговый прилёт, но он ещё не начался:
+## следующее состояние (цепочка ботов идёт каждые 1.4–2.4 с, а stagger
+## длится до ~2.6 с) забирает долг в свой прилёт, а не роняет молча.
+## Долг живёт только между пересборками: любая пересборка либо летит
+## его (stagger — пошагово, обычная — быстро), либо строит виды заново
+## и долг гаснет сам. Чужие id сюда попасть не могут: новая партия
+## и вход в сеть обнуляют.
+var _stagger_debt: Array = []
 
 # --- отсчёт хода (сетевая партия) ---------------------------------------
 #
@@ -179,6 +195,7 @@ func _process(_delta: float) -> void:
 	if _drag_view != null and not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
 		_end_drag()
 	if _drag_view != null and is_instance_valid(_drag_view):
+		_update_row_slot_hover()
 		_auto_scroll_drag(_delta)
 	_update_hint_zone_size()
 	_update_turn_timer()
@@ -1077,6 +1094,13 @@ func _rebuild_ui() -> void:
 	_burger_tween = null
 	_drag_view = null
 	row_blocks.clear()
+	# Слот-призрак жил ребёнком стола и только что освобождён вместе
+	# со всеми: массив чистим, иначе следующее наведение обратится
+	# к висячей ссылке (смена настроек посреди перетаскивания).
+	_row_slots.clear()
+	_slot_hover_pos = -1
+	_slot_hover_time = 0
+	_slot_grace_until = 0
 	var was_pass := pass_overlay != null and pass_overlay.visible
 	var was_win := win_overlay != null and win_overlay.visible
 	var was_help := help_overlay != null and help_overlay.visible
@@ -1215,6 +1239,7 @@ func _new_match() -> void:
 	_stats_recorded = false
 	_hint_ids.clear()
 	_hints_used.clear()
+	_stagger_debt.clear()
 	state = GameState.create(Settings.player_count, Array(Settings.player_names), Settings.require_30)
 	invalid_row_ids.clear()
 	win_overlay.visible = false
@@ -1259,6 +1284,7 @@ func _net_begin() -> void:
 	_bot_active = false
 	_hint_ids.clear()
 	_hints_used.clear()
+	_stagger_debt.clear()
 	# «Заново» на экране победы — это про локальную партию: сервер не умеет
 	# «сыграть ещё раз в той же комнате». В сетевой игре кнопка скрывается,
 	# иначе после конца партии она молча запускала локальную игру поверх
@@ -1858,6 +1884,9 @@ func _on_resized() -> void:
 func on_drag_started(view: TileView) -> void:
 	_drag_view = view
 	_hint_ids.clear()
+	_slot_hover_pos = -1
+	_slot_hover_time = 0
+	_slot_grace_until = 0
 	# Пока тянем карточку, стол не должен сам ловить touch-скролл:
 	# ScrollContainer перехватывает жест в щели между плитками, карточка
 	# отстаёт от пальца, а ряды начинают уезжать. Своё листание по краям
@@ -1868,6 +1897,10 @@ func _end_drag() -> void:
 	if _drag_view != null and is_instance_valid(_drag_view):
 		_drag_view.modulate = Color.WHITE
 	_drag_view = null
+	_slot_hover_pos = -1
+	_slot_hover_time = 0
+	_slot_grace_until = 0
+	_clear_row_slots()
 	_set_drag_scroll_locked(false)
 	_pan_pressed = false
 	_pan_press_on_tile = false
@@ -1928,6 +1961,85 @@ func _hover_slot_pos(global_pos: Vector2) -> int:
 			best_d = d
 			best = j
 	return best
+
+## Пустой слот между рядами, пока тянем фишку: виден только нам,
+## соперникам ничего не уходит (живое превью им отключено). Появляется
+## после 400 мс зависания над междурядьем, прячется через 1.5 с после
+## ухода курсора — чтобы успели попасть.
+func _update_row_slot_hover() -> void:
+	if state == null or state.finished:
+		return
+	var mouse := get_global_mouse_position()
+	var now := Time.get_ticks_msec()
+	if not _row_slots.is_empty():
+		# Слот показан: держим его, пока курсор в его зоне;
+		# при уходе прячем с задержкой, чтобы успеть попасть.
+		var slot_pos := int((_row_slots[0] as Control).get_meta("slot_pos", -1))
+		if _hover_slot_pos(mouse) == slot_pos:
+			_slot_grace_until = 0
+			return
+		if _slot_grace_until == 0:
+			_slot_grace_until = now + SLOT_GRACE_MS
+		elif now >= _slot_grace_until:
+			_slot_grace_until = 0
+			_slot_hover_pos = -1
+			_slot_hover_time = 0
+			_clear_row_slots()
+		return
+	_slot_grace_until = 0
+	var pos := _hover_slot_pos(mouse)
+	if pos < 0:
+		if _slot_hover_pos >= 0:
+			_slot_hover_pos = -1
+			_slot_hover_time = 0
+		return
+	if pos != _slot_hover_pos:
+		_slot_hover_pos = pos
+		_slot_hover_time = now
+		_slot_hover_last = mouse
+		return
+	if mouse.distance_to(_slot_hover_last) > SLOT_HOVER_MOVE_PX:
+		_slot_hover_last = mouse
+		_slot_hover_time = now
+		return
+	if now - _slot_hover_time >= SLOT_HOVER_DELAY_MS:
+		_show_row_slot(pos)
+
+func _show_row_slot(pos: int) -> void:
+	_clear_row_slots()
+	if state == null or state.finished or table_box == null:
+		return
+	var h := maxf(Settings.tile_size().y + 16.0, 36.0)
+	var slot := DropLayer.new()
+	slot.controller = self
+	slot.custom_minimum_size = Vector2(0, h)
+	slot.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(1, 1, 1, 0.03)
+	sb.border_color = Color(1, 1, 1, 0.25)
+	sb.set_border_width_all(2)
+	sb.set_corner_radius_all(10)
+	slot.add_theme_stylebox_override("panel", sb)
+	var lab := Label.new()
+	lab.text = Lang.t("+ новый ряд")
+	lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	lab.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	lab.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	lab.add_theme_font_size_override("font_size", Settings.fs(15))
+	lab.add_theme_color_override("font_color", Color(1, 1, 1, 0.5))
+	slot.add_child(lab)
+	slot.set_meta("slot_pos", pos)
+	table_box.add_child(slot)
+	table_box.move_child(slot, clampi(pos, 0, table_box.get_child_count() - 1))
+	_row_slots.append(slot)
+
+func _clear_row_slots() -> void:
+	for slot in _row_slots:
+		if is_instance_valid(slot):
+			table_box.remove_child(slot)
+			(slot as Node).queue_free()
+	_row_slots.clear()
 
 ## Живое превью наведения отключено: пока карточку держат, соперникам
 ## ничего не показываем. Постановка видна только после отпускания — через
@@ -2173,6 +2285,21 @@ func refresh() -> void:
 	_anim_force = []
 	var stagger := _anim_stagger
 	_anim_stagger = false
+	# Неслетанный долг забираем в этот прилёт: старые (долг) летят
+	# первыми. Обычная пересборка гасит долг быстрым прилётом — чтобы
+	# ни одна выставленная фишка не осталась вообще без полёта.
+	if stagger:
+		var merged: Array = _stagger_debt.duplicate()
+		for id in force:
+			if not merged.has(id):
+				merged.append(id)
+		force = merged
+		_stagger_debt = force.duplicate()
+	elif not _stagger_debt.is_empty():
+		for id in _stagger_debt:
+			if not force.has(id):
+				force.append(id)
+		_stagger_debt.clear()
 	if not shots.is_empty() or not force.is_empty():
 		_anim_gen += 1
 		_play_place_anim(shots, force, _anim_gen, stagger)
@@ -2266,6 +2393,10 @@ func _play_place_anim(shots: Array, force: Array = [],
 			await get_tree().process_frame
 			if gen >= 0 and gen != _anim_gen:
 				return
+	# Полёты начались — долг закрыт: следующее состояние унаследует уже
+	# летящие фишки обычными слайдами, а не повторным прилётом.
+	if stagger:
+		_stagger_debt.clear()
 	var prev := {}
 	for s in shots:
 		prev[int(s["id"])] = s

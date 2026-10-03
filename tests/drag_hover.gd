@@ -68,8 +68,8 @@ func _row_checks() -> void:
 	check(hover.call("_hover_slot_pos", Vector2(r.get_center().x, r.end.y + 3.0)) == 1, "gap below row -> 1")
 	if r.position.y > box.position.y + 4.0:
 		check(hover.call("_hover_slot_pos", Vector2(r.get_center().x, r.position.y - 3.0)) == 0, "gap above row -> 0")
-	check(not hover.has_method("_show_row_slot"), "no visual hover slot while dragging")
-	check(not hover.has_method("_slot_position"), "no slot lookup while dragging")
+	check(hover.has_method("_show_row_slot"), "visual hover slot exists while dragging")
+	check(not hover.has_method("_slot_position"), "no separate slot lookup while dragging")
 
 	var state = inst.get("state")
 	var tile_id: int = state.hand()[0].id
@@ -82,7 +82,19 @@ func _row_checks() -> void:
 		check(hover.call("gui_can_drop", data, hzr.get_center()) == true,
 			"drop allowed on hint zone")
 		check(hover.call("gui_can_drop", data, Vector2(r.get_center().x, r.end.y + 5.0)) == true,
-			"drop in bare gap targets nearest slot without visual placeholder")
+			"drop in bare gap targets nearest slot")
+		# Пустой слот-призрак: показывается между рядами, несёт позицию,
+		# убирается полностью. Соперникам при этом ничего не уходит.
+		hover.call("_show_row_slot", 1)
+		var slots: Array = hover.get("_row_slots")
+		check(slots.size() == 1, "slot shown on demand")
+		var slot = slots[0] as Control
+		check(slot != null and int(slot.get_meta("slot_pos", -1)) == 1,
+			"slot carries its position")
+		check(hover.call("gui_can_drop", data, Vector2(r.get_center().x, r.end.y + 5.0)) == true,
+			"drop allowed over shown slot")
+		hover.call("_clear_row_slots")
+		check((hover.get("_row_slots") as Array).is_empty(), "slot cleared")
 
 	var state_ref = inst.get("state")
 	hover.call("_rebuild_ui")

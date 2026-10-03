@@ -29,6 +29,7 @@ const _EN := {
 " · ходит": " · to move",
 "%s онлайн": "%s online",
 "%s — %d с": "%s — %d s",
+"+ новый ряд": "+ new row",
 "%s · свободно %d из %d · первый ход: %s": "%s · %d of %d free · first turn: %s",
 "106 чисел: 4 цвета (красный, синий, чёрный, оранжевый), значения 1–13,":
 	"106 tiles: 4 colors (red, blue, black, orange), values 1–13,",

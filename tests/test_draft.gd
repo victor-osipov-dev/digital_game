@@ -36,6 +36,9 @@ var _nb := 0
 var _ha := 0
 var _hb := 0
 var _nc := 0
+var _nd := 0
+var _ne := 0
+var _nf := 0
 
 func _pick_ids(data: Dictionary) -> void:
 	var used := {}
@@ -53,11 +56,14 @@ func _pick_ids(data: Dictionary) -> void:
 		if used.has(tid):
 			continue
 		picks.append(tid)
-		if picks.size() >= 3:
+		if picks.size() >= 6:
 			break
 	_na = picks[0]
 	_nb = picks[1]
 	_nc = picks[2]
+	_nd = picks[3]
+	_ne = picks[4]
+	_nf = picks[5]
 
 
 func _initialize() -> void:
@@ -106,6 +112,7 @@ func _boot() -> void:
 	await test_bot_move_flies()
 	await test_bot_commit_staggered()
 	await test_bot_commit_no_mid_state()
+	await test_bot_chain_adopts_debt()
 	test_draft_resend_no_rebuild()
 	test_hint_per_player()
 
@@ -509,14 +516,14 @@ func test_bot_commit_no_mid_state() -> void:
 ## Посадки фишек: разброс по времени, кадр первой посадки и кадр ухода
 ## плашки «Ход» (если передана). «Приземлился» значит позиция встала
 ## И alpha доросла (ждущий в углу неподвижен, но сер).
-func _landing_spread(need: Array, title_ov: Control = null) -> Dictionary:
+func _landing_spread(need: Array, title_ov: Control = null, max_frames: int = 600) -> Dictionary:
 	var hist := {}
 	var landed_at := {}
 	var land_frame := {}
 	var flying := {}
 	var seen_title := false
 	var hide_frame := -1
-	for i in range(600):
+	for i in range(max_frames):
 		await process_frame
 		if title_ov != null:
 			if title_ov.visible:
@@ -561,6 +568,45 @@ func _landing_spread(need: Array, title_ov: Control = null) -> Dictionary:
 		frames.sort()
 		out["first_frame"] = int(frames[0])
 	return out
+
+
+## Цепочка ботов: второй коммит приходит, пока первый stagger ещё ждёт
+## плашку (боты ходят каждые 1.4–2.4 с, stagger длится дольше). Неслетанные
+## фишки первого наследуются вторым прилётом, а не роняются молча: без
+## наследования первые три так и остались бы стоять без полёта.
+func test_bot_chain_adopts_debt() -> void:
+	section("цепочка ботов наследует неслетанное")
+	game._clear_draft()
+	game._online = true
+	game.turn_title_overlay.visible = false
+	var s0: Dictionary = view.duplicate(true)
+	for i in range((s0["players"] as Array).size()):
+		(s0["players"] as Array)[i]["isBot"] = (i == 1 or i == 2)
+	s0["current"] = 0
+	game._on_state_received(s0, 0.0, false, false)
+	for i in range(20):
+		await process_frame
+	# Первый бот выложил три — его stagger ждёт плашку «Ход».
+	var s1: Dictionary = s0.duplicate(true)
+	(s1["table"] as Array).append({"id": 52, "tileIds": [_na, _nb, _nc]})
+	s1["lastTurn"] = [_na, _nb, _nc]
+	s1["current"] = 2
+	game._on_state_received(s1, 0.0, false, false)
+	for i in range(10):
+		await process_frame
+	# Второй бот выложил ещё три, пока первый прилёт не начался.
+	var s2: Dictionary = s1.duplicate(true)
+	(s2["table"] as Array).append({"id": 53, "tileIds": [_nd, _ne, _nf]})
+	s2["lastTurn"] = [_nd, _ne, _nf]
+	s2["current"] = 0
+	game._on_state_received(s2, 0.0, false, false)
+	var r := await _landing_spread([_na, _nb, _nc, _nd, _ne, _nf],
+		game.turn_title_overlay, 1000)
+	ok("все шесть долетели", int(r["landed"]) == 6, "сели %d" % int(r["landed"]))
+	if int(r["landed"]) == 6:
+		ok("посадки разнесены во времени", int(r["spread_ms"]) >= 300,
+			"разброс %d мс" % int(r["spread_ms"]))
+	game._online = false
 
 
 ## Локальный матч с ботом за 0-м местом и ригнутой рукой (красные
