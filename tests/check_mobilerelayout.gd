@@ -513,6 +513,17 @@ func _audit_checks(node: Node, where: String) -> void:
 				_fail("%s: выключенный чекбокс залит" % where)
 			elif _opaque_count(ci) <= _opaque_count(ui):
 				_fail("%s: у включённого чекбокса нет галки" % where)
+		# Текст влезает с запасом: минимум впритык (иконка + текст)
+		# срезал последний глиф краем — вживую пропадала «т» у «Бот».
+		# Числа зеркалят UiTheme.fit_checkbox (иконка 18 + отступ 4 + 8).
+		var font: Font = cb.get_theme_font("font")
+		var tw := 0.0
+		if font != null:
+			tw = font.get_string_size(cb.text, HORIZONTAL_ALIGNMENT_LEFT, -1,
+				cb.get_theme_font_size("font_size")).x
+		if cb.get_combined_minimum_size().x + 1.0 < tw + 30.0:
+			_fail("%s: текст чекбокса «%s» впритык (мин %.0f, надо %.0f)"
+				% [where, cb.text.left(20), cb.get_combined_minimum_size().x, tw + 30.0])
 	for child in node.get_children():
 		_audit_checks(child, where)
 

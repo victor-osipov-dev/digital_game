@@ -290,6 +290,7 @@ func _build_ui() -> void:
 	check_30.add_theme_font_size_override("font_size", Settings.fs(15))
 	check_30.add_theme_color_override("font_color", Color(1, 1, 1, 0.9))
 	check_30.toggled.connect(_on_require_30_toggled)
+	UiThemeClass.fit_checkbox(check_30)
 	box.add_child(check_30)
 
 	bot_anim_check = CheckBox.new()
@@ -300,6 +301,7 @@ func _build_ui() -> void:
 	bot_anim_check.add_theme_font_size_override("font_size", Settings.fs(15))
 	bot_anim_check.add_theme_color_override("font_color", Color(1, 1, 1, 0.9))
 	bot_anim_check.toggled.connect(_on_bot_anim_toggled)
+	UiThemeClass.fit_checkbox(bot_anim_check)
 	box.add_child(bot_anim_check)
 
 	box.add_child(_make_option_row("Текст:", Settings.TEXT_SCALE_NAMES, Settings.text_scale, _on_text_scale))
@@ -603,6 +605,7 @@ func _rebuild_names() -> void:
 		bot.add_theme_font_size_override("font_size", Settings.fs(16))
 		bot.add_theme_color_override("font_color", Color(1, 1, 1, 0.85))
 		bot.toggled.connect(_on_bot_toggled.bind(i))
+		UiThemeClass.fit_checkbox(bot)
 		row.add_child(bot)
 		bot_checks.append(bot)
 	_sync_scroll_min()

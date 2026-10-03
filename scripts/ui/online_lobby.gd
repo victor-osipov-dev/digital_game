@@ -1631,6 +1631,7 @@ func _build_rooms() -> VBoxContainer:
 	_require_30.button_pressed = Settings.require_30
 	_require_30.add_theme_font_size_override("font_size", Settings.fs(15))
 	_require_30.add_theme_color_override("font_color", Color(1, 1, 1, 0.9))
+	UiThemeClass.fit_checkbox(_require_30)
 	_create_box.add_child(_require_30)
 	_create_btn = _button("Создать", 16)
 	_create_btn.pressed.connect(_do_create)

@@ -9,6 +9,8 @@ extends RefCounted
 # кэша редактора (см. комментарий про preload в main_menu.gd). Все три
 # сцены подключают через preload-константу UiThemeClass.
 const CORNER := 10
+## Размер рисованных иконок чекбокса: минимум поля считается по нему же.
+const CHECK_SIZE := 18
 
 static var _theme: Theme = null
 
@@ -53,7 +55,7 @@ static func shared() -> Theme:
 ## Иконка чекбокса 18 px: скруглённая рамка + зелёная галка.
 ## Рисуем попиксельно — везти PNG ради двух иконок незачем.
 static func _checkbox_icon(check: bool, dim: bool) -> ImageTexture:
-	var s := 18
+	var s := CHECK_SIZE
 	var img := Image.create(s, s, false, Image.FORMAT_RGBA8)
 	img.fill(Color(0, 0, 0, 0))
 	var edge := Color(1, 1, 1, 0.35 if dim else 0.9)
@@ -81,3 +83,18 @@ static func _seg_dist(p: Vector2, a: Vector2, b: Vector2) -> float:
 	var ab := b - a
 	var t := clampf((p - a).dot(ab) / maxf(ab.length_squared(), 0.0001), 0.0, 1.0)
 	return (a + ab * t - p).length()
+
+
+## Минимум чекбокса по содержимому с запасом: движок считает минимум
+## впритык (иконка + текст без запаса), и последний глиф срезается
+## краем контрола — вживую пропадала буква «т» у «Бот».
+static func fit_checkbox(cb: CheckBox) -> void:
+	if cb == null:
+		return
+	var font: Font = cb.get_theme_font("font")
+	var w := float(CHECK_SIZE + 4)
+	if font != null:
+		w += font.get_string_size(cb.text, HORIZONTAL_ALIGNMENT_LEFT, -1,
+			cb.get_theme_font_size("font_size")).x
+	var cur := cb.custom_minimum_size
+	cb.custom_minimum_size = Vector2(maxf(cur.x, w + 8.0), cur.y)
