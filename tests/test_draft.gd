@@ -488,6 +488,13 @@ func test_bot_commit_no_mid_state() -> void:
 	section("коммит бота без промежуточного состояния — тоже поэтапно")
 	game._clear_draft()
 	game._online = true
+	# С прошлого теста ещё может долетать полёт — ждём пустой очереди,
+	# чтобы этот коммит шёл своим чередом, а не слипся с чужим.
+	for i in range(600):
+		if game._present_queue.is_empty() and not game._present_busy \
+				and not game._flight_active:
+			break
+		await process_frame
 	var s0: Dictionary = view.duplicate(true)
 	for i in range((s0["players"] as Array).size()):
 		(s0["players"] as Array)[i]["isBot"] = (i == 1)
@@ -504,18 +511,22 @@ func test_bot_commit_no_mid_state() -> void:
 	ok("все три долетели", int(r["landed"]) == 3, "сели %d" % int(r["landed"]))
 	ok("плашка «Ход» показывалась", bool(r["seen_title"]))
 	if int(r["landed"]) == 3 and bool(r["seen_title"]):
-		ok("посадки только после плашки",
-			int(r["first_frame"]) >= int(r["hide_frame"]) and int(r["hide_frame"]) >= 0,
-			"сели на кадре %d, плашка ушла на %d"
-				% [int(r["first_frame"]), int(r["hide_frame"])])
+		# Титр этого хода ставится ПОСЛЕ его шагов (шаги — в очередь
+		# раньше титра), поэтому плашка приходит уже вслед за посадками.
+		ok("плашка встаёт после посадок",
+			int(r["title_frame"]) >= int(r["last_frame"]) and int(r["title_frame"]) >= 0,
+			"плашка на кадре %d, последняя посадка на %d"
+				% [int(r["title_frame"]), int(r["last_frame"])])
 		ok("посадки разнесены во времени", int(r["spread_ms"]) >= 300,
 			"разброс %d мс" % int(r["spread_ms"]))
 	game._online = false
 
 
-## Посадки фишек: разброс по времени, кадр первой посадки и кадр ухода
-## плашки «Ход» (если передана). «Приземлился» значит позиция встала
-## И alpha доросла (ждущий в углу неподвижен, но сер).
+## Посадки фишек: разброс по времени, кадр первой и последней посадки,
+## кадр появления и ухода плашки «Ход» (если передана). «Приземлился»
+## значит позиция встала И alpha доросла (ждущий в углу неподвижен, но
+## сер). Плюс: посчитать посадкой можно только фишу, которую до этого
+## видели ПРОЗРАЧНОЙ — просто вставшая видимой «посадкой» не считается.
 func _landing_spread(need: Array, title_ov: Control = null, max_frames: int = 600) -> Dictionary:
 	var hist := {}
 	var landed_at := {}
@@ -523,21 +534,35 @@ func _landing_spread(need: Array, title_ov: Control = null, max_frames: int = 60
 	var flying := {}
 	var seen_title := false
 	var hide_frame := -1
+	var title_frame := -1
+	var built := {}
+	var visible_pending := []
 	for i in range(max_frames):
 		await process_frame
 		if title_ov != null:
 			if title_ov.visible:
+				if not seen_title:
+					title_frame = i
 				seen_title = true
 			elif seen_title and hide_frame < 0:
 				hide_frame = i
+		# Пока показ ждёт своего череда, фишка обязана быть невидимой:
+		# пересборка не смеет её «воскрешать» (иначе все карты встают
+		# разом, а полёт догоняет).
+		for id in game._present_ids():
+			var pv := _placed_view(int(id))
+			if pv != null and (pv as Control).modulate.a >= 0.99 \
+					and not visible_pending.has(int(id)):
+				visible_pending.append(int(id))
 		var now := Time.get_ticks_msec()
 		for tid in need:
-			var a: int = int(tid)
+			var a := int(tid)
 			if landed_at.has(a):
 				continue
 			var v := _placed_view(a)
 			if v == null:
 				continue
+			built[a] = true
 			# Настоящий прилёт виден: фишка сначала прозрачная в углу.
 			# Не летавшие стоят непрозрачными с постройки — их не считаем.
 			if (v as Control).modulate.a < 0.99:
@@ -559,7 +584,9 @@ func _landing_spread(need: Array, title_ov: Control = null, max_frames: int = 60
 		if landed_at.size() == need.size() and (title_ov == null or hide_frame >= 0):
 			break
 	var out := {"landed": landed_at.size(), "seen_title": seen_title,
-		"hide_frame": hide_frame, "spread_ms": -1, "first_frame": -1}
+		"hide_frame": hide_frame, "spread_ms": -1, "first_frame": -1,
+		"last_frame": -1, "title_frame": title_frame, "built": built.size(),
+		"visible_pending": visible_pending, "land_frames": land_frame}
 	if landed_at.size() == need.size():
 		var times := landed_at.values()
 		times.sort()
@@ -567,19 +594,31 @@ func _landing_spread(need: Array, title_ov: Control = null, max_frames: int = 60
 		var frames := land_frame.values()
 		frames.sort()
 		out["first_frame"] = int(frames[0])
+		out["last_frame"] = int(frames[frames.size() - 1])
 	return out
 
 
-## Цепочка ботов идёт очередью презентаций: титр — шаги первого, титр —
-## шаги второго, титр игрока. Второй коммит приходит, пока первый прилёт
-## ещё не начался (боты ходят каждые 1.4–2.4 с), — очередь не роняет его,
-## а показывает своим чередом. Без очереди первые три так и остались бы
-## стоять без полёта.
+## Цепочка ботов идёт очередью презентаций: шаги первого — титр второго —
+## шаги второго — титр игрока. Второй коммит приходит, пока первый ещё
+## летит (боты ходят каждые 1.4–2.4 с), — пересборка должна подождать
+## полёта, а очередь показать второй ход своим чередом. Без очереди
+## первые три так и остались бы стоять без полёта.
 func test_bot_chain_queued() -> void:
 	section("цепочка ботов идёт очередью титр-шаги")
 	game._clear_draft()
 	game._online = true
 	game.turn_title_overlay.visible = false
+	# Титр предыдущего теста (тоже 2-е место) — «дубль подряд», который
+	# очередь гасит по правилу. Эта цепочка начинается с чистого листа.
+	game._title_shown_for = -1
+	# Ждём, пока предыдущая презентация доиграет: цепочка должна начаться
+	# с пустой очереди, иначе чужой полёт смешает наши два хода.
+	for i in range(600):
+		if game._present_queue.is_empty() and not game._present_busy \
+				and not game._flight_active and not game._refresh_pending \
+				and not game._title_pending:
+			break
+		await process_frame
 	var s0: Dictionary = view.duplicate(true)
 	for i in range((s0["players"] as Array).size()):
 		(s0["players"] as Array)[i]["isBot"] = (i == 1 or i == 2)
@@ -587,7 +626,7 @@ func test_bot_chain_queued() -> void:
 	game._on_state_received(s0, 0.0, false, false)
 	for i in range(20):
 		await process_frame
-	# Первый бот выложил три — его stagger ждёт плашку «Ход».
+	# Первый бот выложил три: шаги идут в очередь, полёт стартует сразу.
 	var s1: Dictionary = s0.duplicate(true)
 	(s1["table"] as Array).append({"id": 52, "tileIds": [_na, _nb, _nc]})
 	s1["lastTurn"] = [_na, _nb, _nc]
@@ -595,28 +634,35 @@ func test_bot_chain_queued() -> void:
 	game._on_state_received(s1, 0.0, false, false)
 	for i in range(10):
 		await process_frame
-	# Второй бот выложил ещё три, пока первый прилёт не начался.
+	# Второй бот выложил ещё три, пока первый ещё летит. Пересборка в
+	# полёте откладывается — иначе твины умрут и всё встанет разом.
 	var s2: Dictionary = s1.duplicate(true)
 	(s2["table"] as Array).append({"id": 53, "tileIds": [_nd, _ne, _nf]})
 	s2["lastTurn"] = [_nd, _ne, _nf]
 	s2["current"] = 0
 	game._on_state_received(s2, 0.0, false, false)
-	# Прилетающие спрятаны сразу, а не стоят видимо до полёта.
-	for i in range(5):
-		await process_frame
-	var hidden := 0
-	for tid in [_na, _nb, _nc, _nd, _ne, _nf]:
-		var pv := _placed_view(int(tid))
-		if pv != null and (pv as Control).modulate.a < 0.99:
-			hidden += 1
-	ok("фишки спрятаны до прилёта, а не стоят видимо", hidden == 6,
-		"скрыто %d" % hidden)
+	# Пока показ ждёт своего череда, фишка обязана быть невидимой —
+	# пересборка не смеет её «воскрешать». Плюс посадки: наблюдение за
+	# ними нельзя начинать после полёта — не увидит прозрачности.
 	var r := await _landing_spread([_na, _nb, _nc, _nd, _ne, _nf],
 		game.turn_title_overlay, 1400)
+	ok("все шесть построены", int(r["built"]) == 6, "построено %d" % int(r["built"]))
+	var shown: Array = r["visible_pending"] as Array
+	ok("ожидающие показа спрятаны, а не стоят видимо", shown.is_empty(),
+		"видимы до череда: %s" % [shown])
 	ok("все шесть долетели", int(r["landed"]) == 6, "сели %d" % int(r["landed"]))
 	if int(r["landed"]) == 6:
 		ok("посадки разнесены во времени", int(r["spread_ms"]) >= 300,
 			"разброс %d мс" % int(r["spread_ms"]))
+		# Связка «шаги первого — титр второго — шаги второго»: титр не
+		# всплывает ни перед чужими фишками, ни после них.
+		var lf: Dictionary = r["land_frames"] as Dictionary
+		var bot1_end := maxi(int(lf[_na]), maxi(int(lf[_nb]), int(lf[_nc])))
+		var bot2_start := mini(int(lf[_nd]), mini(int(lf[_ne]), int(lf[_nf])))
+		ok("титр встал между ходами ботов",
+			int(r["title_frame"]) > bot1_end and int(r["title_frame"]) < bot2_start,
+			"титр на кадре %d, первый бот сел на %d, второй начал с %d"
+				% [int(r["title_frame"]), bot1_end, bot2_start])
 	game._online = false
 
 

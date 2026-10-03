@@ -144,6 +144,28 @@ var _present_busy := false
 var _present_gen := 0
 ## Место последнего поставленного в очередь титра (дубли подряд лишние).
 var _title_shown_for: int = -1
+## Шаги встали в очередь ПОСЛЕ последнего титра. Титр своего хода ставим
+## только после чужих шагов, иначе он бы мигнул сразу после нашего хода.
+## Очередь пустеет по мере показа, поэтому «сейчас в очереди» врало бы:
+## шаги уже вышли на показ, а титр всё равно нужен.
+var _steps_since_title := false
+## Сегмент шагов прямо сейчас в полёте (от выдачи до конца его ожидания).
+## Пока он летит, пересборку стола откладываем: пересборка пересоздаёт
+## виды, твины полёта умирают вместе с ними, и фишки «садятся» разом —
+## ровно то, что видно, когда второй бот приходит во время полёта первого.
+var _flight_active := false
+## Отложенная до конца полёта пересборка/титр. Данные к этому моменту
+## уже применены (state актуален) — ждём только виды.
+var _refresh_pending := false
+var _title_pending := false
+## Чей титр отложен: запоминаем место хода НА МОМЕНТ заказа. Если доставить
+## его позже, пересчёт по state.current уже даст следующего игрока и титр
+## «Ход: Бот2» превратился бы в «Ход: вы» (а то и вовсе пропал бы).
+var _pending_title_seat: int = -1
+## Id, чьи виды не нашлись в момент показа (стол показан из черновика
+## соперника или ряд ещё не собран). Показ не считается состоявшимся:
+## вернёмся к ним, когда фишка появится на экране.
+var _present_orphans: Array = []
 
 # --- отсчёт хода (сетевая партия) ---------------------------------------
 #
@@ -1251,6 +1273,12 @@ func _new_match() -> void:
 	_present_busy = false
 	_present_gen += 1
 	_title_shown_for = -1
+	_steps_since_title = false
+	_flight_active = false
+	_refresh_pending = false
+	_title_pending = false
+	_pending_title_seat = -1
+	_present_orphans.clear()
 	_drew_seat = -1
 	_draw_marks.clear()
 	state = GameState.create(Settings.player_count, Array(Settings.player_names), Settings.require_30)
@@ -1301,6 +1329,12 @@ func _net_begin() -> void:
 	_present_busy = false
 	_present_gen += 1
 	_title_shown_for = -1
+	_steps_since_title = false
+	_flight_active = false
+	_refresh_pending = false
+	_title_pending = false
+	_pending_title_seat = -1
+	_present_orphans.clear()
 	_drew_seat = -1
 	_draw_marks.clear()
 	# «Заново» на экране победы — это про локальную партию: сервер не умеет
@@ -1362,7 +1396,14 @@ func _on_state_received(view: Dictionary, grace: float, paused: bool, waiting: b
 	# Локальные перерисовки (перетаскивание, подсказки) анимировать нельзя:
 	# там ничего не «прилетает», фишка уже лежит на месте.
 	_anim_pending = true
-	_anim_force = _fresh_committed_ids(view)
+	# Накопление, а не подмена: пока летит сегмент презентации, пересборку
+	# откладываем, и состояний за это время может прийти несколько. Каждое
+	# приносит только СВОИ новые фишки (стол предыдущего уже применён), а
+	# метка поэтапности живёт до самой пересборки — терять ни то, ни другое
+	# нельзя: потерянные фишки показались бы разом минуя очередь.
+	for id in _fresh_committed_ids(view):
+		if not _anim_force.has(int(id)):
+			_anim_force.append(int(id))
 	_apply_state(view, grace, paused, waiting)
 	# Чужой ход — показываем, кто ходит. Наш собственный ход требует
 	# действия игрока, и подсказка с названием мешала бы.
@@ -1373,37 +1414,76 @@ func _on_state_received(view: Dictionary, grace: float, paused: bool, waiting: b
 		_show_wait("")
 		_present_queue.clear()
 		_present_gen += 1
+		_present_orphans.clear()
+		# Полёт обрывать нечем: титры/шаги больше не планируются, а стол
+		# обязан пересобраться под экран победы прямо сейчас.
+		_flight_active = false
+		_refresh_pending = false
+		_title_pending = false
+		_pending_title_seat = -1
 		refresh()
 		return
 	pass_overlay.visible = false
-	_enqueue_turn_title()
 	_show_wait(_wait_text(grace, paused, waiting))
+	# Титр — ПОСЛЕ шагов: этот коммит и есть ход того, чей титр уже показан
+	# в начале его хода, а теперь встаёт титр следующего. Порядок в очереди
+	# «шаги — титр» и даёт связку «титр Х сразу перед шагами Х».
 	refresh()
+	_enqueue_turn_title()
 
 
 ## Титр «Ход: …» — в очередь презентаций, а не сразу на экран: шаги
 ## предыдущего бота ещё могут долетать, и титр следующего хода встаёт
-## за ними своим чередом. Свой ход титруем только следом за чужими
-## шагами — иначе после каждого своего хода мигало бы «Ход: вы».
+## за ними своим чередом. Свой ход титруем только после чужих шагов —
+## иначе после каждого своего хода мигало бы «Ход: вы».
 func _enqueue_turn_title() -> void:
 	if state == null or state.finished:
 		return
 	var seat := state.current
+	if _refresh_pending:
+		# Пересборка этого состояния отложена — его шаги ещё НЕ в очереди,
+		# и титр встал бы перед ними вперёд. Откладываем: достанет его
+		# отложенный refresh, но с ЧЕЙ стороны мы его заказали. Полёт без
+		# отложенного refresh не мешает: его шаги в очереди уже есть и титр
+		# просто встанет за ними своим чередом.
+		_title_pending = true
+		_pending_title_seat = seat
+		return
+	_append_turn_title(seat)
+
+
+## Титр конкретного места в очередь презентаций, не сразу на экран.
+func _append_turn_title(seat: int) -> void:
+	if state == null or state.finished or seat < 0:
+		return
 	if seat == _title_shown_for:
 		return
-	_title_shown_for = seat
-	if state.my_turn() and not _has_steps_queued():
+	if state.my_turn() and not _steps_since_title:
 		return
+	# Отметку ставим ТОЛЬКО когда титр реально встал в очередь: иначе
+	# пропущенный «мой ход без чужих шагов» навсегда заблокировал бы
+	# следующий честный титр этого же места.
+	_title_shown_for = seat
 	_present_queue.append({"kind": "title", "seat": seat,
 		"text": _turn_title_text(seat)})
+	_steps_since_title = false
 	_pump_present()
 
 
-func _has_steps_queued() -> bool:
-	for seg in _present_queue:
-		if String((seg as Dictionary).get("kind", "")) == "steps":
-			return true
-	return false
+## Титр ещё не устарел: тот игрок ходит прямо сейчас (seat == current) или
+## только что сходил (current — следующий за ним). Шаги его хода в такой
+## очереди стоят СРАЗУ после титра — показать их вслед за титром и есть
+## смысл. Ход ушёл на два и дальше — титр опоздал, пропускаем молча.
+func _title_fresh(seat: int) -> bool:
+	if state == null or state.finished or seat < 0 or state.current < 0:
+		return false
+	var n := state.player_count()
+	if n <= 0:
+		return false
+	var back := (state.current - seat) % n
+	if back < 0:
+		back += n
+	return back <= 1
 
 
 func _wait_text(grace: float, paused: bool, waiting: bool) -> String:
@@ -1459,7 +1539,9 @@ func _apply_state(view: Dictionary, grace: float, paused: bool, waiting: bool = 
 	# «ходит бот» могло не дойти — вход посреди чужого хода, сбой,
 	# старый сервер без lastTurn. Тихий пропуск stagger тут чинился
 	# бы только чудом, поэтому оба признака работают через «или».
-	_anim_stagger = _is_bot_commit(prev, view) \
+	# Накапливаем («или» с прежним): отложенная пересборка держит метку
+	# живой, пока летит сегмент, и следующее состояние не сбрасывает её.
+	_anim_stagger = _anim_stagger or _is_bot_commit(prev, view) \
 		or (prev != null and prev.is_bot_player(prev.current))
 	# Кто брал из колоды: рука выросла на одну при том же столе и пустом
 	# lastTurn — ни выкладки, ни пропуска. Помечаем место, пока его не
@@ -2463,6 +2545,14 @@ func refresh() -> void:
 	# Локальный стол изменился (перетащили, отменили, чекпоинт) —
 	# отдаём соперникам весь стол целиком, чтобы они видели все фишки.
 	_maybe_send_draft()
+	# Пока летит сегмент презентации, стол не пересобираем: пересборка
+	# пересоздаёт виды, твины полёта умирают вместе с ними — и долетающие
+	# «садятся» разом (цепочка ботов: коммит второго бота приходит как раз
+	# во время полёта первого). Данные уже применены, state актуален:
+	# ждём только виды, а флаги анимации остаются на отложенную пересборку.
+	if _flight_active:
+		_refresh_pending = true
+		return
 	# Снимаем старые позиции ДО пересборки: _update_table и set_tiles
 	# уничтожают текущие view, и после них снимать будет нечего.
 	var shots: Array = []
@@ -2477,32 +2567,97 @@ func refresh() -> void:
 	_update_buttons()
 	_sync_top_bar()
 	_update_hint_zone_size()
+	# Сироты: в момент их показа видов не было (стол показан из черновика
+	# соперника, ряд ещё не собран). Фишка появилась — ставим в очередь
+	# своим чередом, а не показываем мгновенно.
+	_requeue_orphans()
 	var force: Array = _anim_force
 	_anim_force = []
 	var stagger := _anim_stagger
 	_anim_stagger = false
 	# Пошаговый прилёт — в очередь презентаций (там же титры), а не
-	# сразу на экран: цепочки ботов иначе рвут друг друга. Здесь же
-	# запрещаем немедленный полёт этих же фишек (skip): erase из prev
-	# их не убрал бы — новых фишек в снимке и так нет, и они полетели
-	# бы быстрым путём мимо очереди.
-	var rerouted: Array = []
+	# сразу на экран: цепочки ботов иначе рвут друг друга.
 	if stagger and not force.is_empty() and state != null and not state.finished:
 		_enqueue_steps(force)
-		rerouted = force.duplicate()
 		force = []
+	# Гасим всё, что ждёт показа (очередь + сироты) — безусловно, после
+	# пересборки и после постановки новых шагов: пересборка воскрешает
+	# виды видимыми, а их полёт ещё впереди. Пропущенный здесь случай
+	# (перерисовка без метки анимации) и был виден как «встали разом».
+	var waiting: Array = _present_ids()
+	if not waiting.is_empty():
+		_hide_force_tiles(waiting)
 	if not shots.is_empty() or not force.is_empty():
 		# Прилетающие прячем сразу: иначе они стоят видимыми, а к началу
 		# полёта прыгают в угол и летят — со стороны «поставились,
-		# убрались, полетели». Прячем и уже стоящие в очереди: пересборка
-		# вернула их виды домой видимыми, а полёт у них впереди. Полёты
-		# вернут прозрачность сами; game over при обрыве нет — следующая
-		# пересборка строит виды заново, уже видимыми.
+		# убрались, полетели». Полёты вернут прозрачность сами; game over
+		# при обрыве нет — следующая пересборка строит виды заново.
 		if not force.is_empty():
 			_hide_force_tiles(force)
-		_hide_queued_steps()
 		_anim_gen += 1
-		_play_place_anim(shots, force, _anim_gen, rerouted)
+		# skip — все ждущие показа, а не только вставшие в эту перерисовку:
+		# прошлые шаги в очереди ещё не показаны, и немедленный полёт увёл
+		# бы их минуя очередь (erase из снимка их не убирает — новых в
+		# снимке и так нет).
+		_play_place_anim(shots, force, _anim_gen, waiting)
+
+
+## Все id, которых показ ещё ждёт: очередь шагов и сироты.
+func _present_ids() -> Array:
+	var out: Array = []
+	for id in _present_orphans:
+		if not out.has(int(id)):
+			out.append(int(id))
+	for seg in _present_queue:
+		if String((seg as Dictionary).get("kind", "")) != "steps":
+			continue
+		for id in ((seg as Dictionary).get("ids", []) as Array):
+			if not out.has(int(id)):
+				out.append(int(id))
+	return out
+
+
+## Фишки-сироты появились на экране — показываем их теперь.
+func _requeue_orphans() -> void:
+	if _present_orphans.is_empty():
+		return
+	var live := {}
+	_collect_live(live)
+	var found: Array = []
+	for id in _present_orphans:
+		if live.has(int(id)):
+			found.append(int(id))
+	if found.is_empty():
+		return
+	for id in found:
+		_present_orphans.erase(int(id))
+	_enqueue_steps(found)
+
+
+## Отложенная пересборка/титр — после конца полёта. Если следующий сегмент
+## уже успел выйти, флаги остаются на его конце: иначе перерисовка, заказанная
+## посреди полёта, пропала бы бесследно (стол навсегда остался бы старым).
+func _after_present() -> void:
+	if _flight_active:
+		return
+	if not _refresh_pending and not _title_pending:
+		return
+	var need_refresh := _refresh_pending
+	var need_title := _title_pending
+	var tseat := _pending_title_seat
+	_refresh_pending = false
+	_title_pending = false
+	_pending_title_seat = -1
+	# Шаги — первыми: отложенный титр относится к тому же коммиту, что и
+	# отложенная пересборка (последний заказ титра всегда от последнего
+	# состояния), а титр в очереди идёт ПОСЛЕ чужих шагов: «Ход: Кэрол»
+	# надо показать после фишек предыдущего бота, а не перед ними.
+	if need_refresh:
+		refresh()
+	if need_title:
+		_append_turn_title(tseat)
+	# Титр текущего хода — после шагов, что только что встали.
+	_enqueue_turn_title()
 
 
 ## Шаги в очередь: дубли номеров ни к чему (повторные рассылки несут
@@ -2516,6 +2671,7 @@ func _enqueue_steps(ids: Array) -> void:
 	if fresh.is_empty():
 		return
 	_present_queue.append({"kind": "steps", "ids": fresh})
+	_steps_since_title = true
 	_pump_present()
 
 
@@ -2533,17 +2689,26 @@ func _pump_present() -> void:
 			break
 		var seg: Dictionary = _present_queue.pop_front()
 		if String(seg.get("kind", "")) == "title":
-			# Протухший титр (ход уже ушёл дальше) молча пропускаем —
-			# врать про «Ход: Бот», когда ходит человек, нельзя.
+			# Протухший титр (ход уже ушёл далеко дальше) молча пропускаем —
+			# врать про «Ход: Бот», когда ходит другой, нельзя.
 			var seat := int(seg.get("seat", -1))
-			if state != null and not state.finished and seat >= 0 \
-					and state.current == seat:
+			if _title_fresh(seat):
 				_flash_turn_title(String(seg.get("text", "")))
 				await tree.create_timer(1.45).timeout
 		else:
+			_flight_active = true
 			await _play_queued_steps(seg.get("ids", []), tree, gen)
-	_present_queue.clear()
-	_present_busy = false
+			_flight_active = false
+			# Пересборка/титр, заказанные посреди полёта, применяем сейчас:
+			# тут же — до того, как цикл успеет взять следующий сегмент.
+			_after_present()
+	# gen сменился (новый матч/сброс) — чужую очередь не трогаем: там уже
+	# крутится новый показ, а наш clear() и сброс busy стёрли бы его.
+	if gen == _present_gen:
+		_present_queue.clear()
+		_present_busy = false
+	if _refresh_pending or _title_pending:
+		call_deferred("_after_present")
 
 
 ## Пошаговый прилёт из очереди: ищем живые виды по id (пересборки могли
@@ -2559,6 +2724,11 @@ func _play_queued_steps(ids: Array, tree: SceneTree, gen: int) -> void:
 		if tv != null:
 			tv.modulate.a = 0.0
 			views.append(tv)
+		elif not _present_orphans.has(int(id)):
+			# Вида нет (стол показан из черновика соперника, ряд ещё не
+			# собран) — показ не состоялся. Запоминаем: фишка вернётся на
+			# экран — покажем её своим чередом, а не считаем посаженной.
+			_present_orphans.append(int(id))
 	var step := 0
 	for tv in views:
 		if gen != _present_gen:
@@ -2593,17 +2763,9 @@ func _capture_flow(flow: FlowTiles, out: Array) -> void:
 				"alpha": tv.base_alpha,
 			})
 
-## Разница старого и нового состояния в живых view: id -> TileView.
-func _hide_queued_steps() -> void:
-	var ids := []
-	for seg in _present_queue:
-		if String((seg as Dictionary).get("kind", "")) == "steps":
-			for id in ((seg as Dictionary).get("ids", []) as Array):
-				if not ids.has(int(id)):
-					ids.append(int(id))
-	if not ids.is_empty():
-		_hide_force_tiles(ids)
-
+## Гасит указанные id в живых view: прилетающие, ждущие показа в очереди
+## и сироты. После пересборки виды возвращаются видимыми — им пора быть
+## невидимыми до своего полёта.
 func _hide_force_tiles(force: Array) -> void:
 	var cur := {}
 	_collect_live(cur)
