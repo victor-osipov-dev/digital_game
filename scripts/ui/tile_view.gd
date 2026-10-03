@@ -1,5 +1,6 @@
 class_name TileView
 extends Panel
+const Lang := preload("res://scripts/core/lang.gd")
 
 var tile: Tile = null
 var draggable: bool = false
@@ -76,7 +77,7 @@ func _build() -> void:
 	var tile_base := int(round(ts.y * 0.4))
 	var fsize := clampi(Settings.fs(tile_base), 8, int((ts.x - 6.0) * 0.82))
 	var label := Label.new()
-	label.text = "★" if tile.is_joker else str(tile.value)
+	label.text = Lang.t("★") if tile.is_joker else str(tile.value)
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	label.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -88,7 +89,7 @@ func _build() -> void:
 	add_child(label)
 
 	if tile.is_joker:
-		tooltip_text = "Джокер — заменяет любое число любого цвета"
+		tooltip_text = Lang.t("Джокер — заменяет любое число любого цвета")
 	else:
 		tooltip_text = "%s %d" % [Tile.color_name(tile.color), tile.value]
 	base_alpha = modulate.a

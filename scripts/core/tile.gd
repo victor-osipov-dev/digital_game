@@ -1,6 +1,9 @@
 class_name Tile
 extends RefCounted
 
+# const Lang — после перечислений и констант: порядок определений
+# в глобальной области проверяет линтер (class-definitions-order).
+
 # YELLOW и PURPLE — цвета джокеров, а не ряды колоды: в сериях и наборах
 # они не участвуют, фишка с is_joker проверяется раньше цвета. Нужны,
 # чтобы джокер был виден на столе (цветная подложка под звездой).
@@ -10,6 +13,7 @@ enum TColor { RED, BLUE, BLACK, ORANGE, YELLOW, PURPLE }
 const COLOR_COUNT := 4
 # Вместо четырёх джокеров (по одному на цвет) — два, жёлтый и фиолетовый.
 const JOKER_COLORS := [TColor.YELLOW, TColor.PURPLE]
+const Lang := preload("res://scripts/core/lang.gd")
 
 var id: int = 0
 var color: int = TColor.RED
@@ -41,17 +45,17 @@ static func color_hex(c: int) -> String:
 static func color_name(c: int) -> String:
 	match c:
 		TColor.RED:
-			return "красный"
+			return Lang.t("красный")
 		TColor.BLUE:
-			return "синий"
+			return Lang.t("синий")
 		TColor.BLACK:
-			return "чёрный"
+			return Lang.t("чёрный")
 		TColor.ORANGE:
-			return "оранжевый"
+			return Lang.t("оранжевый")
 		TColor.YELLOW:
-			return "жёлтый"
+			return Lang.t("жёлтый")
 		TColor.PURPLE:
-			return "фиолетовый"
+			return Lang.t("фиолетовый")
 	return "?"
 
 static func sort_tiles(tiles: Array) -> void:

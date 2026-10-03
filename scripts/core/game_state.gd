@@ -1,5 +1,6 @@
 class_name GameState
 extends RefCounted
+const Lang := preload("res://scripts/core/lang.gd")
 
 const DEAL_SIZE := 14
 const MAX_CHECKPOINTS := 3
@@ -73,7 +74,7 @@ static func create(num_players: int, names: Array, p_require_30: bool) -> GameSt
 	var state := GameState.new()
 	state.require_30 = p_require_30
 	for i in num_players:
-		var pname := "Игрок %d" % (i + 1)
+		var pname := Lang.t("Игрок %d") % (i + 1)
 		if i < names.size() and not String(names[i]).strip_edges().is_empty():
 			pname = String(names[i]).strip_edges()
 		state.players.append(Player.new(pname))
@@ -236,17 +237,17 @@ func take_back_to_hand(row_id: int, tile_id: int) -> bool:
 
 func draw_from_deck() -> Dictionary:
 	if finished:
-		return _result(false, "Игра окончена")
+		return _result(false, Lang.t("Игра окончена"))
 	if not turn_placed.is_empty():
-		return _result(false, "Нельзя брать из колоды после выкладки")
+		return _result(false, Lang.t("Нельзя брать из колоды после выкладки"))
 	if deck.count() == 0:
-		return _result(false, "Колода пуста")
+		return _result(false, Lang.t("Колода пуста"))
 	var status := table_status()
 	if not status["ok"]:
-		return _result(false, "Сначала закончите перестановку на столе")
+		return _result(false, Lang.t("Сначала закончите перестановку на столе"))
 	var tile := deck.draw()
 	if tile == null:
-		return _result(false, "Колода пуста")
+		return _result(false, Lang.t("Колода пуста"))
 	var me := players[hand_seat()] as Player
 	me.hand.append(tile)
 	Tile.sort_tiles(me.hand)
@@ -255,14 +256,14 @@ func draw_from_deck() -> Dictionary:
 
 func skip_turn() -> Dictionary:
 	if finished:
-		return _result(false, "Игра окончена")
+		return _result(false, Lang.t("Игра окончена"))
 	if deck.count() > 0:
-		return _result(false, "Колода ещё полна — возьмите число")
+		return _result(false, Lang.t("Колода ещё полна — возьмите число"))
 	if not turn_placed.is_empty():
-		return _result(false, "Воспользуйтесь кнопкой «Продолжить»")
+		return _result(false, Lang.t("Воспользуйтесь кнопкой «Продолжить»"))
 	var status := table_status()
 	if not status["ok"]:
-		return _result(false, "Сначала закончите перестановку на столе")
+		return _result(false, Lang.t("Сначала закончите перестановку на столе"))
 	_advance()
 	return _result(true, "")
 
@@ -272,15 +273,16 @@ func skip_turn() -> Dictionary:
 ## сети, чтобы показать «ряд невалиден», неудобно — ошибку видно сразу.
 func check_turn() -> Dictionary:
 	if finished:
-		return _result(false, "Игра окончена")
+		return _result(false, Lang.t("Игра окончена"))
 	if turn_placed.is_empty():
-		return _result(false, "Выложите хотя бы одно число или возьмите из колоды")
+		return _result(false, Lang.t("Выложите хотя бы одно число или возьмите из колоды"))
 	var status := table_status()
 	if not status["ok"]:
 		var errors: Array = status["errors"]
 		return {
 			ok=false,
-			reason=String(errors[0]["reason"]) if not errors.is_empty() else "Стол в невалидном состоянии",
+			reason=String(errors[0]["reason"]) if not errors.is_empty() else Lang.t(
+		"Стол в невалидном состоянии"),
 			errors=errors,
 		}
 	if require_30 and first_turn:
@@ -288,7 +290,8 @@ func check_turn() -> Dictionary:
 		if pts < Rules.OPENING_POINTS:
 			return {
 				ok=false,
-				reason="Самый первый ход игры — минимум %d очков (у вас %d)" % [Rules.OPENING_POINTS, pts],
+				reason=Lang.t(
+		"Самый первый ход игры — минимум %d очков (у вас %d)") % [Rules.OPENING_POINTS, pts],
 				errors=[],
 			}
 	return _result(true, "")

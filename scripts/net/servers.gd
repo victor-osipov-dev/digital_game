@@ -1,5 +1,6 @@
 class_name Servers
 extends Node
+const Lang := preload("res://scripts/core/lang.gd")
 
 # Список игровых серверов.
 #
@@ -85,9 +86,11 @@ func first() -> Dictionary:
 func url_of(entry: Dictionary) -> String:
 	return "wss://%s:%d" % [String(entry.get("host", "")), int(entry.get("port", 6767))]
 
-## Подпись сервера для интерфейса: «Россия (ru)».
+## Подпись сервера для интерфейса: «Россия (ru)». Имя идёт через
+## словарь (встроенные имена — русские), своё название сервера при
+## этом не портится: чего нет в словаре, показывается как есть.
 func label_of(entry: Dictionary) -> String:
-	var name := String(entry.get("name", "?"))
+	var name := Lang.t(String(entry.get("name", "?")))
 	var region := String(entry.get("region", ""))
 	if region.is_empty():
 		return name
@@ -136,7 +139,7 @@ func health_of(entry: Dictionary) -> Dictionary:
 			"region": String(entry.get("region", "")),
 			"online": false,
 			"ms": 0,
-			"reason": "не проверен",
+			"reason": Lang.t("не проверен"),
 			"checked_at": 0.0,
 		}
 	return info
@@ -159,7 +162,7 @@ func _probe_all() -> Dictionary:
 		peer.outbound_buffer_size = 64 * 1024
 		var err := peer.connect_to_url(url_of(entry), Certs.tls_options_for(entry))
 		if err != OK:
-			out[id] = _mark(entry, false, 0, "не удалось начать подключение")
+			out[id] = _mark(entry, false, 0, Lang.t("не удалось начать подключение"))
 			continue
 		pending.append({"peer": peer, "entry": entry, "started": Time.get_ticks_msec()})
 
@@ -194,7 +197,7 @@ func _probe_all() -> Dictionary:
 		var peer: WebSocketPeer = item["peer"]
 		peer.close()
 		out[String(item["entry"].get("id", "?"))] = _mark(
-			item["entry"], false, Time.get_ticks_msec() - int(item["started"]), "не ответил")
+			item["entry"], false, Time.get_ticks_msec() - int(item["started"]), Lang.t("не ответил"))
 	return out
 
 ## Читает приветствие сервера. true, если оно пришло.
@@ -211,8 +214,8 @@ func _took_hello(peer: WebSocketPeer) -> bool:
 func _close_reason(peer: WebSocketPeer) -> String:
 	var code := peer.get_close_code()
 	if code == 1006 or code == 0:
-		return "соединение не установлено"
-	return "отказал сервер (код %d)" % code
+		return Lang.t("соединение не установлено")
+	return Lang.t("отказал сервер (код %d)") % code
 
 func _mark(entry: Dictionary, online: bool, ms: int, reason: String) -> Dictionary:
 	return {
@@ -443,8 +446,8 @@ func offline_hint() -> String:
 	for entry in all():
 		names.append(label_of(entry))
 	if names.is_empty():
-		return "Список серверов пуст — игра собрана неправильно."
-	return "Нет связи ни с одним сервером (%s)." % ", ".join(names)
+		return Lang.t("Список серверов пуст — игра собрана неправильно.")
+	return Lang.t("Нет связи ни с одним сервером (%s).") % ", ".join(names)
 
 ## Названия живых — короткой строкой в заголовке.
 func online_summary() -> String:
@@ -452,8 +455,8 @@ func online_summary() -> String:
 	for item in online_sorted():
 		names.append(label_of(item["entry"]))
 	if names.is_empty():
-		return "нет связи"
-	return "%s онлайн" % ", ".join(names)
+		return Lang.t("нет связи")
+	return Lang.t("%s онлайн") % ", ".join(names)
 
 
 # ----------------------------------------------------------------- файл
@@ -508,7 +511,7 @@ func _save(list: Array) -> void:
 	var tmp := PATH + ".tmp"
 	var f := FileAccess.open(tmp, FileAccess.WRITE)
 	if f == null:
-		push_warning("не удалось записать %s: %s"
+		push_warning(Lang.t("не удалось записать %s: %s")
 			% [PATH, error_string(FileAccess.get_open_error())])
 		return
 	f.store_string(JSON.stringify(list, "  "))
@@ -520,4 +523,4 @@ func _save(list: Array) -> void:
 		DirAccess.remove_absolute(PATH)
 		err = DirAccess.rename_absolute(tmp, PATH)
 		if err != OK:
-			push_warning("не удалось сохранить %s: %s" % [PATH, error_string(err)])
+			push_warning(Lang.t("не удалось сохранить %s: %s") % [PATH, error_string(err)])

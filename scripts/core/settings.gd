@@ -1,4 +1,5 @@
 extends Node
+const Lang := preload("res://scripts/core/lang.gd")
 
 const CFG_PATH := "user://settings.cfg"
 const MIN_PLAYERS := 2
@@ -22,6 +23,9 @@ var text_scale: int = 2
 var tile_step: int = 5
 var bot_level: int = 1
 var bot_anim: bool = true
+## Язык интерфейса: "ru" или "en". Хранится здесь (cfg), применяется
+## через Lang.set_lang (словарь + заголовок окна).
+var language: String = "ru"
 var player_is_bot: Array = []
 var stat_games: int = 0
 var stat_wins: int = 0
@@ -161,6 +165,13 @@ func set_bot(index: int, value: bool) -> void:
 	if index >= 0 and index < player_is_bot.size():
 		player_is_bot[index] = value
 
+## Смена языка: словарь + заголовок + запись в cfg. Перестройку экрана
+## делает вызывающий (теми же путями, что смена масштаба текста).
+func set_language(code: String) -> void:
+	language = "en" if code == "en" else "ru"
+	Lang.set_lang(language)
+	save_settings()
+
 func set_player_count(n: int) -> void:
 	player_count = clampi(n, MIN_PLAYERS, MAX_PLAYERS)
 	_ensure_names()
@@ -171,12 +182,12 @@ func set_player_name(index: int, value: String) -> void:
 	if index >= 0 and index < player_names.size():
 		var cleaned := value.strip_edges()
 		if cleaned.is_empty():
-			cleaned = "Игрок %d" % (index + 1)
+			cleaned = Lang.t("Игрок %d") % (index + 1)
 		player_names[index] = cleaned
 
 func _ensure_names() -> void:
 	while player_names.size() < player_count:
-		player_names.append("Игрок %d" % (player_names.size() + 1))
+		player_names.append(Lang.t("Игрок %d") % (player_names.size() + 1))
 	while player_names.size() > player_count:
 		player_names.remove_at(player_names.size() - 1)
 
@@ -195,6 +206,10 @@ func load_settings() -> void:
 		tile_step = clampi(int(cf.get_value("game", "tile_step", 5)), 0, TILE_WIDTHS.size() - 1)
 		bot_level = clampi(int(cf.get_value("game", "bot_level", 1)), 0, BOT_LEVEL_NAMES.size() - 1)
 		bot_anim = bool(cf.get_value("game", "bot_anim", true))
+		language = String(cf.get_value("game", "language", "ru"))
+		if language != "en":
+			language = "ru"
+		Lang.set_lang(language)
 		stat_games = maxi(0, int(cf.get_value("game", "stat_games", 0)))
 		stat_wins = maxi(0, int(cf.get_value("game", "stat_wins", 0)))
 		stat_losses = maxi(0, int(cf.get_value("game", "stat_losses", 0)))
@@ -218,6 +233,7 @@ func save_settings() -> void:
 	cf.set_value("game", "tile_step", tile_step)
 	cf.set_value("game", "bot_level", bot_level)
 	cf.set_value("game", "bot_anim", bot_anim)
+	cf.set_value("game", "language", language)
 	cf.set_value("game", "player_is_bot", player_is_bot)
 	cf.set_value("game", "stat_games", stat_games)
 	cf.set_value("game", "stat_wins", stat_wins)

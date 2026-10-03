@@ -1,5 +1,6 @@
 class_name Certs
 extends RefCounted
+const Lang := preload("res://scripts/core/lang.gd")
 
 # Сертификаты серверов, зашитые прямо в клиент.
 #
@@ -54,7 +55,7 @@ static func _load(server_id: String, host: String) -> X509Certificate:
 			var cert := _read(path, ext)
 			if cert != null:
 				return cert
-	push_error("сертификат сервера %s не найден в %s — связь с ним будет отвергнута"
+	push_error(Lang.t("сертификат сервера %s не найден в %s — связь с ним будет отвергнута")
 		% [server_id, DIR])
 	return null
 

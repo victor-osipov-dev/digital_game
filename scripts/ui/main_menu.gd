@@ -1,4 +1,5 @@
 extends Control
+const Lang := preload("res://scripts/core/lang.gd")
 
 # preload, а не class_name: имя из глобального списка классов берётся из
 # кэша редактора, а на новом файле кэш отстаёт — см. ошибку
@@ -122,9 +123,9 @@ func _refresh_online_note(_room := {}) -> void:
 		_room_actions.visible = false
 		return
 	var playing := String(pending.get("state", "")) == "playing"
-	_online_note.text = "Вы всё ещё в комнате %s: %s." % [
+	_online_note.text = Lang.t("Вы всё ещё в комнате %s: %s.") % [
 		String(pending.get("code", "?")),
-		"партия идёт" if playing else _room_where(pending),
+		Lang.t("партия идёт") if playing else _room_where(pending),
 	]
 	_online_note.visible = true
 	_room_actions.visible = true
@@ -135,16 +136,17 @@ func _refresh_online_note(_room := {}) -> void:
 ## Дублирует лоббийный подсчёт — лобби и меню не делят код.
 func _room_where(pending: Dictionary) -> String:
 	if not pending.has("players"):
-		return "игроки в сборе"
+		return Lang.t("игроки в сборе")
 	var n := 0
 	for p in pending.get("players", []):
 		if p is Dictionary and not bool((p as Dictionary).get("empty", false)):
 			n += 1
 	if n <= 1:
-		return "кроме вас никого нет"
-	return "игроки в сборе"
+		return Lang.t("кроме вас никого нет")
+	return Lang.t("игроки в сборе")
 
 func _ready() -> void:
+	Lang.apply_title()
 	_build_ui()
 	_rebuild_names()
 	# Поворот экрана пересчитывает ширину: без этого меню осталось бы
@@ -190,14 +192,14 @@ func _build_ui() -> void:
 	var box := menu_box
 
 	_menu_title = Label.new()
-	_menu_title.text = "DIGITAL GAME"
+	_menu_title.text = Lang.app_name()
 	_menu_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_menu_title.add_theme_font_size_override("font_size", Settings.fs(38))
 	_menu_title.add_theme_color_override("font_color", Color("FFD54F"))
 	box.add_child(_menu_title)
 
 	var subtitle := Label.new()
-	subtitle.text = "числа · 4 цвета · джокеры"
+	subtitle.text = Lang.t("числа · 4 цвета · джокеры")
 	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	# Перенос: у Label без него минимальная ширина равна всей строке, и
 	# на гигантском тексте подзаголовок растягивал колонку шире окна.
@@ -231,7 +233,7 @@ func _build_ui() -> void:
 	box.add_child(_room_actions)
 
 	_return_room_btn = Button.new()
-	_return_room_btn.text = "Вернуться"
+	_return_room_btn.text = Lang.t("Вернуться")
 	_return_room_btn.custom_minimum_size = Vector2(0, Settings.touch(46))
 	_return_room_btn.add_theme_font_size_override("font_size", Settings.fs(15))
 	_return_room_btn.pressed.connect(_on_return_room_pressed)
@@ -239,7 +241,7 @@ func _build_ui() -> void:
 	_room_actions.add_child(_return_room_btn)
 
 	_drop_room_btn = Button.new()
-	_drop_room_btn.text = "Покинуть"
+	_drop_room_btn.text = Lang.t("Покинуть")
 	_drop_room_btn.custom_minimum_size = Vector2(0, Settings.touch(46))
 	_drop_room_btn.add_theme_font_size_override("font_size", Settings.fs(15))
 	_drop_room_btn.pressed.connect(_on_drop_room_pressed)
@@ -257,7 +259,7 @@ func _build_ui() -> void:
 	box.add_child(count_row)
 
 	var count_label := Label.new()
-	count_label.text = "Игроков:"
+	count_label.text = Lang.t("Игроков:")
 	count_label.add_theme_font_size_override("font_size", Settings.fs(17))
 	count_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.9))
 	count_row.add_child(count_label)
@@ -272,7 +274,7 @@ func _build_ui() -> void:
 	count_row.add_child(count_option)
 
 	var names_label := Label.new()
-	names_label.text = "Имена игроков:"
+	names_label.text = Lang.t("Имена игроков:")
 	names_label.add_theme_font_size_override("font_size", Settings.fs(17))
 	names_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.9))
 	box.add_child(names_label)
@@ -285,7 +287,7 @@ func _build_ui() -> void:
 	# Подпись та же, что и в сетевом лобби: чекбокс не переносится, а
 	# его ширина — ширина всей колонки меню; длиннее — на гигантском
 	# строка уезжала за правый край экрана.
-	check_30.text = "Первый ход: от 30"
+	check_30.text = Lang.t("Первый ход: от 30")
 	check_30.button_pressed = Settings.require_30
 	check_30.add_theme_font_size_override("font_size", Settings.fs(15))
 	check_30.add_theme_color_override("font_color", Color(1, 1, 1, 0.9))
@@ -296,7 +298,7 @@ func _build_ui() -> void:
 	bot_anim_check = CheckBox.new()
 	# Подпись короткая специально: у CheckBox нет переноса, длинная
 	# строка растягивала бы колонку шире окна на гигантском тексте.
-	bot_anim_check.text = "Анимация бота"
+	bot_anim_check.text = Lang.t("Анимация бота")
 	bot_anim_check.button_pressed = Settings.bot_anim
 	bot_anim_check.add_theme_font_size_override("font_size", Settings.fs(15))
 	bot_anim_check.add_theme_color_override("font_color", Color(1, 1, 1, 0.9))
@@ -304,12 +306,18 @@ func _build_ui() -> void:
 	UiThemeClass.fit_checkbox(bot_anim_check)
 	box.add_child(bot_anim_check)
 
-	box.add_child(_make_option_row("Текст:", Settings.TEXT_SCALE_NAMES, Settings.text_scale, _on_text_scale))
-	box.add_child(_make_option_row("Карточки:", Settings.TILE_SIZE_NAMES, Settings.tile_step, _on_tile_step))
-	box.add_child(_make_option_row("Сложность ботов:", Settings.BOT_LEVEL_NAMES, Settings.bot_level, _on_bot_level))
+	box.add_child(_make_option_row(Lang.t("Текст:"),
+		Lang.names(Settings.TEXT_SCALE_NAMES), Settings.text_scale, _on_text_scale))
+	box.add_child(_make_option_row(Lang.t("Карточки:"),
+		Lang.names(Settings.TILE_SIZE_NAMES), Settings.tile_step, _on_tile_step))
+	box.add_child(_make_option_row(Lang.t("Сложность ботов:"),
+		Lang.names(Settings.BOT_LEVEL_NAMES), Settings.bot_level, _on_bot_level))
+	# Имена языков — самоназвания, переводу не подлежат.
+	box.add_child(_make_option_row(Lang.t("Язык:"), PackedStringArray(["Русский", "English"]),
+		1 if Settings.language == "en" else 0, _on_language_selected))
 
 	var start_btn := Button.new()
-	start_btn.text = "Начать"
+	start_btn.text = Lang.t("Начать")
 	start_btn.custom_minimum_size = Vector2(0, Settings.touch(58))
 	start_btn.add_theme_font_size_override("font_size", Settings.fs(20))
 	start_btn.pressed.connect(_on_start_pressed)
@@ -320,7 +328,7 @@ func _build_ui() -> void:
 	# отдельный режим, и человек, который хочет поиграть с соседом за
 	# одним столом, не должен промахиваться мимо привычной кнопки.
 	var online_btn := Button.new()
-	online_btn.text = "По сети"
+	online_btn.text = Lang.t("По сети")
 	online_btn.custom_minimum_size = Vector2(0, Settings.touch(50))
 	online_btn.add_theme_font_size_override("font_size", Settings.fs(17))
 	online_btn.pressed.connect(_on_online_pressed)
@@ -330,7 +338,7 @@ func _build_ui() -> void:
 	# Статистика — отдельной строкой, а не в нижнем ряду: там уже две
 	# кнопки по 200px, третья при большом тексте не помещается по ширине.
 	var stats_btn := Button.new()
-	stats_btn.text = "Статистика"
+	stats_btn.text = Lang.t("Статистика")
 	stats_btn.custom_minimum_size = Vector2(0, Settings.touch(50))
 	stats_btn.add_theme_font_size_override("font_size", Settings.fs(17))
 	stats_btn.pressed.connect(_on_stats_pressed)
@@ -345,7 +353,7 @@ func _build_ui() -> void:
 	box.add_child(bottom)
 
 	var rules_btn := Button.new()
-	rules_btn.text = "Как играть"
+	rules_btn.text = Lang.t("Как играть")
 	rules_btn.clip_text = true
 	rules_btn.custom_minimum_size = Vector2(200, Settings.touch(50))
 	rules_btn.add_theme_font_size_override("font_size", Settings.fs(16))
@@ -353,7 +361,7 @@ func _build_ui() -> void:
 	bottom.add_child(rules_btn)
 
 	var quit_btn := Button.new()
-	quit_btn.text = "Выход"
+	quit_btn.text = Lang.t("Выход")
 	quit_btn.clip_text = true
 	quit_btn.custom_minimum_size = Vector2(200, Settings.touch(50))
 	quit_btn.add_theme_font_size_override("font_size", Settings.fs(16))
@@ -463,7 +471,7 @@ func _build_help_overlay() -> void:
 	panel.add_child(box)
 
 	var title := Label.new()
-	title.text = "Правила игры"
+	title.text = Lang.t("Правила игры")
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_font_size_override("font_size", Settings.fs(22))
 	title.add_theme_color_override("font_color", Color("FFD54F"))
@@ -489,7 +497,7 @@ func _build_help_overlay() -> void:
 	scroll.add_child(rich)
 
 	var close_btn := Button.new()
-	close_btn.text = "Закрыть"
+	close_btn.text = Lang.t("Закрыть")
 	close_btn.clip_text = true
 	close_btn.custom_minimum_size = Vector2(Settings.touch_w(200), Settings.touch(52))
 	close_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
@@ -537,18 +545,18 @@ func _build_stats_overlay() -> void:
 	panel.add_child(box)
 
 	var title := Label.new()
-	title.text = "Статистика"
+	title.text = Lang.t("Статистика")
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_font_size_override("font_size", Settings.fs(22))
 	title.add_theme_color_override("font_color", Color("FFD54F"))
 	box.add_child(title)
 
-	_stats_games = _make_stat_row(box, "Сыграно партий:")
-	_stats_wins = _make_stat_row(box, "Побед:")
-	_stats_losses = _make_stat_row(box, "Поражений:")
+	_stats_games = _make_stat_row(box, Lang.t("Сыграно партий:"))
+	_stats_wins = _make_stat_row(box, Lang.t("Побед:"))
+	_stats_losses = _make_stat_row(box, Lang.t("Поражений:"))
 
 	var close_btn := Button.new()
-	close_btn.text = "Закрыть"
+	close_btn.text = Lang.t("Закрыть")
 	close_btn.custom_minimum_size = Vector2(Settings.touch_w(200), Settings.touch(52))
 	close_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	close_btn.add_theme_font_size_override("font_size", Settings.fs(17))
@@ -569,9 +577,9 @@ func _make_stat_row(parent: Control, caption: String) -> Label:
 ## Открытие статистики: цифры читаем здесь, в момент показа, — иначе
 ## после партии, сыгранной без перезахода в меню, висели бы старые.
 func _on_stats_pressed() -> void:
-	_stats_games.text = "Сыграно партий: %d" % Settings.stat_games
-	_stats_wins.text = "Побед: %d" % Settings.stat_wins
-	_stats_losses.text = "Поражений: %d" % Settings.stat_losses
+	_stats_games.text = Lang.t("Сыграно партий: %d") % Settings.stat_games
+	_stats_wins.text = Lang.t("Побед: %d") % Settings.stat_wins
+	_stats_losses.text = Lang.t("Поражений: %d") % Settings.stat_losses
 	stats_overlay.visible = true
 
 func _rebuild_names() -> void:
@@ -591,7 +599,7 @@ func _rebuild_names() -> void:
 
 		var edit := LineEdit.new()
 		edit.text = Settings.player_names[i]
-		edit.placeholder_text = "Игрок %d" % (i + 1)
+		edit.placeholder_text = Lang.t("Игрок %d") % (i + 1)
 		edit.max_length = 16
 		edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		edit.add_theme_font_size_override("font_size", Settings.fs(16))
@@ -600,7 +608,7 @@ func _rebuild_names() -> void:
 		name_edits.append(edit)
 
 		var bot := CheckBox.new()
-		bot.text = "Бот"
+		bot.text = Lang.t("Бот")
 		bot.button_pressed = Settings.is_bot(i)
 		bot.add_theme_font_size_override("font_size", Settings.fs(16))
 		bot.add_theme_color_override("font_color", Color(1, 1, 1, 0.85))
@@ -645,6 +653,10 @@ func _on_tile_step(index: int) -> void:
 func _on_bot_level(index: int) -> void:
 	Settings.bot_level = index
 	Settings.save_settings()
+
+func _on_language_selected(index: int) -> void:
+	Settings.set_language("en" if index == 1 else "ru")
+	get_tree().reload_current_scene()
 
 func _on_start_pressed() -> void:
 	_sync_names_from_edits()

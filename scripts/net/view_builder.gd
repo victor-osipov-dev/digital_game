@@ -1,5 +1,6 @@
 class_name ViewBuilder
 extends RefCounted
+const Lang := preload("res://scripts/core/lang.gd")
 
 # Сборка GameState из того, что прислал сервер.
 #
@@ -50,7 +51,7 @@ static func tile(id: int) -> Tile:
 	# фишкой, чем уронить её совсем.
 	if not _unknown.has(id):
 		_unknown[id] = true
-		push_error("сервер прислал фишку №%d, которой нет в каталоге (%d шт.known)"
+		push_error(Lang.t("сервер прислал фишку №%d, которой нет в каталоге (%d шт.known)")
 			% [id, _catalog_size])
 	var color := 0 if id <= 0 or id > 4 else (id - 1) % 4
 	var value := 1

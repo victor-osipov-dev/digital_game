@@ -1,4 +1,5 @@
 extends Control
+const Lang := preload("res://scripts/core/lang.gd")
 
 const SLOT_HOVER_EDGE := 10.0
 const HINT_MIN_H := 100.0
@@ -151,6 +152,7 @@ var _draft_tick_ms: int = 0
 var _stats_recorded: bool = false
 
 func _ready() -> void:
+	Lang.apply_title()
 	_build_ui()
 	resized.connect(_on_resized)
 	# Кто открыл сцену, тот и заказал режим: «Начать игру» — локально,
@@ -254,28 +256,28 @@ func _build_ui() -> void:
 	_top_actions.add_theme_constant_override("h_separation", 6)
 	_top_actions.add_theme_constant_override("v_separation", 6)
 	top.add_child(_top_actions)
-	cp_save_btn = _make_top_button("Сохр.", "Сохранить расклад (чекпоинт)",
-		_on_cp_save_pressed, "Сохранить")
+	cp_save_btn = _make_top_button(Lang.t("Сохр."), Lang.t("Сохранить расклад (чекпоинт)"),
+		_on_cp_save_pressed, Lang.t("Сохранить"))
 	_top_actions.add_child(cp_save_btn)
 
-	cp_restore_btn = _make_top_button("Вернуть", "Вернуться к чекпоинту",
-		_on_cp_restore_pressed, "Вернуть")
+	cp_restore_btn = _make_top_button(Lang.t("Вернуть"), Lang.t("Вернуться к чекпоинту"),
+		_on_cp_restore_pressed, Lang.t("Вернуть"))
 	_top_actions.add_child(cp_restore_btn)
 
-	hint_btn = _make_top_button("Подск.", "Подсказка - показать возможный ход",
-		_on_hint_pressed, "Подсказка")
+	hint_btn = _make_top_button(Lang.t("Подск."), Lang.t("Подсказка - показать возможный ход"),
+		_on_hint_pressed, Lang.t("Подсказка"))
 	_top_actions.add_child(hint_btn)
 
-	var help_btn := _make_top_button("?", "Помощь", _open_help, "Помощь")
+	var help_btn := _make_top_button("?", Lang.t("Помощь"), _open_help, Lang.t("Помощь"))
 	_top_actions.add_child(help_btn)
 
-	var settings_btn := _make_top_button("Настр.", "Размер текста и карточек",
-		_open_settings, "Настройки")
+	var settings_btn := _make_top_button(Lang.t("Настр."), Lang.t("Размер текста и карточек"),
+		_open_settings, Lang.t("Настройки"))
 	_top_actions.add_child(settings_btn)
 
-	var menu_btn := _make_top_button("Меню", "Выход в меню",
-		func(): _ask_confirm("Выход в меню", "Выйти в главное меню?",
-			"Выйти", _on_leave_to_menu), "Меню")
+	var menu_btn := _make_top_button(Lang.t("Меню"), Lang.t("Выход в меню"),
+		func(): _ask_confirm(Lang.t("Выход в меню"), Lang.t("Выйти в главное меню?"),
+			Lang.t("Выйти"), _on_leave_to_menu), Lang.t("Меню"))
 	_top_actions.add_child(menu_btn)
 	_top_action_buttons = [
 		cp_save_btn, cp_restore_btn, hint_btn, help_btn, settings_btn, menu_btn,
@@ -285,8 +287,8 @@ func _build_ui() -> void:
 	_top_pinned = [cp_save_btn, cp_restore_btn, hint_btn]
 	_top_overflow = [help_btn, settings_btn, menu_btn]
 	_burger_btn = Button.new()
-	_burger_btn.text = "☰"
-	_burger_btn.tooltip_text = "Действия"
+	_burger_btn.text = Lang.t("☰")
+	_burger_btn.tooltip_text = Lang.t("Действия")
 	_burger_btn.custom_minimum_size = Vector2(60, Settings.touch(46))
 	_burger_btn.clip_text = true
 	_burger_btn.add_theme_font_size_override("font_size", Settings.fs(18))
@@ -454,7 +456,7 @@ func _build_ui() -> void:
 	hsb.content_margin_bottom = 12.0
 	hint_zone.add_theme_stylebox_override("panel", hsb)
 	var hlab := Label.new()
-	hlab.text = "Перетащите сюда число - новый ряд"
+	hlab.text = Lang.t("Перетащите сюда число - новый ряд")
 	hlab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hlab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	hlab.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -497,7 +499,7 @@ func _build_ui() -> void:
 	layout.add_child(bottom)
 
 	undo_button = Button.new()
-	undo_button.text = "Отменить ход"
+	undo_button.text = Lang.t("Отменить ход")
 	undo_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	undo_button.custom_minimum_size = Vector2(0, Settings.touch(52))
 	undo_button.add_theme_font_size_override("font_size", Settings.fs(16))
@@ -505,7 +507,7 @@ func _build_ui() -> void:
 	bottom.add_child(undo_button)
 
 	end_button = Button.new()
-	end_button.text = "Взять"
+	end_button.text = Lang.t("Взять")
 	end_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	end_button.custom_minimum_size = Vector2(0, Settings.touch(52))
 	end_button.add_theme_font_size_override("font_size", Settings.fs(16))
@@ -603,7 +605,7 @@ func _build_confirm_dialog() -> void:
 	_apply_accent_style(_confirm_ok, Color("2E7D32"), Color("388E3C"), Color("1B5E20"))
 	row.add_child(_confirm_ok)
 	var cancel := Button.new()
-	cancel.text = "Отмена"
+	cancel.text = Lang.t("Отмена")
 	cancel.custom_minimum_size = Vector2(Settings.touch_w(120), Settings.touch(52))
 	cancel.add_theme_font_size_override("font_size", Settings.fs(16))
 	cancel.pressed.connect(_close_confirm)
@@ -872,7 +874,7 @@ func _build_pass_overlay() -> void:
 	pass_overlay.add_child(box)
 
 	pass_title = Label.new()
-	pass_title.text = "Передайте устройство игроку"
+	pass_title.text = Lang.t("Передайте устройство игроку")
 	pass_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	pass_title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	pass_title.add_theme_font_size_override("font_size", Settings.fs(18))
@@ -888,7 +890,7 @@ func _build_pass_overlay() -> void:
 	box.add_child(pass_name)
 
 	pass_ready_button = Button.new()
-	pass_ready_button.text = "Готов(-а)"
+	pass_ready_button.text = Lang.t("Готов(-а)")
 	pass_ready_button.custom_minimum_size = Vector2(Settings.touch_w(220), Settings.touch(60))
 	pass_ready_button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	pass_ready_button.add_theme_font_size_override("font_size", Settings.fs(20))
@@ -936,7 +938,7 @@ func _build_win_overlay() -> void:
 	box.add_child(btn_box)
 
 	var again_btn := Button.new()
-	again_btn.text = "Заново"
+	again_btn.text = Lang.t("Заново")
 	again_btn.custom_minimum_size = Vector2(Settings.touch_w(180), Settings.touch(60))
 	again_btn.add_theme_font_size_override("font_size", Settings.fs(19))
 	again_btn.pressed.connect(_new_match)
@@ -945,7 +947,7 @@ func _build_win_overlay() -> void:
 	_again_btn = again_btn
 
 	var to_menu_btn := Button.new()
-	to_menu_btn.text = "В меню"
+	to_menu_btn.text = Lang.t("В меню")
 	to_menu_btn.custom_minimum_size = Vector2(Settings.touch_w(180), Settings.touch(60))
 	to_menu_btn.add_theme_font_size_override("font_size", Settings.fs(19))
 	to_menu_btn.pressed.connect(_on_leave_to_menu)
@@ -987,7 +989,7 @@ func _build_help_overlay() -> void:
 	panel.add_child(box)
 
 	var title := Label.new()
-	title.text = "Правила игры"
+	title.text = Lang.t("Правила игры")
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_font_size_override("font_size", Settings.fs(22))
 	title.add_theme_color_override("font_color", Color("FFD54F"))
@@ -1014,7 +1016,7 @@ func _build_help_overlay() -> void:
 	scroll.add_child(rich)
 
 	var close_btn := Button.new()
-	close_btn.text = "Закрыть"
+	close_btn.text = Lang.t("Закрыть")
 	close_btn.clip_text = true
 	close_btn.custom_minimum_size = Vector2(Settings.touch_w(200), Settings.touch(52))
 	close_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
@@ -1058,6 +1060,10 @@ func _on_settings_tile_step(index: int) -> void:
 	Settings.tile_step = index
 	Settings.save_settings()
 	refresh()
+
+func _on_settings_language(index: int) -> void:
+	Settings.set_language("en" if index == 1 else "ru")
+	call_deferred("_rebuild_ui")
 
 func _rebuild_ui() -> void:
 	# пересборка UI с сохранением партии (смена text_scale)
@@ -1130,17 +1136,21 @@ func _build_settings_overlay() -> void:
 	panel.add_child(box)
 
 	var title := Label.new()
-	title.text = "Настройки"
+	title.text = Lang.t("Настройки")
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_font_size_override("font_size", Settings.fs(22))
 	title.add_theme_color_override("font_color", Color("FFD54F"))
 	box.add_child(title)
 
-	box.add_child(_make_settings_row("Текст:", Settings.TEXT_SCALE_NAMES, Settings.text_scale, _on_settings_text_scale))
-	box.add_child(_make_settings_row("Карточки:", Settings.TILE_SIZE_NAMES, Settings.tile_step, _on_settings_tile_step))
+	box.add_child(_make_settings_row(Lang.t("Текст:"),
+		Lang.names(Settings.TEXT_SCALE_NAMES), Settings.text_scale, _on_settings_text_scale))
+	box.add_child(_make_settings_row(Lang.t("Карточки:"),
+		Lang.names(Settings.TILE_SIZE_NAMES), Settings.tile_step, _on_settings_tile_step))
+	box.add_child(_make_settings_row(Lang.t("Язык:"), PackedStringArray(["Русский", "English"]),
+		1 if Settings.language == "en" else 0, _on_settings_language))
 
 	var close_btn := Button.new()
-	close_btn.text = "Закрыть"
+	close_btn.text = Lang.t("Закрыть")
 	close_btn.clip_text = true
 	close_btn.custom_minimum_size = Vector2(Settings.touch_w(200), Settings.touch(52))
 	close_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
@@ -1292,7 +1302,7 @@ func _net_rejoin() -> void:
 		return
 	# Партия не найдена (сервер перезапустили) либо место уже потеряно.
 	Net.clear_pending_room()
-	toast(String(res.get("reason", "партия недоступна")), true)
+	toast(String(res.get("reason", Lang.t("партия недоступна"))), true)
 	_net_unwatch()
 	_go_menu()
 
@@ -1315,7 +1325,7 @@ func _on_state_received(view: Dictionary, grace: float, paused: bool, waiting: b
 	# действия игрока, и подсказка с названием мешала бы.
 	if state != null and state.finished:
 		_record_stats()
-		win_title.text = "Победитель - %s" % state.player_name(state.winner)
+		win_title.text = Lang.t("Победитель - %s") % state.player_name(state.winner)
 		win_overlay.visible = true
 		_show_wait("")
 		refresh()
@@ -1331,9 +1341,9 @@ func _wait_text(grace: float, paused: bool, waiting: bool) -> String:
 	if waiting:
 		# Второго игрока нет, и это важнее чьего-либо хода: кнопки всё
 		# равно заблокированы сервером, а надпись объясняет, почему.
-		return "Ждём второго игрока: партия на паузе."
+		return Lang.t("Ждём второго игрока: партия на паузе.")
 	if paused:
-		return "Игра на паузе: кто-то отвалился. Ждём возвращения."
+		return Lang.t("Игра на паузе: кто-то отвалился. Ждём возвращения.")
 	if state != null and (state.finished or state.my_turn()):
 		# Наш ход (или партия кончилась) — «ход соперника» здесь врёт:
 		# чужая очередь показывается только когда ходит соперник. Иначе,
@@ -1341,12 +1351,12 @@ func _wait_text(grace: float, paused: bool, waiting: bool) -> String:
 		# нами же подсвеченной фишкой — наоборот.
 		return ""
 	if grace > 0.0:
-		return "Соперник не отвечает. Осталось ждать %d с." % int(ceil(grace))
+		return Lang.t("Соперник не отвечает. Осталось ждать %d с.") % int(ceil(grace))
 	# Отсчёт показывает отдельная строка таймера — дублировать её словами
 	# «Ход соперника» не нужно. Без отсчёта (старый сервер) строка остаётся.
 	if _online and _turn_deadline_ms > Time.get_ticks_msec():
 		return ""
-	return "Ход соперника"
+	return Lang.t("Ход соперника")
 
 
 func _apply_state(view: Dictionary, grace: float, paused: bool, waiting: bool = false) -> void:
@@ -1429,7 +1439,7 @@ func _on_net_connection(connected: bool, detail: String) -> void:
 		return
 	# Связи нет — показываем это на экране, а не тостом: молчащий
 	# интерфейс во время сетевой партии выглядит как зависание.
-	_show_wait("Нет связи: %s" % detail)
+	_show_wait(Lang.t("Нет связи: %s") % detail)
 	refresh()
 
 
@@ -1440,12 +1450,12 @@ func _send_and_wait(send: Callable, args: Array = []) -> void:
 	if _sending:
 		return
 	_sending = true
-	_show_wait("Отправляем ход…")
+	_show_wait(Lang.t("Отправляем ход…"))
 	refresh()
 	var res: Dictionary = await send.callv(args)
 	_sending = false
 	if not Net.is_linked():
-		_show_wait("Нет связи с сервером")
+		_show_wait(Lang.t("Нет связи с сервером"))
 	elif String(res.get("t", "")) == NetProtocol.GAME_STATE:
 		# Личный ответ сервера на наш ход и есть актуальное состояние
 		# партии: сходившему рассылку не дублируют, и, если ответ
@@ -1457,7 +1467,7 @@ func _send_and_wait(send: Callable, args: Array = []) -> void:
 	elif String(res.get("t", "")) == NetProtocol.GAME_ERROR:
 		# Отказ пришёл персонально нам: рассылки с ним нет, и молчание
 		# выглядело бы как зависание.
-		toast(String(res.get("reason", "Ход отклонён")), true)
+		toast(String(res.get("reason", Lang.t("Ход отклонён"))), true)
 	elif state != null and state.my_turn() and not state.finished:
 		# Сервер ещё не ответил (или ответил отказом без своего состояния):
 		# управление возвращаем, иначе кнопки останутся мёртвыми навсегда.
@@ -1472,7 +1482,8 @@ func _show_pass(first: bool = false) -> void:
 	if _is_bot_turn():
 		_run_bot_turn()
 	else:
-		pass_title.text = "Игра начинается - первый ход:" if first else "Передайте устройство игроку"
+		pass_title.text = Lang.t(
+		"Игра начинается - первый ход:") if first else Lang.t("Передайте устройство игроку")
 		pass_name.text = state.current_player().pname
 		pass_overlay.visible = true
 
@@ -1487,8 +1498,8 @@ func _show_turn_title() -> void:
 	# сидящая на паузе или идущая на чужих устройствах, выглядит как
 	# молчащий человек с выключенным экраном.
 	if state.is_bot_player(state.current):
-		who += " (бот)"
-	turn_title_label.text = "Ход: %s" % who
+		who += Lang.t(" (бот)")
+	turn_title_label.text = Lang.t("Ход: %s") % who
 	turn_title_overlay.visible = true
 	turn_title_overlay.modulate.a = 0.0
 	if title_tween != null and title_tween.is_running():
@@ -1517,10 +1528,11 @@ func _update_turn_timer() -> void:
 		# до него строку не показываем — цифра «0 с» ничего не объясняет.
 		_turn_timer_panel.visible = false
 		return
-	var who := "Ваш ход" if state.my_turn() else "Ход: %s" % state.current_player().pname
+	var who := Lang.t("Ваш ход") if state.my_turn() else Lang.t(
+		"Ход: %s") % state.current_player().pname
 	if not state.my_turn() and state.is_bot_player(state.current):
-		who += " (бот)"
-	_turn_timer_label.text = "%s — %d с" % [who, left]
+		who += Lang.t(" (бот)")
+	_turn_timer_label.text = Lang.t("%s — %d с") % [who, left]
 	_turn_timer_label.add_theme_color_override(
 		"font_color", Color("EF5350") if left <= 10 else Color("FFD54F"))
 	_turn_timer_panel.visible = true
@@ -1632,7 +1644,7 @@ func _bot_resolve_row(ref: String, created: Dictionary) -> GameState.Row:
 
 func _show_win() -> void:
 	_record_stats()
-	win_title.text = "Победитель - %s" % state.player_name(state.winner)
+	win_title.text = Lang.t("Победитель - %s") % state.player_name(state.winner)
 	win_overlay.visible = true
 
 
@@ -1656,8 +1668,8 @@ func _record_stats() -> void:
 func _on_deck_pressed() -> void:
 	if not _can_act():
 		return
-	_ask_confirm("Взять карту", "Взять число из колоды?\nХод сразу завершится.",
-		"Взять", _on_draw_confirmed)
+	_ask_confirm(Lang.t("Взять карту"), Lang.t("Взять число из колоды?\nХод сразу завершится."),
+		Lang.t("Взять"), _on_draw_confirmed)
 
 func _on_draw_confirmed() -> void:
 	_hint_ids.clear()
@@ -1701,7 +1713,7 @@ func _on_end_pressed() -> void:
 		var idx := int(e.get("row", -1))
 		if idx >= 0 and idx < state.table.size():
 			invalid_row_ids.append((state.table[idx] as GameState.Row).id)
-	toast(String(r.get("reason", "Стол в невалидном состоянии")), true)
+	toast(String(r.get("reason", Lang.t("Стол в невалидном состоянии"))), true)
 	refresh()
 
 func _on_skip_pressed() -> void:
@@ -1735,7 +1747,7 @@ func _on_end_pressed_online() -> void:
 			var idx := int(e.get("row", -1))
 			if idx >= 0 and idx < state.table.size():
 				invalid_row_ids.append((state.table[idx] as GameState.Row).id)
-		toast(String(check.get("reason", "Ход нельзя завершить")), true)
+		toast(String(check.get("reason", Lang.t("Ход нельзя завершить"))), true)
 		refresh()
 		return
 	# Снимок стола берём ДО отправки: пока идёт запрос, сервер пришлёт
@@ -1751,21 +1763,21 @@ func _on_undo_pressed() -> void:
 	if not _can_act():
 		return
 	if not state.turn_dirty:
-		toast("В этот ход ещё ничего не менялось", false)
+		toast(Lang.t("В этот ход ещё ничего не менялось"), false)
 		return
 	_hint_ids.clear()
 	state.restore_turn_snapshot()
 	invalid_row_ids.clear()
 	refresh()
-	toast("Стол и рука возвращены к началу хода", false)
+	toast(Lang.t("Стол и рука возвращены к началу хода"), false)
 
 func _on_cp_save_pressed() -> void:
 	if not _can_act():
 		return
 	if state.save_checkpoint():
-		toast("Расклад сохранён (чекпоинт)", false)
+		toast(Lang.t("Расклад сохранён (чекпоинт)"), false)
 	else:
-		toast("Сначала что-нибудь измените на столе", false)
+		toast(Lang.t("Сначала что-нибудь измените на столе"), false)
 
 func _on_cp_restore_pressed() -> void:
 	if not _can_act():
@@ -1774,9 +1786,9 @@ func _on_cp_restore_pressed() -> void:
 		_hint_ids.clear()
 		invalid_row_ids.clear()
 		refresh()
-		toast("Возврат к чекпоинту", false)
+		toast(Lang.t("Возврат к чекпоинту"), false)
 	else:
-		toast("Нет сохранённых раскладов", false)
+		toast(Lang.t("Нет сохранённых раскладов"), false)
 
 ## Ключ подсказки — место текущего игрока: и в локальной, и в сетевой
 ## игре действует тот, чей сейчас ход (в сети чужой ход и так закрыт).
@@ -1800,18 +1812,18 @@ func _on_hint_pressed() -> void:
 	var action := String(plan.get("action", ""))
 	if action == "place":
 		_hint_ids = (plan.get("tiles", []) as Array).duplicate()
-		toast("Подсказка: выложите %d %s — это +%d очков" % [
+		toast(Lang.t("Подсказка: выложите %d %s — это +%d очков") % [
 			_hint_ids.size(), _card_word(_hint_ids.size()),
 			int(plan.get("points", 0))], false)
 	elif action == "draw":
-		toast("Подсказка: возьмите число из колоды", false)
+		toast(Lang.t("Подсказка: возьмите число из колоды"), false)
 	elif action == "skip":
-		toast("Подсказка: пропустите ход", false)
+		toast(Lang.t("Подсказка: пропустите ход"), false)
 	else:
 		if state.table_status().get("ok", false):
-			toast("Подсказка: можно завершать ход", false)
+			toast(Lang.t("Подсказка: можно завершать ход"), false)
 		else:
-			toast("Подсказка: закончите перестановку на столе", false)
+			toast(Lang.t("Подсказка: закончите перестановку на столе"), false)
 	refresh()
 
 func _on_resized() -> void:
@@ -2347,23 +2359,23 @@ func _update_chips() -> void:
 		chip.add_theme_stylebox_override("panel", sb)
 		chip.mouse_filter = Control.MOUSE_FILTER_PASS
 		var lab := Label.new()
-		lab.text = "%s · %d" % [state.player_name(i), state.hand_size(i)]
+		lab.text = Lang.t("%s · %d") % [state.player_name(i), state.hand_size(i)]
 		# В сетевой игре показываем и наше место, и «мы тут» — иначе
 		# непонятно, чьи фишки лежат внизу. Отвалившегося помечаем
 		# отдельно: его место держится, но ходить он не может.
 		if _online and i == state.local_seat:
-			lab.text += " · вы"
+			lab.text += Lang.t(" · вы")
 		# Серверные боты добирают места в сетевой партии — их показываем
 		# явно, чтобы игрок понимал, почему «не у того» ход и кто вообще
 		# за столом. Офлайн-ботов одиночной игры не трогаем.
 		if _online and state.is_bot_player(i):
-			lab.text += " · бот"
+			lab.text += Lang.t(" · бот")
 		# Слово «ходит» рядом с подсветкой: по одному цвету рамки в сетевой
 		# партии не понять, чья очередь, а текст читается сразу.
 		if is_now and not state.finished:
-			lab.text += " · ходит"
+			lab.text += Lang.t(" · ходит")
 		if _online and not state.is_connected_player(i):
-			lab.text += " · нет связи"
+			lab.text += Lang.t(" · нет связи")
 		lab.add_theme_font_size_override("font_size", Settings.fs(16))
 		lab.add_theme_color_override("font_color", Color(1, 1, 1, 0.95) if is_now else Color(1, 1, 1, 0.6))
 		chip.add_child(lab)
@@ -2423,7 +2435,7 @@ func _update_hand() -> void:
 func _update_buttons() -> void:
 	if state == null:
 		return
-	deck_button.text = "Колода\n%d" % state.tiles_left_in_deck()
+	deck_button.text = Lang.t("Колода\n%d") % state.tiles_left_in_deck()
 	var placed := not state.turn_placed.is_empty()
 	# В сетевой игре вместо бота — «не наш ход» и «ждём сервер». Разница
 	# видна только в подписях, а вот в кнопках она не нужна.
@@ -2437,19 +2449,19 @@ func _update_buttons() -> void:
 	# но только для того места, которое её потратило.
 	hint_btn.disabled = locked or _is_hint_used()
 	if state.finished:
-		end_button.text = "Игра окончена"
+		end_button.text = Lang.t("Игра окончена")
 		end_button.disabled = true
 	elif _online and _sending:
-		end_button.text = "Ждём…"
+		end_button.text = Lang.t("Ждём…")
 		end_button.disabled = true
 	elif placed:
-		end_button.text = "Продолжить"
+		end_button.text = Lang.t("Продолжить")
 		end_button.disabled = locked
 	elif state.tiles_left_in_deck() > 0:
-		end_button.text = "Взять"
+		end_button.text = Lang.t("Взять")
 		end_button.disabled = locked or not state.can_draw()
 	else:
-		end_button.text = "Пропуск хода"
+		end_button.text = Lang.t("Пропуск хода")
 		end_button.disabled = locked or not state.can_skip()
 
 func _update_hint_zone_size() -> void:
@@ -2591,7 +2603,10 @@ func toast(text: String, is_error: bool = false) -> void:
 	if toast_label == null or _toast_panel == null:
 		return
 	_fit_toast_width()
-	toast_label.text = text
+	# Перевод в точке показа: сюда стекаются и строки клиента, и ответы
+	# сервера (через Net.notice) — сервер всегда шлёт русский, словарь
+	# его накрывает, чего нет в словаре — показывается как пришло.
+	toast_label.text = Lang.t(text)
 	toast_label.add_theme_color_override("font_color", Color("FF8A80") if is_error else Color("A5D6A7"))
 	toast_label.visible = true
 	_toast_panel.visible = true
@@ -2614,10 +2629,4 @@ func _on_toast_input(event: InputEvent) -> void:
 		_hide_toast()
 
 func _card_word(count: int) -> String:
-	var d := count % 10
-	var h := count % 100
-	if d == 1 and h != 11:
-		return "карточку"
-	if d >= 2 and d <= 4 and not (h >= 12 and h <= 14):
-		return "карточки"
-	return "карточек"
+	return Lang.card_word(count)

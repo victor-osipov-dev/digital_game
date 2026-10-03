@@ -1,4 +1,5 @@
 extends Node
+const Lang := preload("res://scripts/core/lang.gd")
 
 # Связь с игровым сервером. Единственное место в клиенте, которое знает
 # про сокеты, TLS и JSON — всё остальное работает через сигналы и await.
@@ -110,10 +111,10 @@ func _open(entry: Dictionary) -> bool:
 	var err := _peer.connect_to_url(servers.url_of(entry), Certs.tls_options_for(entry))
 	if err != OK:
 		_peer = null
-		_fail("не удалось начать подключение к %s" % label)
+		_fail(Lang.t("не удалось начать подключение к %s") % label)
 		return false
 	_state = CONNECTING
-	connection_changed.emit(false, "подключение к %s…" % label)
+	connection_changed.emit(false, Lang.t("подключение к %s…") % label)
 	return true
 
 
@@ -125,11 +126,11 @@ func disconnect_from(keep_session := true) -> void:
 	if not keep_session:
 		_session.clear()
 	_had_session = _session.is_valid()
-	connection_changed.emit(false, "нет связи с сервером")
+	connection_changed.emit(false, Lang.t("нет связи с сервером"))
 
 
 func _teardown(announce: bool) -> void:
-	_fail_waiters("связь с сервером прервана")
+	_fail_waiters(Lang.t("связь с сервером прервана"))
 	if _peer != null:
 		_peer.close()
 		_peer = null
@@ -175,7 +176,7 @@ func server_entry() -> Dictionary:
 	return _entry
 
 func server_label() -> String:
-	return servers.label_of(_entry) if not _entry.is_empty() else "—"
+	return servers.label_of(_entry) if not _entry.is_empty() else Lang.t("—")
 
 func user() -> Dictionary:
 	return _user
@@ -317,7 +318,7 @@ func _on_closed() -> void:
 	# вводить заново. Если не было — это первый вход: сообщаем честно,
 	# молчаливое ожидание выглядит как зависание.
 	if _had_session:
-		connection_changed.emit(false, "связь потеряна (%s), переподключаемся…" % reason)
+		connection_changed.emit(false, Lang.t("связь потеряна (%s), переподключаемся…") % reason)
 	else:
 		connection_changed.emit(false, reason)
 	_schedule_retry()
@@ -325,17 +326,17 @@ func _on_closed() -> void:
 
 func _close_reason() -> String:
 	if _peer == null:
-		return "нет соединения"
+		return Lang.t("нет соединения")
 	var code := _peer.get_close_code()
 	if code == CLOSE_REPLACED:
 		# Сервер отобрал это соединение, потому что игрок вошёл с другой
 		# машины или в другой вкладке. Это не поломка, и переподключаться
 		# нельзя: новая попытка снова отберёт место у той, другой, вкладки,
 		# и игроки будут выгонять друг друга по кругу.
-		return "вход выполнен в другом окне"
+		return Lang.t("вход выполнен в другом окне")
 	if code == 1006 or code == 0:
-		return "соединение оборвано"
-	return "сервер закрыл соединение (код %d)" % code
+		return Lang.t("соединение оборвано")
+	return Lang.t("сервер закрыл соединение (код %d)") % code
 
 
 ## Место в столе занял более новый сокет того же игрока (код из
@@ -391,7 +392,7 @@ func _dispatch(msg: Dictionary) -> void:
 			game_state.emit(view, float(msg.get("grace", 0.0)),
 				bool(msg.get("paused", false)), bool(msg.get("waiting", false)))
 		NetProtocol.GAME_ERROR:
-			game_error.emit(String(msg.get("reason", "ошибка")), bool(msg.get("hard", false)),
+			game_error.emit(String(msg.get("reason", Lang.t("ошибка"))), bool(msg.get("hard", false)),
 				msg.get("errors", []))
 		NetProtocol.GAME_PEEK_S2C:
 			game_peek.emit(int(msg.get("tile", 0)), String(msg.get("kind", "clear")),
@@ -437,7 +438,7 @@ func _resume_silent() -> void:
 		# и пусть игрок войдёт руками.
 		_session.clear()
 		_state = GREETED
-		auth_failed.emit(String(res.get("reason", "сессия больше недействительна")))
+		auth_failed.emit(String(res.get("reason", Lang.t("сессия больше недействительна"))))
 
 
 func _apply_auth(res: Dictionary) -> void:
@@ -490,7 +491,7 @@ signal _reply_arrived
 ## шлёт ровно одно личное сообщение с её меткой.
 func request(cmd: String, payload: Dictionary = {}, expect: PackedStringArray = PackedStringArray()) -> Dictionary:
 	if _peer == null or _peer.get_ready_state() != WebSocketPeer.STATE_OPEN:
-		return { "t": "offline", "reason": "нет связи с сервером" }
+		return { "t": "offline", "reason": Lang.t("нет связи с сервером") }
 	_rid += 1
 	# Метка уникальна на всё время работы клиента: нумератор продолжается
 	# после переподключения, а в метку входит время — старый ответ,
@@ -503,7 +504,7 @@ func request(cmd: String, payload: Dictionary = {}, expect: PackedStringArray = 
 	msg[NetProtocol.RID_FIELD] = rid
 	if not _send(msg):
 		_waiters.erase(waiter)
-		return { "t": "offline", "reason": "не удалось отправить команду" }
+		return { "t": "offline", "reason": Lang.t("не удалось отправить команду") }
 
 	var deadline := Time.get_ticks_msec() + REQUEST_TIMEOUT_MS
 	while Time.get_ticks_msec() < deadline:
@@ -511,10 +512,10 @@ func request(cmd: String, payload: Dictionary = {}, expect: PackedStringArray = 
 			_check_expected(cmd, waiter["msg"], expect)
 			return waiter["msg"]
 		if _peer == null or _peer.get_ready_state() != WebSocketPeer.STATE_OPEN:
-			return { "t": "offline", "reason": "связь прервалась" }
+			return { "t": "offline", "reason": Lang.t("связь прервалась") }
 		await _reply_arrived
 	_waiters.erase(waiter)
-	return { "t": "timeout", "reason": "сервер не ответил вовремя" }
+	return { "t": "timeout", "reason": Lang.t("сервер не ответил вовремя") }
 
 
 ## Тип ответа не тот, что ожидали. Это не поломка (сервер мог добавить
@@ -525,7 +526,7 @@ func _check_expected(cmd: String, msg: Dictionary, expect: PackedStringArray) ->
 		return
 	var kind := String(msg.get("t", ""))
 	if not expect.has(kind):
-		push_warning("на %s ожидали %s, пришло %s" % [cmd, ", ".join(expect), kind])
+		push_warning(Lang.t("на %s ожидали %s, пришло %s") % [cmd, ", ".join(expect), kind])
 
 
 ## Отправляет без ожидания ответа.
@@ -574,14 +575,14 @@ func _await_greet(sec := 6.0) -> bool:
 ## Продолжает прошлую сессию. Ответ: {ok, reason, user}.
 func resume() -> Dictionary:
 	if not await _await_greet():
-		return { "ok": false, "reason": "нет связи с сервером" }
+		return { "ok": false, "reason": Lang.t("нет связи с сервером") }
 	var res := await request(NetProtocol.RESUME, { "token": _session.token })
 	return _finish_auth(res)
 
 
 func login(login_name: String, password: String) -> Dictionary:
 	if not await _await_greet():
-		return { "ok": false, "reason": "нет связи с сервером" }
+		return { "ok": false, "reason": Lang.t("нет связи с сервером") }
 	# Запоминаем ДО ответа сервера: даже если вход не прошёл, вводить
 	# пароль заново не придётся, а _apply_auth допишет логин и токен.
 	remember_password(password)
@@ -591,7 +592,7 @@ func login(login_name: String, password: String) -> Dictionary:
 
 func register(login_name: String, password: String, nick: String) -> Dictionary:
 	if not await _await_greet():
-		return { "ok": false, "reason": "нет связи с сервером" }
+		return { "ok": false, "reason": Lang.t("нет связи с сервером") }
 	remember_password(password)
 	var res := await request(NetProtocol.REGISTER,
 		{ "login": login_name, "password": password, "nick": nick })
@@ -602,7 +603,7 @@ func _finish_auth(res: Dictionary) -> Dictionary:
 	if String(res.get("t", "")) == NetProtocol.AUTH_OK:
 		_apply_auth(res)
 		return { "ok": true, "user": _user }
-	var reason := String(res.get("reason", "вход не удался"))
+	var reason := String(res.get("reason", Lang.t("вход не удался")))
 	auth_failed.emit(reason)
 	return { "ok": false, "reason": reason }
 
@@ -718,7 +719,7 @@ func rejoin_game() -> Dictionary:
 		# Партия живёт в памяти сервера. Перезапустил сервер — партии нет,
 		# и продолжать нечего. Молча возвращаться в лобби нельзя: игрок
 		# решит, что проиграл по правилам.
-		game_lost.emit(String(res.get("reason", "партия недоступна")))
+		game_lost.emit(String(res.get("reason", Lang.t("партия недоступна"))))
 	return res
 
 

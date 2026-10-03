@@ -1,5 +1,6 @@
 class_name Session
 extends RefCounted
+const Lang := preload("res://scripts/core/lang.gd")
 
 # Сохранённая сессия: токен, под которым сервер узнаёт нас без пароля.
 #
@@ -68,7 +69,7 @@ func save() -> void:
 	var tmp := PATH + ".tmp"
 	var f := FileAccess.open(tmp, FileAccess.WRITE)
 	if f == null:
-		push_warning("не удалось записать сессию: %s" % error_string(FileAccess.get_open_error()))
+		push_warning(Lang.t("не удалось записать сессию: %s") % error_string(FileAccess.get_open_error()))
 		return
 	f.store_string(JSON.stringify({
 		"token": token,
@@ -82,4 +83,4 @@ func save() -> void:
 		DirAccess.remove_absolute(PATH)
 		err = DirAccess.rename_absolute(tmp, PATH)
 		if err != OK:
-			push_warning("не удалось сохранить сессию: %s" % error_string(err))
+			push_warning(Lang.t("не удалось сохранить сессию: %s") % error_string(err))

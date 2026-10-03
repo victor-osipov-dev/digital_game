@@ -1,5 +1,6 @@
 class_name OnlineLobby
 extends Control
+const Lang := preload("res://scripts/core/lang.gd")
 
 # Сетевое меню: вход, список комнат со всех серверов, ожидание игроков.
 #
@@ -212,7 +213,7 @@ func _on_net_connection(connected: bool, detail: String) -> void:
 	# использует, чтобы не пересоздавать сокет на ровном месте).
 	if Net.is_online():
 		return
-	_set_note(_busy, "Нет связи с сервером: %s" % detail, true)
+	_set_note(_busy, Lang.t("Нет связи с сервером: %s") % detail, true)
 
 
 func _on_net_greeted(_hello: Dictionary) -> void:
@@ -245,7 +246,7 @@ func _reconcile_room_after_reconnect() -> void:
 	_lobby_room_code = ""
 	if _page_lobby.visible:
 		_goto_rooms()
-		_set_note(_rooms_note, "Комната %s закрылась, пока вы были офлайн" % code, true)
+		_set_note(_rooms_note, Lang.t("Комната %s закрылась, пока вы были офлайн") % code, true)
 
 func _on_net_game_state(_view: Dictionary, _grace: float, _paused: bool, _waiting: bool) -> void:
 	# Партия началась — уходим в неё, сами её не рисуем. Сидим на странице
@@ -313,7 +314,7 @@ func _do_connect() -> void:
 	if entry.is_empty():
 		_set_note(_busy, sv.offline_hint(), true)
 		return
-	_set_note(_busy, "Подключаемся к %s…" % sv.label_of(entry), false)
+	_set_note(_busy, Lang.t("Подключаемся к %s…") % sv.label_of(entry), false)
 	if not Net.connect_to(entry):
 		return
 	# Ждём не фиксированное время, а прихода приветствия: у скрипта нет
@@ -353,11 +354,11 @@ func _do_login() -> void:
 	var login_name := _login_edit.text.strip_edges()
 	var password := _pass_edit.text
 	if login_name.is_empty() or password.is_empty():
-		_auth_note.text = "Заполните логин и пароль"
+		_auth_note.text = Lang.t("Заполните логин и пароль")
 		return
-	_auth_note.text = "Входим…"
+	_auth_note.text = Lang.t("Входим…")
 	var res := await Net.login(login_name, password)
-	_after_auth(res, "Вход выполнен")
+	_after_auth(res, Lang.t("Вход выполнен"))
 
 
 func _do_register() -> void:
@@ -365,14 +366,14 @@ func _do_register() -> void:
 	var password := _pass_edit.text
 	var nick := _nick_edit.text.strip_edges()
 	if login_name.is_empty() or password.is_empty() or nick.is_empty():
-		_auth_note.text = "Заполните логин, пароль и имя"
+		_auth_note.text = Lang.t("Заполните логин, пароль и имя")
 		return
 	if password.length() < 4:
-		_auth_note.text = "Пароль слишком короткий (минимум 4 символа)"
+		_auth_note.text = Lang.t("Пароль слишком короткий (минимум 4 символа)")
 		return
-	_auth_note.text = "Создаём аккаунт…"
+	_auth_note.text = Lang.t("Создаём аккаунт…")
 	var res := await Net.register(login_name, password, nick)
-	_after_auth(res, "Аккаунт создан")
+	_after_auth(res, Lang.t("Аккаунт создан"))
 
 
 func _after_auth(res: Dictionary, ok_text: String) -> void:
@@ -385,7 +386,7 @@ func _after_auth(res: Dictionary, ok_text: String) -> void:
 		_auth_note.text = ok_text
 		_goto_rooms()
 		return
-	_auth_note.text = _reason(res, "Не удалось войти")
+	_auth_note.text = _reason(res, Lang.t("Не удалось войти"))
 
 
 func _do_logout() -> void:
@@ -411,7 +412,7 @@ func _goto_rooms() -> void:
 ## живых серверов нет, список всё равно не придёт, а сообщение об этом
 ## должно быть предметным, а не «ничего не нашлось».
 func _load_rooms() -> void:
-	_set_busy("Собираем список комнат…")
+	_set_busy(Lang.t("Собираем список комнат…"))
 	await Net.servers.probe(true)
 	_update_presence()
 	if not Net.servers.any_online():
@@ -430,9 +431,9 @@ func _load_rooms() -> void:
 	_rooms_page = 0
 	var failed: Array = got.get("failedServers", [])
 	if failed.is_empty():
-		_rooms_note.text = "Комнат найдено: %d" % _rooms.size()
+		_rooms_note.text = Lang.t("Комнат найдено: %d") % _rooms.size()
 	else:
-		_rooms_note.text = "Показаны комнаты без %s. Остальные серверы не ответили." % \
+		_rooms_note.text = Lang.t("Показаны комнаты без %s. Остальные серверы не ответили.") % \
 			", ".join(_failed_names(failed))
 	_render_rooms()
 	_set_busy("")
@@ -459,7 +460,7 @@ func _render_rooms() -> void:
 	_rooms_page = clampi(_rooms_page, 0, pages - 1)
 	if total == 0:
 		var empty := Label.new()
-		empty.text = "Пока никто не создал комнату. Создайте свою."
+		empty.text = Lang.t("Пока никто не создал комнату. Создайте свою.")
 		empty.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		# Перенос обязателен: без него минимальная ширина равна всей
 		# строке, и на гигантском тексте плейсхолдер растягивал
@@ -475,7 +476,7 @@ func _render_rooms() -> void:
 	# Пагинацию прячем, пока всё влезает на одну страницу: бабушке
 	# лишние кнопки ни к чему.
 	_page_row.visible = pages > 1
-	_page_label.text = "Стр. %d из %d" % [_rooms_page + 1, pages]
+	_page_label.text = Lang.t("Стр. %d из %d") % [_rooms_page + 1, pages]
 	_page_prev.disabled = _rooms_page <= 0
 	_page_next.disabled = _rooms_page >= pages - 1
 	ScrollFix.relax(_rooms_box)
@@ -512,17 +513,17 @@ func _make_room_row(room: Dictionary) -> Control:
 	# от него не оставалось ничего: длинная строка переносилась на три
 	# строки и выпирала из карточки. Сервер виден отдельно, в строке
 	# статуса сверху.
-	var text := "%s · %d/%d" % [String(room.get("name", "?")), filled, seats]
+	var text := Lang.t("%s · %d/%d") % [String(room.get("name", "?")), filled, seats]
 	# Идущую партию тоже показываем в списке: в неё можно войти вместо
 	# бота. Помечать надо явно — иначе по «N/M» человека примут её за
 	# лобби, где можно сесть на свободное место.
 	if String(room.get("state", "")) == "playing":
-		text += " · идёт"
+		text += Lang.t(" · идёт")
 	var bots := int(room.get("bots", 0))
 	if bots > 0:
-		text += " · боты %d" % bots
+		text += Lang.t(" · боты %d") % bots
 	if bool(room.get("hasPassword", false)):
-		text += " · пароль"
+		text += Lang.t(" · пароль")
 
 	var lab := Label.new()
 	lab.text = text
@@ -534,7 +535,7 @@ func _make_room_row(room: Dictionary) -> Control:
 	box.add_child(lab)
 
 	var join := Button.new()
-	join.text = "Войти"
+	join.text = Lang.t("Войти")
 	join.custom_minimum_size = Vector2(Settings.touch_w(84), Settings.touch(38))
 	join.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	join.add_theme_font_size_override("font_size", Settings.fs(16))
@@ -553,12 +554,12 @@ func _do_join(code: String, server_id: String, password: String) -> void:
 	# переподключиться, между шагами комната может закрыться, и мы
 	# окажемся в лобби чужого сервера без партии.
 	if not server_id.is_empty() and server_id != String(Net.server_entry().get("id", "")):
-		if not await _switch_to(server_id, "Комната на сервере %s" % server_id):
+		if not await _switch_to(server_id, Lang.t("Комната на сервере %s") % server_id):
 			return
 	if not Net.is_logged_in():
 		_enter_auth()
 		return
-	_set_busy("Заходим в %s…" % code)
+	_set_busy(Lang.t("Заходим в %s…") % code)
 	var res := await Net.join_room(code, password)
 	_set_busy("")
 	if _enter_from_join(res):
@@ -572,21 +573,21 @@ func _do_join(code: String, server_id: String, password: String) -> void:
 			var other_id := String((other["entry"] as Dictionary).get("id", ""))
 			if other_id == home:
 				continue
-			if not await _switch_to(other_id, "Ищем комнату"):
+			if not await _switch_to(other_id, Lang.t("Ищем комнату")):
 				return
 			var again := await Net.join_room(code, password)
 			if _enter_from_join(again):
 				return
 			# Не нашли и здесь. Возвращаемся домой: оставшись на чужом
 			# сервере, мы бы молча смотрели не на тот список комнат.
-			await _switch_to(home, "Возвращаемся")
+			await _switch_to(home, Lang.t("Возвращаемся"))
 			break
 	var failed_code := String(res.get("reason", "")) == "Комната не найдена"
 	if failed_code and String(Net.pending_room().get("code", "")).to_upper() == code.to_upper():
 		# Возврат в комнату, которую сервер больше не знает: место за нами
 		# не держится, и напоминание «вы всё ещё в комнате» врало бы.
 		Net.clear_pending_room()
-	_set_note(_rooms_note, _reason(res, "Не удалось войти в комнату"), true)
+	_set_note(_rooms_note, _reason(res, Lang.t("Не удалось войти в комнату")), true)
 
 
 ## Разбор ответа на ROOM_JOIN: лобби комнаты или — если мы последним
@@ -614,12 +615,12 @@ func _enter_from_join(res: Dictionary) -> bool:
 func _switch_to(id: String, why: String) -> bool:
 	var entry := Net.servers.by_id(id)
 	if entry.is_empty():
-		_set_note(_rooms_note, "Сервер %s больше не в списке" % id, true)
+		_set_note(_rooms_note, Lang.t("Сервер %s больше не в списке") % id, true)
 		return false
-	_set_busy("%s: %s…" % [why, Net.servers.label_of(entry)])
+	_set_busy(Lang.t("%s: %s…") % [why, Net.servers.label_of(entry)])
 	if not Net.connect_to(entry):
 		_set_busy("")
-		_set_note(_rooms_note, "Не удалось подключиться к %s" % Net.servers.label_of(entry), true)
+		_set_note(_rooms_note, Lang.t("Не удалось подключиться к %s") % Net.servers.label_of(entry), true)
 		return false
 	# Соединение поднимается асинхронно: ждём готовности, иначе первый
 	# же запрос уйдёт в ещё не открытый сокет.
@@ -628,7 +629,8 @@ func _switch_to(id: String, why: String) -> bool:
 		await get_tree().process_frame
 	_set_busy("")
 	if not Net.is_logged_in():
-		_set_note(_rooms_note, "Сессия не восстановилась на %s" % Net.servers.label_of(entry), true)
+		_set_note(_rooms_note, Lang.t(
+			"Сессия не восстановилась на %s") % Net.servers.label_of(entry), true)
 		return false
 	return true
 
@@ -644,16 +646,16 @@ func _do_create() -> void:
 		_set_note(_rooms_note, Net.servers.offline_hint(), true)
 		return
 	if String(entry.get("id", "")) != String(Net.server_entry().get("id", "")):
-		if not await _switch_to(String(entry.get("id", "")), "Создаём комнату"):
+		if not await _switch_to(String(entry.get("id", "")), Lang.t("Создаём комнату")):
 			return
-	_set_busy("Создаём комнату на %s…" % Net.servers.label_of(entry))
+	_set_busy(Lang.t("Создаём комнату на %s…") % Net.servers.label_of(entry))
 	var res := await Net.create_room(
 		_seats_option.get_selected_id(), _create_require_30(), _room_name.text, _room_pass.text)
 	_set_busy("")
 	if String(res.get("t", "")) == NetProtocol.ROOM_STATE:
 		_show_lobby(res.get("room", {}))
 		return
-	_set_note(_rooms_note, _reason(res, "Не удалось создать комнату"), true)
+	_set_note(_rooms_note, _reason(res, Lang.t("Не удалось создать комнату")), true)
 
 
 func _do_quick() -> void:
@@ -676,15 +678,15 @@ func _do_quick() -> void:
 		_set_note(_rooms_note, Net.servers.offline_hint(), true)
 		return
 	if String(entry.get("id", "")) != String(Net.server_entry().get("id", "")):
-		if not await _switch_to(String(entry.get("id", "")), "Создаём комнату"):
+		if not await _switch_to(String(entry.get("id", "")), Lang.t("Создаём комнату")):
 			return
-	_set_busy("Создаём комнату на %s…" % Net.servers.label_of(entry))
-	var res := await Net.create_room(4, _create_require_30(), "Быстрая игра", "")
+	_set_busy(Lang.t("Создаём комнату на %s…") % Net.servers.label_of(entry))
+	var res := await Net.create_room(4, _create_require_30(), Lang.t("Быстрая игра"), "")
 	_set_busy("")
 	if String(res.get("t", "")) == NetProtocol.ROOM_STATE:
 		_show_lobby(res.get("room", {}))
 		return
-	_set_note(_rooms_note, _reason(res, "Не удалось создать комнату"), true)
+	_set_note(_rooms_note, _reason(res, Lang.t("Не удалось создать комнату")), true)
 
 
 ## Кандидат для быстрого матча: публичная комната, где уже есть люди.
@@ -748,7 +750,7 @@ func _show_lobby(room: Dictionary) -> void:
 		# от ROOM_STATE, который сбрасывает pending.
 		Net.park_room(room)
 	_set_page(_page_lobby)
-	_lobby_code.text = "Комната %s" % String(room.get("code", "?"))
+	_lobby_code.text = Lang.t("Комната %s") % String(room.get("code", "?"))
 	_lobby_note.text = ""
 	for child in _lobby_players.get_children():
 		_lobby_players.remove_child(child)
@@ -768,12 +770,12 @@ func _show_lobby(room: Dictionary) -> void:
 		var line := Label.new()
 		var nick := String(d.get("nick", "?"))
 		if not is_taken:
-			nick = "— свободно —"
+			nick = Lang.t("— свободно —")
 		elif not bool(d.get("connected", true)):
-			nick += "  (нет связи)"
+			nick += Lang.t("  (нет связи)")
 		if int(d.get("seat", -1)) == me:
-			nick = "▶ " + nick
-		line.text = "Место %d:  %s" % [int(d.get("seat", 0)) + 1, nick]
+			nick = Lang.t("▶ ") + nick
+		line.text = Lang.t("Место %d:  %s") % [int(d.get("seat", 0)) + 1, nick]
 		# Ник чужой и длинный, а без переноса строка задавала бы ширину
 		# всей странице лобби — тот же выезд вправо, что и у плейсхолдера.
 		line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -787,9 +789,9 @@ func _show_lobby(room: Dictionary) -> void:
 	var is_host := bool(room.get("isHost", false))
 	var all_in := taken >= seats
 	_lobby_all_in = all_in
-	_lobby_seats.text = "%s · свободно %d из %d · первый ход: %s" % [
+	_lobby_seats.text = Lang.t("%s · свободно %d из %d · первый ход: %s") % [
 		Net.server_label(), maxi(0, seats - taken), seats,
-		"от 30" if bool(room.get("require30", true)) else "любой",
+		Lang.t("от 30") if bool(room.get("require30", true)) else Lang.t("любой"),
 	]
 	# Боты добирают пустые места сами (при заполнении или по таймеру
 	# автостарта), поэтому кнопке «Начать» вместе со всеми не нужен —
@@ -797,24 +799,24 @@ func _show_lobby(room: Dictionary) -> void:
 	_lobby_ready = taken >= 2
 	_start_btn.visible = is_host
 	if is_host:
-		_start_btn.text = "Начать партию" if _lobby_ready \
-			else "Ждём игроков (%d из %d)" % [taken, seats]
+		_start_btn.text = Lang.t("Начать партию") if _lobby_ready \
+			else Lang.t("Ждём игроков (%d из %d)") % [taken, seats]
 	_update_buttons()
 	# Правило лобби: для начала нужны двое живых игроков, остальные
 	# места занимают боты. Раньше тут вралось про «начнём с ботами»,
 	# хотя сервер без двух людей партию не начинает.
-	_auto_hint.text = "Для начала нужны двое живых игроков — остальные места займут боты."
+	_auto_hint.text = Lang.t("Для начала нужны двое живых игроков — остальные места займут боты.")
 	# Сервер всё равно не начнёт, пока не придут двое и не все будут на
 	# связи, — но сказать об этом заранее честнее, чем ловить отказ.
 	_set_note(_lobby_note,
-		("Все на месте. %s" % ("Начинайте." if is_host else "Ждём, начнёт хост."))
-		if all_in else ("Ждём остальных игроков (%d из %d)." % [taken, seats]),
+		(Lang.t("Все на месте. %s") % (Lang.t("Начинайте.") if is_host else Lang.t("Ждём, начнёт хост.")))
+		if all_in else (Lang.t("Ждём остальных игроков (%d из %d).") % [taken, seats]),
 		false)
 	ScrollFix.relax(_lobby_players)
 
 
 func _do_start() -> void:
-	_set_busy("Начинаем…")
+	_set_busy(Lang.t("Начинаем…"))
 	var res := await Net.start_room()
 	_set_busy("")
 	if String(res.get("t", "")) == NetProtocol.GAME_STATE:
@@ -826,7 +828,7 @@ func _do_start() -> void:
 		Net.plan_game(true)
 		_go_scene("res://scenes/game.tscn")
 		return
-	_set_note(_lobby_note, _reason(res, "Не удалось начать партию"), true)
+	_set_note(_lobby_note, _reason(res, Lang.t("Не удалось начать партию")), true)
 
 
 func _do_leave_room() -> void:
@@ -849,9 +851,9 @@ func _refresh_stuck(_room := {}) -> void:
 		return
 	var code := String(pending.get("code", "?"))
 	var playing := String(pending.get("state", "")) == "playing"
-	_stuck_label.text = "Вы всё ещё в комнате %s: %s. " % [code, _stuck_where(pending)]
-	_stuck_label.text += "Вернитесь в неё или покиньте насовсем."
-	_return_btn.text = "Вернуться в партию" if playing else "Вернуться в комнату"
+	_stuck_label.text = Lang.t("Вы всё ещё в комнате %s: %s. ") % [code, _stuck_where(pending)]
+	_stuck_label.text += Lang.t("Вернитесь в неё или покиньте насовсем.")
+	_return_btn.text = Lang.t("Вернуться в партию") if playing else Lang.t("Вернуться в комнату")
 	_stuck_box.visible = true
 	# Текст кнопки сменился — вместе с ним пересчитываем и ряд:
 	# ширина кнопок зависит от подписи («в партию» / «в комнату»).
@@ -864,16 +866,16 @@ func _refresh_stuck(_room := {}) -> void:
 ## Одного «игроки в сборе» врало бы: человек ждал бы несуществующих.
 func _stuck_where(pending: Dictionary) -> String:
 	if String(pending.get("state", "")) == "playing":
-		return "партия идёт"
+		return Lang.t("партия идёт")
 	if not pending.has("players"):
-		return "игроки в сборе"
+		return Lang.t("игроки в сборе")
 	var n := 0
 	for p in pending.get("players", []):
 		if p is Dictionary and not bool((p as Dictionary).get("empty", false)):
 			n += 1
 	if n <= 1:
-		return "кроме вас никого нет"
-	return "игроки в сборе"
+		return Lang.t("кроме вас никого нет")
+	return Lang.t("игроки в сборе")
 
 
 ## «Вернуться» с баннера. Для партии — просто открываем сцену: свежее
@@ -885,7 +887,7 @@ func _do_return_room() -> void:
 		if not Net.is_online():
 			# Без связи сцена партии в _ready ушла бы в локальную игру, а
 			# это не «вернуться в партию». Лучше честно сказать, что связи нет.
-			_set_note(_rooms_note, "Нет связи с сервером: вернуться в партию пока нельзя", true)
+			_set_note(_rooms_note, Lang.t("Нет связи с сервером: вернуться в партию пока нельзя"), true)
 			return
 		Net.plan_game(true)
 		_go_scene("res://scenes/game.tscn")
@@ -899,12 +901,12 @@ func _do_return_room() -> void:
 ## true, если комната покинута; false, если сервер отказал и причина
 ## выведена в _rooms_note.
 func _do_drop_room() -> bool:
-	_set_busy("Покидаем комнату…")
+	_set_busy(Lang.t("Покидаем комнату…"))
 	var res := await Net.drop_room()
 	_set_busy("")
 	if String(res.get("t", "")) == NetProtocol.ROOM_LEFT:
 		return true
-	_set_note(_rooms_note, _reason(res, "Не удалось покинуть комнату"), true)
+	_set_note(_rooms_note, _reason(res, Lang.t("Не удалось покинуть комнату")), true)
 	return false
 
 
@@ -1142,17 +1144,17 @@ func _update_buttons() -> void:
 
 
 func _update_status() -> void:
-	var text := "Сервер: %s" % Net.server_label()
+	var text := Lang.t("Сервер: %s") % Net.server_label()
 	var warn := false
 	if not Net.is_online():
-		text = "Нет связи с сервером"
+		text = Lang.t("Нет связи с сервером")
 		warn = true
 	elif not Net.is_greeted():
 		# Сокет поднят, но сервер ещё не поздоровался. Молчать тут
 		# нельзя: игрок видит серые кнопки и ждёт, что сломалось.
-		text += " · подключение…"
+		text += Lang.t(" · подключение…")
 	elif Net.is_logged_in():
-		text += " · %s" % Net.session_nick()
+		text += Lang.t(" · %s") % Net.session_nick()
 	_set_note(_status, text, warn)
 
 
@@ -1176,7 +1178,7 @@ func _update_presence() -> void:
 	if up == total:
 		return
 	var lab := Label.new()
-	lab.text = "Серверов в сети: %d из %d" % [up, total]
+	lab.text = Lang.t("Серверов в сети: %d из %d") % [up, total]
 	lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	lab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	lab.add_theme_font_size_override("font_size", Settings.fs(13))
@@ -1190,12 +1192,13 @@ func _reason(res: Dictionary, fallback: String) -> String:
 	if text.is_empty():
 		match String(res.get("t", "")):
 			"offline":
-				return "Нет связи с сервером"
+				return Lang.t("Нет связи с сервером")
 			"timeout":
-				return "Сервер не ответил вовремя"
+				return Lang.t("Сервер не ответил вовремя")
 			NetProtocol.AUTH_ERR:
-				return "Не удалось войти"
-	return text if not text.is_empty() else fallback
+				return Lang.t("Не удалось войти")
+	# Причина с провода (сервер всегда шлёт русский) — через словарь.
+	return Lang.t(text) if not text.is_empty() else fallback
 
 
 func _set_note(label: Label, text: String, warn: bool) -> void:
@@ -1363,13 +1366,13 @@ func _build() -> void:
 	# его на «ИГРА / ПО / СЕТИ», поэтому он не переносится вовсе. Шрифт
 	# ему подбирает _relayout — на узком экране он ужимается сам,
 	# иначе надпись обрезается по краю.
-	_title = _header("ИГРА ПО СЕТИ", 22, false)
+	_title = _header(Lang.t("ИГРА ПО СЕТИ"), 22, false)
 	# Заголовок тянется на всё, что осталось после «Назад», и никакого
 	# распорки-распорки между ними: у Label с clip_text минимальная
 	# ширина нулевая, поэтому пустое место перед кнопкой забирал себе
 	# он, а обрезался заголовок.
 	_head.add_child(_title)
-	_back_btn = _button("Назад", 16)
+	_back_btn = _button(Lang.t("Назад"), 16)
 	_back_btn.custom_minimum_size = Vector2(Settings.touch_w(110), Settings.touch(40))
 	_back_btn.pressed.connect(close)
 	_head.add_child(_back_btn)
@@ -1478,25 +1481,25 @@ func _build_auth() -> VBoxContainer:
 	page.add_theme_constant_override("separation", 12)
 	page.visible = false
 
-	page.add_child(_header("Вход", 19))
-	_login_edit = _field("логин")
+	page.add_child(_header(Lang.t("Вход"), 19))
+	_login_edit = _field(Lang.t("логин"))
 	page.add_child(_login_edit)
-	_pass_edit = _field("пароль", true)
+	_pass_edit = _field(Lang.t("пароль"), true)
 	# Набранный пароль запоминаем сразу, а не только по кнопке
 	# «Войти»: игрок может закрыть игру, не доходя до входа, и
 	# рассчитывать, что в следующий раз поле уже заполнено.
 	_pass_edit.text_changed.connect(_on_pass_typed)
 	page.add_child(_pass_edit)
-	page.add_child(_header("Если аккаунта нет", 15))
-	_nick_edit = _field("имя в игре")
+	page.add_child(_header(Lang.t("Если аккаунта нет"), 15))
+	_nick_edit = _field(Lang.t("имя в игре"))
 	page.add_child(_nick_edit)
 
-	_login_btn = _button("Войти", 17)
+	_login_btn = _button(Lang.t("Войти"), 17)
 	_login_btn.pressed.connect(_do_login)
 	_apply_accent(_login_btn, Color("1565C0"), Color("1976D2"), Color("0D47A1"))
 	page.add_child(_login_btn)
 
-	_register_btn = _button("Регистрация", 15)
+	_register_btn = _button(Lang.t("Регистрация"), 15)
 	_register_btn.pressed.connect(_do_register)
 	page.add_child(_register_btn)
 
@@ -1555,18 +1558,18 @@ func _build_rooms() -> VBoxContainer:
 	_stack_rows.append(stuck_row)
 	# Две кнопки в ряд на узком экране сжимаются в «ВернутьсяПокинуть» —
 	# ряд складывается в столбик в _relayout.
-	_return_btn = _button("Вернуться", 16)
+	_return_btn = _button(Lang.t("Вернуться"), 16)
 	_return_btn.pressed.connect(_do_return_room)
 	_apply_accent(_return_btn, Color("2E7D32"), Color("388E3C"), Color("1B5E20"))
 	stuck_row.add_child(_return_btn)
-	_drop_btn = _button("Покинуть", 16)
+	_drop_btn = _button(Lang.t("Покинуть"), 16)
 	_drop_btn.pressed.connect(_do_drop_room)
 	stuck_row.add_child(_drop_btn)
 
 	# --- быстрая игра: одна большая кнопка вместо мелкого «Быстрый».
 	# Параметры очереди (места, «от 30») берутся из формы создания ниже:
 	# она может быть скрыта за вкладкой, но значения в контролах живут.
-	_play_btn = _button("Играть по сети", 20)
+	_play_btn = _button(Lang.t("Играть по сети"), 20)
 	_play_btn.custom_minimum_size = Vector2(0, Settings.touch(58))
 	_play_btn.pressed.connect(_do_quick)
 	_apply_accent(_play_btn, Color("2E7D32"), Color("388E3C"), Color("1B5E20"))
@@ -1583,12 +1586,12 @@ func _build_rooms() -> VBoxContainer:
 	_tabs_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	page.add_child(_tabs_row)
 	_stack_rows.append(_tabs_row)
-	_tab_create_btn = _button("Создать комнату", 15)
+	_tab_create_btn = _button(Lang.t("Создать комнату"), 15)
 	_tab_create_btn.toggle_mode = true
 	_tab_create_btn.button_group = _tab_group
 	_tab_create_btn.toggled.connect(_on_rooms_tab_toggled)
 	_tabs_row.add_child(_tab_create_btn)
-	_tab_code_btn = _button("Войти по коду", 15)
+	_tab_code_btn = _button(Lang.t("Войти по коду"), 15)
 	_tab_code_btn.toggle_mode = true
 	_tab_code_btn.button_group = _tab_group
 	_tab_code_btn.toggled.connect(_on_rooms_tab_toggled)
@@ -1599,7 +1602,7 @@ func _build_rooms() -> VBoxContainer:
 	_create_box.add_theme_constant_override("separation", 8)
 	_create_box.visible = false
 	page.add_child(_create_box)
-	_create_box.add_child(_header("Своя комната", 19))
+	_create_box.add_child(_header(Lang.t("Своя комната"), 19))
 	var create_row := BoxContainer.new()
 	_create_row = create_row
 	create_row.add_theme_constant_override("separation", 8)
@@ -1612,14 +1615,14 @@ func _build_rooms() -> VBoxContainer:
 	_seats_option.custom_minimum_size = Vector2(Settings.touch_w(110), Settings.touch(44))
 	Settings.style_option(_seats_option, 15)
 	for n in range(2, 6):
-		_seats_option.add_item("мест: %d" % n)
+		_seats_option.add_item(Lang.t("мест: %d") % n)
 		_seats_option.set_item_id(_seats_option.get_item_count() - 1, n)
 	_seats_option.select(1)
 	create_row.add_child(_seats_option)
-	_room_name = _field("название (необязательно)")
+	_room_name = _field(Lang.t("название (необязательно)"))
 	_room_name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	create_row.add_child(_room_name)
-	_room_pass = _field("пароль (необязательно)", true)
+	_room_pass = _field(Lang.t("пароль (необязательно)"), true)
 	_room_pass.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	create_row.add_child(_room_pass)
 	_require_30 = CheckBox.new()
@@ -1627,13 +1630,13 @@ func _build_rooms() -> VBoxContainer:
 	# минимальная ширина равна всей строке. На узком экране длинный
 	# текст («Первый ход: минимум 30 очков») растягивал страницу
 	# шире окна и уезжал за правый край вместе со всем остальным.
-	_require_30.text = "Первый ход: от 30"
+	_require_30.text = Lang.t("Первый ход: от 30")
 	_require_30.button_pressed = Settings.require_30
 	_require_30.add_theme_font_size_override("font_size", Settings.fs(15))
 	_require_30.add_theme_color_override("font_color", Color(1, 1, 1, 0.9))
 	UiThemeClass.fit_checkbox(_require_30)
 	_create_box.add_child(_require_30)
-	_create_btn = _button("Создать", 16)
+	_create_btn = _button(Lang.t("Создать"), 16)
 	_create_btn.pressed.connect(_do_create)
 	_apply_accent(_create_btn, Color("2E7D32"), Color("388E3C"), Color("1B5E20"))
 	_create_box.add_child(_create_btn)
@@ -1644,24 +1647,24 @@ func _build_rooms() -> VBoxContainer:
 	_code_box.add_theme_constant_override("separation", 8)
 	_code_box.visible = false
 	page.add_child(_code_box)
-	_code_box.add_child(_header("Войти по коду", 15))
+	_code_box.add_child(_header(Lang.t("Войти по коду"), 15))
 	var code_row := BoxContainer.new()
 	code_row.add_theme_constant_override("separation", 8)
 	_code_box.add_child(code_row)
 	_stack_rows.append(code_row)
-	_join_code = _field("код")
+	_join_code = _field(Lang.t("код"))
 	_join_code.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	code_row.add_child(_join_code)
-	_join_pass = _field("пароль", true)
+	_join_pass = _field(Lang.t("пароль"), true)
 	_join_pass.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	code_row.add_child(_join_pass)
-	_join_btn = _button("Войти", 15)
+	_join_btn = _button(Lang.t("Войти"), 15)
 	_join_btn.pressed.connect(func(): _do_join(
 		_join_code.text.strip_edges().to_upper(), "", _join_pass.text))
 	_code_box.add_child(_join_btn)
 
 	# --- список
-	page.add_child(_header("Все комнаты", 19))
+	page.add_child(_header(Lang.t("Все комнаты"), 19))
 	var head := BoxContainer.new()
 	head.add_theme_constant_override("separation", 8)
 	page.add_child(head)
@@ -1673,7 +1676,7 @@ func _build_rooms() -> VBoxContainer:
 	_rooms_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_rooms_note.add_theme_font_size_override("font_size", Settings.fs(15))
 	head.add_child(_rooms_note)
-	_refresh_btn = _button("Обновить", 15)
+	_refresh_btn = _button(Lang.t("Обновить"), 15)
 	_refresh_btn.custom_minimum_size = Vector2(Settings.touch_w(120), Settings.touch(40))
 	_refresh_btn.pressed.connect(_refresh_rooms)
 	head.add_child(_refresh_btn)
@@ -1694,7 +1697,7 @@ func _build_rooms() -> VBoxContainer:
 	_page_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	page.add_child(_page_row)
 	_stack_rows.append(_page_row)
-	_page_prev = _button("‹", 16)
+	_page_prev = _button(Lang.t("‹"), 16)
 	_page_prev.pressed.connect(_page_step.bind(-1))
 	_page_row.add_child(_page_prev)
 	_page_label = Label.new()
@@ -1702,7 +1705,7 @@ func _build_rooms() -> VBoxContainer:
 	_page_label.add_theme_font_size_override("font_size", Settings.fs(15))
 	_page_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.7))
 	_page_row.add_child(_page_label)
-	_page_next = _button("›", 16)
+	_page_next = _button(Lang.t("›"), 16)
 	_page_next.pressed.connect(_page_step.bind(1))
 	_page_row.add_child(_page_next)
 	_page_row.visible = false
@@ -1715,7 +1718,7 @@ func _logout_row(page: VBoxContainer) -> void:
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_END
 	page.add_child(row)
-	var out := _button("Выйти", 15)
+	var out := _button(Lang.t("Выйти"), 15)
 	# Ряд не складывается (обычный HBox), и нулевой минимум кнопки
 	# с clip_text давал полоску в 8 px с полностью срезанной подписью.
 	out.custom_minimum_size = Vector2(
@@ -1761,12 +1764,12 @@ func _build_lobby() -> VBoxContainer:
 	_lobby_note.visible = false
 	page.add_child(_lobby_note)
 
-	_start_btn = _button("Начать", 18)
+	_start_btn = _button(Lang.t("Начать"), 18)
 	_start_btn.pressed.connect(_do_start)
 	_apply_accent(_start_btn, Color("2E7D32"), Color("388E3C"), Color("1B5E20"))
 	page.add_child(_start_btn)
 
-	_leave_btn = _button("Выйти", 15)
+	_leave_btn = _button(Lang.t("Выйти"), 15)
 	_leave_btn.pressed.connect(_do_leave_room)
 	page.add_child(_leave_btn)
 	return page
