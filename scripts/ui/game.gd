@@ -65,6 +65,7 @@ var _burger_panel: PanelContainer = null
 var _burger_box: VBoxContainer = null
 var _burger_open := false
 var _burger_catcher: ColorRect = null
+var _burger_closed_ms := 0
 var _top_collapsed := false
 var _burger_tween: Tween = null
 
@@ -745,6 +746,10 @@ func _sync_top_bar() -> void:
 
 
 func _toggle_burger_menu() -> void:
+	# Тап, закрывший меню через ловец, отдаёт ещё и release в кнопку
+	# под ним: без паузы меню тут же открылось бы обратно.
+	if Time.get_ticks_msec() - _burger_closed_ms < 350:
+		return
 	_set_burger_open(not _burger_open)
 
 
@@ -815,16 +820,16 @@ func _place_burger_panel() -> void:
 
 
 func _on_burger_catcher(event: InputEvent) -> void:
+	var tap := false
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
-		if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
-			_set_burger_open(false)
-			_burger_catcher.accept_event()
-			return
-	if event is InputEventScreenTouch:
-		if (event as InputEventScreenTouch).pressed:
-			_set_burger_open(false)
-			_burger_catcher.accept_event()
+		tap = mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT
+	elif event is InputEventScreenTouch:
+		tap = (event as InputEventScreenTouch).pressed
+	if tap:
+		_burger_closed_ms = Time.get_ticks_msec()
+		_set_burger_open(false)
+		_burger_catcher.accept_event()
 
 func _apply_accent_style(button: Button, normal: Color, hover: Color, pressed: Color) -> void:
 	var sb_normal := StyleBoxFlat.new()

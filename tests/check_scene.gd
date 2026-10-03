@@ -223,6 +223,23 @@ func _burger_checks() -> void:
 	check(not bool(inst.get("_burger_open")), "burger closes on second press")
 	check(not (panel as Control).visible, "burger panel hidden after close")
 	check((bar as Control).get_child_count() == bar_kids, "bar children unchanged by burger")
+	# Гонка повторного тапа: press гасит меню через ловец, а долетевший
+	# следом release в кнопку не должен открывать его обратно.
+	(burger as Button).pressed.emit()
+	await create_timer(0.5).timeout
+	check(bool(inst.get("_burger_open")), "burger reopens for race test")
+	var press := InputEventMouseButton.new()
+	press.button_index = MOUSE_BUTTON_LEFT
+	press.pressed = true
+	inst.call("_on_burger_catcher", press)
+	check(not bool(inst.get("_burger_open")), "catcher tap closes menu")
+	(burger as Button).pressed.emit()
+	check(not bool(inst.get("_burger_open")), "stale release doesn't reopen")
+	await create_timer(0.45).timeout
+	(burger as Button).pressed.emit()
+	check(bool(inst.get("_burger_open")), "tap after pause opens again")
+	(burger as Button).pressed.emit()
+	await create_timer(0.5).timeout
 	settings.text_scale = saved_scale
 	inst.call("_rebuild_ui")
 	for i in range(4):

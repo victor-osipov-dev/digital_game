@@ -124,11 +124,25 @@ func _refresh_online_note(_room := {}) -> void:
 	var playing := String(pending.get("state", "")) == "playing"
 	_online_note.text = "Вы всё ещё в комнате %s: %s." % [
 		String(pending.get("code", "?")),
-		"партия идёт" if playing else "игроки в сборе",
+		"партия идёт" if playing else _room_where(pending),
 	]
 	_online_note.visible = true
 	_room_actions.visible = true
 	_sync_scroll_min()
+
+
+## Кто в комнате кроме нас: одного «игроки в сборе» врало бы.
+## Дублирует лоббийный подсчёт — лобби и меню не делят код.
+func _room_where(pending: Dictionary) -> String:
+	if not pending.has("players"):
+		return "игроки в сборе"
+	var n := 0
+	for p in pending.get("players", []):
+		if p is Dictionary and not bool((p as Dictionary).get("empty", false)):
+			n += 1
+	if n <= 1:
+		return "кроме вас никого нет"
+	return "игроки в сборе"
 
 func _ready() -> void:
 	_build_ui()

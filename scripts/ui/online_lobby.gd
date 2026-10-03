@@ -849,10 +849,7 @@ func _refresh_stuck(_room := {}) -> void:
 		return
 	var code := String(pending.get("code", "?"))
 	var playing := String(pending.get("state", "")) == "playing"
-	var where := "игроки в сборе"
-	if playing:
-		where = "партия идёт"
-	_stuck_label.text = "Вы всё ещё в комнате %s: %s. " % [code, where]
+	_stuck_label.text = "Вы всё ещё в комнате %s: %s. " % [code, _stuck_where(pending)]
 	_stuck_label.text += "Вернитесь в неё или покиньте насовсем."
 	_return_btn.text = "Вернуться в партию" if playing else "Вернуться в комнату"
 	_stuck_box.visible = true
@@ -861,6 +858,22 @@ func _refresh_stuck(_room := {}) -> void:
 	if _stuck_row != null and _avail_w > 0.0:
 		_stack(_stuck_row, not _fits(_stuck_row, _avail_w))
 	_update_buttons()
+
+
+## Куда зовём из баннера: партия идёт, люди в сборе — или игрок один.
+## Одного «игроки в сборе» врало бы: человек ждал бы несуществующих.
+func _stuck_where(pending: Dictionary) -> String:
+	if String(pending.get("state", "")) == "playing":
+		return "партия идёт"
+	if not pending.has("players"):
+		return "игроки в сборе"
+	var n := 0
+	for p in pending.get("players", []):
+		if p is Dictionary and not bool((p as Dictionary).get("empty", false)):
+			n += 1
+	if n <= 1:
+		return "кроме вас никого нет"
+	return "игроки в сборе"
 
 
 ## «Вернуться» с баннера. Для партии — просто открываем сцену: свежее
@@ -1459,7 +1472,10 @@ func _refresh_presence() -> void:
 
 func _build_auth() -> VBoxContainer:
 	var page := VBoxContainer.new()
-	page.add_theme_constant_override("separation", 8)
+	# 12 между смысловыми блоками (заголовок, поля, кнопки), внутри
+	# групп — свои мелкие отступы. Вертикаль прокручивается, так что
+	# воздух дешёвый, а слипшиеся блоки читать тяжело.
+	page.add_theme_constant_override("separation", 12)
 	page.visible = false
 
 	page.add_child(_header("Вход", 19))
@@ -1499,7 +1515,9 @@ func _build_auth() -> VBoxContainer:
 
 func _build_rooms() -> VBoxContainer:
 	var page := VBoxContainer.new()
-	page.add_theme_constant_override("separation", 8)
+	# 12 между смысловыми блоками (баннер, игра, вкладки, список, выход),
+	# внутри групп — свои мелкие отступы. См. комментарий в _build_auth.
+	page.add_theme_constant_override("separation", 12)
 	page.visible = false
 
 	# --- «вы всё ещё в комнате»: мягко вышедшего из партии игрока сервер
@@ -1708,7 +1726,8 @@ func _logout_row(page: VBoxContainer) -> void:
 
 func _build_lobby() -> VBoxContainer:
 	var page := VBoxContainer.new()
-	page.add_theme_constant_override("separation", 8)
+	# 12 между смысловыми блоками, как на остальных страницах.
+	page.add_theme_constant_override("separation", 12)
 	page.visible = false
 
 	_lobby_code = _header("", 24)

@@ -310,6 +310,7 @@ func _stuck(menu: Node, lobby: Node) -> void:
 				% wide + "обязаны стоять столбиком")
 	await _dynamic_content(lobby)
 	_rooms_timer_check(lobby)
+	await _stuck_text(menu, lobby)
 	net.clear_pending_room()
 	lobby.call("_refresh_stuck")
 	(menu as Control).call("_refresh_online_note")
@@ -481,6 +482,35 @@ func _audit_buttons(node: Node, where: String) -> void:
 			_fail("%s: кнопка «%s» без плоского стиля" % [where, b.text.left(20)])
 	for child in node.get_children():
 		_audit_buttons(child, where)
+
+
+## Баннер «вы всё ещё в комнате» не врёт про толпу: один игрок —
+## «кроме вас никого нет», двое — «игроки в сборе», партия — «идёт».
+func _stuck_text(menu: Node, lobby: Node) -> void:
+	var net := root.get_node_or_null("Net")
+	if net == null:
+		_fail("нет Net для проверки текста баннера")
+		return
+	var cases := [
+		[{"code": "A1", "state": "lobby",
+			"players": [{"empty": false}, {"empty": true}]}, "кроме вас никого нет"],
+		[{"code": "A2", "state": "lobby",
+			"players": [{"empty": false}, {"empty": false}]}, "игроки в сборе"],
+		[{"code": "A3", "state": "playing"}, "партия идёт"],
+		[{"code": "A4", "state": "lobby"}, "игроки в сборе"],
+	]
+	for c in cases:
+		net.park_room(c[0])
+		lobby.call("_refresh_stuck")
+		(menu as Control).call("_refresh_online_note")
+		for i in range(2):
+			await process_frame
+		var banner := ((lobby.get("_stuck_label") as Label).text as String)
+		var note := ((menu.get("_online_note") as Label).text as String)
+		if banner.find(c[1]) < 0:
+			_fail("баннер врёт: «%s» без «%s»" % [banner.left(60), c[1]])
+		if note.find(c[1]) < 0:
+			_fail("напоминание врёт: «%s» без «%s»" % [note.left(60), c[1]])
 
 
 ## Автообновление списка комнат: тикает раз в 10 с, сам не стартует,
