@@ -1,5 +1,7 @@
 extends SceneTree
 
+const Lang := preload("res://scripts/core/lang.gd")
+
 # ==============================================================
 #  Проверка перехода после входа/регистрации в сетевом меню.
 #
@@ -85,6 +87,11 @@ func _auth_note_text() -> String:
 	return String(note.text) if note != null else ""
 
 
+func _auth_note_visible() -> bool:
+	var note = inst.get("_auth_note")
+	return bool(note.visible) if note != null else false
+
+
 func _checks() -> void:
 	var lobby := inst
 	var before := _page_visible("_page_auth")
@@ -118,6 +125,94 @@ func _checks() -> void:
 	lobby.call("_after_auth", { "ok": true, "user": {} }, "Аккаунт создан")
 	check(_page_visible("_page_rooms"), "successful register switches to rooms page")
 	_check_password_remembered()
+	_check_auth_error_matrix()
+
+
+## Матрица ошибок входа/регистрации: каждая причина — и клиентская
+## проверка, и любая серверная (валидация accounts.js, ошибки хаба,
+## транспорт) — обязана показаться игроку ВИДИМОЙ строкой, а не осесть
+## в скрытой метке. Раньше _auth_note никто не включал обратно, и все
+## эти тексты были невидимы при зелёном .text.
+func _check_auth_error_matrix() -> void:
+	var lobby := inst
+	lobby.call("_enter_auth")
+	# Клиентские проверки (возврат до сети — вызов без await безопасен).
+	var login_edit = inst.get("_login_edit")
+	var pass_edit = inst.get("_pass_edit")
+	var nick_edit = inst.get("_nick_edit")
+	login_edit.text = ""
+	pass_edit.text = ""
+	lobby.call("_do_login")
+	check(_auth_note_text() == "Заполните логин и пароль",
+		"пустой вход отклоняется до сети, got: %s" % _auth_note_text())
+	check(_auth_note_visible(), "подсказка про пустые поля ВИДНА")
+	login_edit.text = "bob"
+	nick_edit.text = ""
+	lobby.call("_do_register")
+	check(_auth_note_text() == "Заполните логин, пароль и имя",
+		"пустая регистрация отклоняется до сети, got: %s" % _auth_note_text())
+	check(_auth_note_visible(), "подсказка про пустые поля регистрации ВИДНА")
+	# Порог — как на сервере (6), а не 4: пароль из 5 символов раньше
+	# уходил в сеть и возвращался отказом оттуда.
+	nick_edit.text = "Боб"
+	pass_edit.text = "12345"
+	lobby.call("_do_register")
+	check(_auth_note_text() == "Пароль: минимум 6 символов",
+		"короткий пароль ловится клиентом, got: %s" % _auth_note_text())
+	check(_auth_note_visible(), "подсказка про короткий пароль ВИДНА")
+	# Все серверные причины — дословно и видимо.
+	var server_reasons := [
+		"Введите логин",
+		"Логин: 3–20 символов, латиница, цифры, _ . -",
+		"Пароль: минимум 6 символов",
+		"Пароль: максимум 200 символов",
+		"Введите ник",
+		"Ник: максимум 24 символа",
+		"Ник: без управляющих символов",
+		"Ник: это служебное имя",
+		"Ник: ботом может называться только бот",
+		"Неверный логин или пароль",
+		"Сессия недействительна",
+		"Старый пароль неверен",
+		"Этот логин уже занят",
+		"Сначала войдите",
+		"Соединение только для чтения",
+		"Слишком много попыток. Подождите минуту.",
+		"Внутренняя ошибка сервера",
+	]
+	for reason in server_reasons:
+		lobby.call("_after_auth", { "ok": false, "reason": reason }, "X")
+		if _auth_note_text() != reason or not _auth_note_visible():
+			check(false, "серверная причина показана: %s (got: %s, visible=%s)"
+				% [reason, _auth_note_text(), str(_auth_note_visible())])
+	check(true, "все %d серверных причин видны дословно" % server_reasons.size())
+	# Транспортные формы и пустой ответ — с запасным текстом, но тоже видно.
+	lobby.call("_after_auth", { "t": "offline", "reason": "нет связи с сервером" }, "X")
+	check(_auth_note_text() == "нет связи с сервером" and _auth_note_visible(),
+		"обрыв связи показан, got: %s" % _auth_note_text())
+	lobby.call("_after_auth", { "t": "timeout", "reason": "сервер не ответил вовремя" }, "X")
+	check(_auth_note_text() == "сервер не ответил вовремя" and _auth_note_visible(),
+		"таймаут показан, got: %s" % _auth_note_text())
+	lobby.call("_after_auth", { "t": "auth.err", "reason": "" }, "X")
+	check(_auth_note_text() == "Не удалось войти" and _auth_note_visible(),
+		"пустая причина заменена запасной и видна, got: %s" % _auth_note_text())
+	lobby.call("_after_auth", {}, "X")
+	check(_auth_note_text() == "Не удалось войти" and _auth_note_visible(),
+		"пустой ответ заменён запасным и виден, got: %s" % _auth_note_text())
+	# Ошибка — красная, возврат на страницу входа — чистая и скрытая.
+	var note = inst.get("_auth_note")
+	check(note.get_theme_color("font_color") == Color("FF8A80"),
+		"ошибка подсвечена красным")
+	lobby.call("_enter_auth")
+	check(_auth_note_text().is_empty() and not _auth_note_visible(),
+		"вход на страницу гасит строку")
+	# Серверная причина переводится на странице входа.
+	Lang.set_lang("en")
+	lobby.call("_after_auth",
+		{ "ok": false, "reason": "Неверный логин или пароль" }, "X")
+	check(_auth_note_text() == "Wrong login or password" and _auth_note_visible(),
+		"серверная причина переведена, got: %s" % _auth_note_text())
+	Lang.set_lang("ru")
 
 
 ## Пароль помнится на устройстве: пишется в сессию при наборе в поле,

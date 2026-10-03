@@ -172,7 +172,6 @@ const _EN := {
 "Отмена": "Cancel",
 "Отменить ход": "Undo turn",
 "Отправляем ход…": "Sending move…",
-"Пароль слишком короткий (минимум 4 символа)": "Password too short (min 4 characters)",
 "Партия не идёт": "No game running",
 "Партия не найдена": "Game not found",
 "Партия уже идёт": "Game already in progress",

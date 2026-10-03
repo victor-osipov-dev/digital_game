@@ -290,7 +290,7 @@ func _enter_auth() -> void:
 	# не к месту и залипала бы после успешного подключения, потому что
 	# чистится только вместе с busy-задачей.
 	_set_note(_busy, "", false)
-	_auth_note.text = ""
+	_set_auth_note("")
 	if _login_edit.text.is_empty():
 		_login_edit.text = Net.session_login()
 	if _pass_edit.text.is_empty():
@@ -354,9 +354,9 @@ func _do_login() -> void:
 	var login_name := _login_edit.text.strip_edges()
 	var password := _pass_edit.text
 	if login_name.is_empty() or password.is_empty():
-		_auth_note.text = Lang.t("Заполните логин и пароль")
+		_set_auth_note(Lang.t("Заполните логин и пароль"), true)
 		return
-	_auth_note.text = Lang.t("Входим…")
+	_set_auth_note(Lang.t("Входим…"))
 	var res := await Net.login(login_name, password)
 	_after_auth(res, Lang.t("Вход выполнен"))
 
@@ -366,14 +366,28 @@ func _do_register() -> void:
 	var password := _pass_edit.text
 	var nick := _nick_edit.text.strip_edges()
 	if login_name.is_empty() or password.is_empty() or nick.is_empty():
-		_auth_note.text = Lang.t("Заполните логин, пароль и имя")
+		_set_auth_note(Lang.t("Заполните логин, пароль и имя"), true)
 		return
-	if password.length() < 4:
-		_auth_note.text = Lang.t("Пароль слишком короткий (минимум 4 символа)")
+	# Порог — как на сервере (accounts.js: минимум 6), иначе пароли
+	# длиной 4–5 уходили в сеть и возвращались отказом оттуда.
+	if password.length() < 6:
+		_set_auth_note(Lang.t("Пароль: минимум 6 символов"), true)
 		return
-	_auth_note.text = Lang.t("Создаём аккаунт…")
+	_set_auth_note(Lang.t("Создаём аккаунт…"))
 	var res := await Net.register(login_name, password, nick)
 	_after_auth(res, Lang.t("Аккаунт создан"))
+
+
+## Единственная точка записи в строку состояния входа: текст без
+## visible=true никто бы не увидел (метка создаётся скрытой), а без
+## сброса цвета прогресс светился бы красным после первой же ошибки.
+func _set_auth_note(text: String, is_error: bool = false) -> void:
+	if _auth_note == null:
+		return
+	_auth_note.text = text
+	_auth_note.visible = not text.is_empty()
+	_auth_note.add_theme_color_override("font_color",
+		Color("FF8A80") if is_error else Color(1, 1, 1, 0.7))
 
 
 func _after_auth(res: Dictionary, ok_text: String) -> void:
@@ -383,10 +397,10 @@ func _after_auth(res: Dictionary, ok_text: String) -> void:
 	# выглядел бы как отказ (в сессию вошли, а страницу комнат не
 	# показали, пока не переоткрыть экран).
 	if bool(res.get("ok", false)):
-		_auth_note.text = ok_text
+		_set_auth_note(ok_text)
 		_goto_rooms()
 		return
-	_auth_note.text = _reason(res, Lang.t("Не удалось войти"))
+	_set_auth_note(_reason(res, Lang.t("Не удалось войти")), true)
 
 
 func _do_logout() -> void:
