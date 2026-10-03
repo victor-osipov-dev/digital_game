@@ -229,29 +229,61 @@ func _boot() -> void:
 			await process_frame
 
 	# --- 11) повторный клик по открытому списку закрывает его -------
-	# Проверяем логику кнопки в том же порядке, что у живого клика:
-	# button_down (снимок видимости) → показ списка → pressed.
-	# Свежее открытие своим же кликом не закрывается, а повторный клик
-	# по открытому списку — закрывает.
+	# Живыми кликами, а не эмуляцией сигналов: порядок событий
+	# (окно списка → кнопка → нативный pressed) важен. Два пути:
+	# список ещё открыт, когда нажатие доходит до кнопки (перехват
+	# в gui_input), и окно уже закрыло список этим же нажатием
+	# (такое нажатие глотаем по свежей метке, иначе нативный
+	# pressed() откроет список заново — «дёргается и возвращается»).
 	var opt: OptionButton = menu.get("count_option")
 	check(opt != null, "опция «Игроков» есть")
 	if opt != null:
+		# Секция 10 открыла оверлей статистики настоящим тапом: тапы
+		# дальше били бы в него, а не в список. Гасим оверлеи.
+		for ov_name in ["stats_overlay", "help_overlay"]:
+			var ov := menu.get(ov_name) as Control
+			if ov != null:
+				ov.visible = false
+		await process_frame
+		await process_frame
 		var popup = opt.get_popup()
 		popup.hide()
 		await process_frame
 		check(not popup.visible, "список изначально закрыт")
-		opt.button_down.emit()
-		popup.show()
-		await process_frame
-		opt.pressed.emit()
+		_center_in(scroll, opt)
 		await process_frame
 		await process_frame
-		check(popup.visible, "свежее открытие не закрывается своим же кликом")
-		opt.button_down.emit()
-		opt.pressed.emit()
-		await process_frame
-		await process_frame
+		# Свежее открытие своим же кликом не закрывается.
+		await _tap_frames(opt.get_global_rect().get_center())
+		check(popup.visible, "первый клик открывает список")
+		# Повторный клик по открытому списку — закрывает.
+		await _tap_frames(opt.get_global_rect().get_center())
 		check(not popup.visible, "повторный клик закрывает список")
+		for i in range(4):
+			await process_frame
+		check(not popup.visible, "список не возвращается сам")
+		# Окно закрыло список раньше кнопки (клик мимо панели):
+		# дошедшее до кнопки нажатие не должно открывать заново.
+		await _tap_frames(opt.get_global_rect().get_center())
+		check(popup.visible, "список снова открыт для проверки")
+		popup.hide()
+		await _tap_frames(opt.get_global_rect().get_center())
+		check(not popup.visible, "клик после самозакрытия не открывает заново")
+		# Выбор пункта — не самозакрытие: открыть заново можно сразу.
+		await _tap_frames(opt.get_global_rect().get_center())
+		check(popup.visible, "список открыт для выбора пункта")
+		popup.index_pressed.emit(0)
+		popup.hide()
+		await process_frame
+		opt.show_popup()
+		await process_frame
+		await process_frame
+		check(popup.visible, "после выбора пункта список открывается заново")
+		popup.hide()
+		# Давнее закрытие — не то же нажатие: клик открывает.
+		await create_timer(0.4).timeout
+		await _tap_frames(opt.get_global_rect().get_center())
+		check(popup.visible, "клик после паузы открывает список")
 		popup.hide()
 
 	# Настройки возвращаем как были: тап по чекбоксу пишет конфиг.
@@ -274,6 +306,18 @@ func _tap(pos: Vector2) -> void:
 	_release(pos)
 	# Отложенная отыгрышь тапа (call_deferred) успевает выполниться.
 	for i in range(2):
+		await process_frame
+
+
+## Тап с кадрами между нажатием и отпусканием: всплывающему окну
+## списка нужен кадр, чтобы встать (позиция, видимость), иначе
+## проверка прочитает промежуточное состояние.
+func _tap_frames(pos: Vector2) -> void:
+	_press(pos)
+	for i in range(2):
+		await process_frame
+	_release(pos)
+	for i in range(3):
 		await process_frame
 
 

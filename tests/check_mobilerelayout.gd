@@ -135,6 +135,7 @@ func _round(size: Vector2i, base: Vector2i, scale: int) -> void:
 	# окна, и без него управление вернулось бы сюда, выполнился бы
 	# queue_free — а из _rows пришлось бы читать уже освобождённые узлы.
 	await _rows(lobby)
+	await _stuck(menu, lobby)
 	menu.queue_free()
 	await process_frame
 
@@ -218,14 +219,16 @@ func _rows(lobby: Node) -> void:
 			_fail("в складываемых рядах не BoxContainer")
 			continue
 		# Ряд сложен ровно тогда, когда его дети не влезают в строку.
-		# Считаем по минимальным ширинам — тем же, что и движок.
+		# Считаем честную ширину содержимого, как движок (_need):
+		# у кнопок с clip_text и пустых полей минимум по содержимому
+		# не считается, и подсчёт по нему врал бы «влезает».
 		var need := 0.0
 		var first := true
 		for item in box.get_children():
 			var c := item as Control
 			if c == null or not c.visible:
 				continue
-			need += c.get_combined_minimum_size().x
+			need += _need_width(c)
 			if not first:
 				need += float(box.get_theme_constant("separation"))
 			first = false
@@ -248,6 +251,112 @@ func _rows(lobby: Node) -> void:
 				if c.size.x < box.size.x - 2.0:
 					_fail("в сложенном ряду «%s» ширина %d при %d"
 						% [_caption(c), int(c.size.x), int(box.size.x)])
+
+
+# ---------------------------------------------------------------- баннер
+
+## Баннер «вы всё ещё в комнате»: кнопки обязаны показывать текст.
+## Ловили вживую: у кнопок с clip_text минимальная ширина считается
+## только по полям стиля (8 px), ряд «влезал», кнопки сжимались в
+## полоски и текст срезался полностью. Проверяем, что минимум
+## покрывает текст и раскладка его уважает. Заодно: ряд создания
+## комнаты («название + пароль») на узком экране обязан стоять
+## столбиком — горизонтальные полоски полей нечитаемы.
+func _stuck(menu: Node, lobby: Node) -> void:
+	var net := root.get_node_or_null("Net")
+	if net == null:
+		_fail("нет Net для проверки баннера")
+		return
+	net.park_room({"code": "ABC12", "state": "playing"})
+	lobby.call("_refresh_stuck")
+	(menu as Control).call("_refresh_online_note")
+	for i in range(3):
+		await process_frame
+	_button_text(menu.get("_return_room_btn") as Button, "_return_room_btn",
+		menu.get("_room_actions") as BoxContainer)
+	_button_text(menu.get("_drop_room_btn") as Button, "_drop_room_btn",
+		menu.get("_room_actions") as BoxContainer)
+	_button_text(lobby.get("_return_btn") as Button, "_return_btn",
+		lobby.get("_stuck_row") as BoxContainer)
+	_button_text(lobby.get("_drop_btn") as Button, "_drop_btn",
+		lobby.get("_stuck_row") as BoxContainer)
+	var create_row := lobby.get("_create_row") as BoxContainer
+	if create_row == null:
+		_fail("нет ряда создания комнаты")
+	else:
+		var wide: float = lobby.get("_avail_w")
+		var need := 0.0
+		var first := true
+		for item in create_row.get_children():
+			var c := item as Control
+			if c == null or not c.visible:
+				continue
+			need += _need_width(c)
+			if not first:
+				need += float(create_row.get_theme_constant("separation"))
+			first = false
+		if create_row.vertical != (need > wide):
+			_fail("ряд создания сложен=%s, а нужно %s (нужно %.0f, есть %.0f)"
+				% [create_row.vertical, need > wide, need, wide])
+		if wide <= 360.0 and not create_row.vertical:
+			_fail("на узком экране (доступно %.0f) поля названия и пароля "
+				% wide + "обязаны стоять столбиком")
+	net.clear_pending_room()
+	lobby.call("_refresh_stuck")
+	(menu as Control).call("_refresh_online_note")
+	await process_frame
+
+
+## У кнопки есть подпись, минимум покрывает её целиком, а раскладка
+## выдала не полоску: ширина 8 px при clip_text — это и была жалоба.
+## Минимум проверяем только в строке: в столбике он специально нулевой
+## (кнопка тянется на всю ширину), там смотрит проверка ширины.
+func _button_text(b: Button, key: String, row: BoxContainer) -> void:
+	if b == null:
+		_fail("нет кнопки " + key)
+		return
+	if b.text.is_empty():
+		_fail("у кнопки %s пустая подпись" % key)
+		return
+	var font: Font = b.get_theme_font("font")
+	var want := 0.0
+	if font != null:
+		want = font.get_string_size(b.text, HORIZONTAL_ALIGNMENT_LEFT, -1,
+			b.get_theme_font_size("font_size")).x
+	var sb := b.get_theme_stylebox("normal")
+	if sb != null:
+		want += sb.content_margin_left + sb.content_margin_right
+	if (row == null or not row.vertical) \
+			and b.get_combined_minimum_size().x + 1.0 < want:
+		_fail("кнопка «%s»: минимум %.0f не покрывает текст %.0f"
+			% [b.text, b.get_combined_minimum_size().x, want])
+	if b.size.x < 40.0:
+		_fail("кнопка «%s» сжата до %.0f px — текст не виден" % [b.text, b.size.x])
+
+
+## Честная ширина содержимого — зеркало лоббийного _need: кнопки
+## с clip_text и пустые поля меряем по тексту/подсказке.
+func _need_width(c: Control) -> float:
+	var base := c.get_combined_minimum_size().x
+	var sample := ""
+	if c is LineEdit:
+		var e := c as LineEdit
+		sample = e.text if not e.text.is_empty() else e.placeholder_text
+	elif c is Button and not (c is OptionButton):
+		sample = (c as Button).text
+	if sample.is_empty():
+		return base
+	var font: Font = c.get_theme_font("font")
+	var w := 0.0
+	if font != null:
+		w = font.get_string_size(sample, HORIZONTAL_ALIGNMENT_LEFT, -1,
+			c.get_theme_font_size("font_size")).x
+	var sb := c.get_theme_stylebox("normal")
+	if sb != null:
+		w += sb.content_margin_left + sb.content_margin_right
+	else:
+		w += 16.0
+	return maxf(base, w)
 
 
 # ---------------------------------------------------------------- край

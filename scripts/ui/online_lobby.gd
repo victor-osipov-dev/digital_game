@@ -49,6 +49,7 @@ var _rooms_note: Label = null
 var _refresh_btn: Button = null
 
 var _seats_option: OptionButton = null
+var _create_row: BoxContainer = null
 var _room_name: LineEdit = null
 var _room_pass: LineEdit = null
 var _require_30: CheckBox = null
@@ -73,6 +74,7 @@ var _tick: Timer = null
 var _back_btn: Button = null
 var _stuck_box: PanelContainer = null
 var _stuck_label: Label = null
+var _stuck_row: BoxContainer = null
 
 # Комната, в которой мы сейчас сидим (страница лобби). Нужна, чтобы при
 # выходе из лобби в главное меню не потерять её: кнопки «вернуться» и
@@ -754,6 +756,10 @@ func _refresh_stuck(_room := {}) -> void:
 	_stuck_label.text += "Вернитесь в неё или покиньте насовсем."
 	_return_btn.text = "Вернуться в партию" if playing else "Вернуться в комнату"
 	_stuck_box.visible = true
+	# Текст кнопки сменился — вместе с ним пересчитываем и ряд:
+	# ширина кнопок зависит от подписи («в партию» / «в комнату»).
+	if _stuck_row != null and _avail_w > 0.0:
+		_stack(_stuck_row, not _fits(_stuck_row, _avail_w))
 	_update_buttons()
 
 
@@ -899,7 +905,7 @@ func _fits(row: BoxContainer, avail: float) -> bool:
 		# поворота экрана.
 		if c == null or not c.visible:
 			continue
-		need += c.get_combined_minimum_size().x
+		need += _need(c)
 		if not first:
 			need += gap
 		first = false
@@ -926,6 +932,29 @@ func _stack(row: BoxContainer, narrow: bool) -> void:
 		# В столбике каждый контрол тянется на всю ширину страницы.
 		c.size_flags_horizontal = Control.SIZE_EXPAND_FILL if narrow \
 			else int(c.get_meta("h_flags_before_stack"))
+		# Ширина по содержимому — только в строку: в столбике минимум
+		# держим нулевым, иначе длинная подпись на гигантском тексте
+		# разорвёт страницу шире экрана. В строке же кнопке с clip_text
+		# и пустому полю минимум по содержимому обязателен: иначе
+		# контейнер выдаст им 8 px, и текст срежется полностью.
+		if (c is Button and not (c is OptionButton)) or c is LineEdit:
+			if not c.has_meta("wide_min_x"):
+				c.set_meta("wide_min_x", c.custom_minimum_size.x)
+			var cur := c.custom_minimum_size
+			if narrow:
+				c.custom_minimum_size = Vector2(0, cur.y)
+			else:
+				var sample := ""
+				if c is LineEdit:
+					var e := c as LineEdit
+					sample = e.text if not e.text.is_empty() \
+						else e.placeholder_text
+				else:
+					sample = (c as Button).text
+				var want := float(c.get_meta("wide_min_x"))
+				if not sample.is_empty():
+					want = maxf(want, _text_content_width(c, sample))
+				c.custom_minimum_size = Vector2(want, cur.y)
 
 
 # =============================================================== общие мелочи
@@ -1107,6 +1136,43 @@ func _button(text: String, size: int = 15) -> Button:
 	b.custom_minimum_size = Vector2(0, Settings.touch(48))
 	b.add_theme_font_size_override("font_size", Settings.fs(size))
 	return b
+
+
+## Ширина строки тем же шрифтом и размером, что рисует контрол,
+## плюс поля его стиля. Нужна, чтобы задать честный минимум тем,
+## у кого движок его занижает (кнопки с clip_text, пустые поля).
+func _text_content_width(c: Control, sample: String) -> float:
+	var w := 0.0
+	var font: Font = c.get_theme_font("font")
+	if font != null:
+		w = font.get_string_size(sample, HORIZONTAL_ALIGNMENT_LEFT, -1,
+			c.get_theme_font_size("font_size")).x
+	var sb := c.get_theme_stylebox("normal")
+	if sb != null:
+		w += sb.content_margin_left + sb.content_margin_right
+	else:
+		w += 16.0
+	return w
+
+
+## Честная ширина ребёнка ряда: у кнопки с clip_text и у пустого поля
+## движок минимум по содержимому не считает, и ряд с ними всегда
+## «влезал» — кнопки сжимались до полосок в 8 px с полностью срезанным
+## текстом, а поля названия/пароля делили узкий экран на полоски.
+## Минимумы при этом держим маленькими специально: большой минимум
+## на гигантском тексте разорвал бы страницу шире экрана, а в столбике
+## каждый контрол и так тянется на всю ширину.
+func _need(c: Control) -> float:
+	var base := c.get_combined_minimum_size().x
+	var sample := ""
+	if c is LineEdit:
+		var e := c as LineEdit
+		sample = e.text if not e.text.is_empty() else e.placeholder_text
+	elif c is Button and not (c is OptionButton):
+		sample = (c as Button).text
+	if sample.is_empty():
+		return base
+	return maxf(base, _text_content_width(c, sample))
 
 
 # =============================================================== сборка интерфейса
@@ -1336,6 +1402,7 @@ func _build_rooms() -> VBoxContainer:
 	# Ряд, а не HBoxContainer: направление у него переключается в
 	# _relayout, а у HBoxContainer vertical менять нельзя вовсе.
 	var stuck_row := BoxContainer.new()
+	_stuck_row = stuck_row
 	stuck_row.add_theme_constant_override("separation", 8)
 	stuck_inner.add_child(stuck_row)
 	_stack_rows.append(stuck_row)
@@ -1352,6 +1419,7 @@ func _build_rooms() -> VBoxContainer:
 	# --- создать
 	page.add_child(_header("Своя комната", 19))
 	var create_row := BoxContainer.new()
+	_create_row = create_row
 	create_row.add_theme_constant_override("separation", 8)
 	page.add_child(create_row)
 	_stack_rows.append(create_row)

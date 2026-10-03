@@ -70,40 +70,70 @@ func style_option(option: OptionButton, font_base: int) -> void:
 	popup.add_theme_font_size_override("font_size", fs(font_base + 1))
 	popup.add_theme_constant_override("item_height", touch(46))
 	popup.add_theme_constant_override("v_separation", touch(2))
-	# Повторный клик по открытой кнопке закрывает список: по умолчанию он
-	# остаётся висеть. Свежее открытие отличаем от повторного клика снимком
-	# видимости в button_down: about_to_popup для этого не годится — движок
-	# стреляет им при каждом нажатии, даже когда список уже открыт.
+	# Повторный клик по открытой кнопке закрывает список: тот же клик,
+	# что и открывал. Перехват — в gui_input: он идёт раньше нативной
+	# обработки кнопки, поэтому успеваем съесть нажатие до того, как
+	# движок решит показать список заново.
+	#
+	# Два пути одного и того же клика (проверено чтением исходников
+	# движка и пробами с живыми событиями):
+	# 1) список ещё открыт, когда нажатие доходит до кнопки: прячем
+	#    его сами и глотаем нажатие — нативный pressed() не стреляет;
+	# 2) окно списка уже закрыло его этим же нажатием (клик мимо
+	#    панели гасится без set_input_as_handled и доходит до кнопки):
+	#    тогда нативный pressed() увидел бы «закрыто» и открыл список
+	#    заново — «дёргается и возвращается». Такое нажатие тоже
+	#    глотаем, узнаём его по свежей метке о закрытии.
 	if not option.has_meta("toggle_close"):
 		option.set_meta("toggle_close", true)
-		option.set_meta("popup_was_open", false)
-		option.button_down.connect(_snap_option_open.bind(option))
-		option.pressed.connect(_close_option_popup.bind(option))
+		option.set_meta("popup_hidden_at", 0)
+		option.set_meta("popup_hide_select", false)
+		option.gui_input.connect(_snap_option_gui.bind(option))
+		popup.popup_hide.connect(_note_option_hide.bind(option))
+		popup.index_pressed.connect(_note_option_select.bind(option))
 
 
-func _snap_option_open(option: OptionButton) -> void:
+## Нажатие по кнопке раньше движка: открытый список прячем сами,
+## «воскрешающее» нажатие (список только что закрылся сам) глотаем.
+func _snap_option_gui(event: InputEvent, option: OptionButton) -> void:
 	if option == null or not is_instance_valid(option):
+		return
+	var down := false
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		down = mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT
+	elif event is InputEventScreenTouch:
+		down = (event as InputEventScreenTouch).pressed
+	if not down:
 		return
 	var popup := option.get_popup()
 	if popup == null:
 		return
-	option.set_meta("popup_was_open", popup.visible)
-
-
-func _close_option_popup(option: OptionButton) -> void:
-	call_deferred("_close_option_popup_deferred", option)
-
-
-func _close_option_popup_deferred(option: OptionButton) -> void:
-	if option == null or not is_instance_valid(option):
-		return
-	var popup := option.get_popup()
-	if popup == null:
-		return
-	var was_open := bool(option.get_meta("popup_was_open", false))
-	option.set_meta("popup_was_open", false)
-	if was_open and popup.visible:
+	if popup.visible:
+		option.set_meta("popup_hidden_at", 0)
+		option.set_meta("popup_hide_select", false)
 		popup.hide()
+		option.accept_event()
+		return
+	var hidden_at := int(option.get_meta("popup_hidden_at", 0))
+	var by_select := bool(option.get_meta("popup_hide_select", false))
+	option.set_meta("popup_hidden_at", 0)
+	option.set_meta("popup_hide_select", false)
+	if not by_select and hidden_at > 0 \
+			and Time.get_ticks_msec() - hidden_at < 300:
+		option.accept_event()
+
+
+func _note_option_hide(option: OptionButton) -> void:
+	if option == null or not is_instance_valid(option):
+		return
+	option.set_meta("popup_hidden_at", Time.get_ticks_msec())
+
+
+func _note_option_select(_index: int, option: OptionButton) -> void:
+	if option == null or not is_instance_valid(option):
+		return
+	option.set_meta("popup_hide_select", true)
 
 func tile_size() -> Vector2:
 	var idx := clampi(tile_step, 0, TILE_WIDTHS.size() - 1)
