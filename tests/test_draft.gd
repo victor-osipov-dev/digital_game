@@ -341,16 +341,82 @@ func test_draft_tile_flies_live() -> void:
 	game._clear_draft()
 
 
-## Бот: постановка анимируется, принятые фишки — непрозрачные.
-## Рука ригнута (ровно один выкладываемый ряд), seed фиксирован.
+## Бот: постановка идёт по одной фишке (видно рост стола 1-2-3),
+## принятые фишки — непрозрачные. Рука ригнута (ровно один
+## выкладываемый ряд), seed фиксирован. Тумблер Settings.bot_anim
+## выключает пошаговость: стол собирается сразу.
 func test_bot_move_flies() -> void:
-	section("ход бота прилетает")
+	section("ход бота идёт по одной фишке")
 	var settings := root.get_node_or_null("Settings")
 	var saved_count: int = settings.player_count
 	var saved_req: bool = settings.require_30
 	var saved_level: int = settings.bot_level
+	var saved_anim: bool = settings.bot_anim
 	var saved_bot0: bool = settings.is_bot(0)
 	var saved_bot1: bool = settings.is_bot(1)
+	settings.bot_anim = true
+	var run: Array = await _bot_match_setup()
+	seed(20240517)
+	game._bot_seq = 9
+	game._bot_execute(9)
+	var counts := []
+	# Таймеры шагов — real-time (0.55 с), кадры могут идти быстрее:
+	# ждём факта смены хода, а не фиксированное число кадров.
+	for i in range(600):
+		await process_frame
+		counts.append(_table_tile_count())
+		if game.state.current != 0:
+			break
+	var seen := []
+	for c in counts:
+		if seen.is_empty() or seen[seen.size() - 1] != c:
+			seen.append(c)
+	ok("стол рос по одной фишке", seen == [1, 2, 3], "рост=%s" % [seen])
+	var ids: Array = game.state.last_turn_tile_ids.duplicate()
+	ok("бот именно выложился, а не взял", ids.size() == 3, "last=%s" % [ids])
+	var hit := 0
+	for rid in run:
+		if ids.has(rid):
+			hit += 1
+	ok("выложен ригнутый ряд", hit == 3, "last=%s run=%s" % [ids, run])
+	for i in range(40):
+		await process_frame
+	var p1 := _flight_positions(ids)
+	await process_frame
+	await process_frame
+	var p2 := _flight_positions(ids)
+	var home := 0
+	for tid in ids:
+		var a: int = int(tid)
+		if p1.has(a) and p2.has(a) \
+				and (p1[a] as Vector2).is_equal_approx(p2[a]):
+			home += 1
+	ok("все долетели и стоят", home == 3, "стоит %d из 3" % home)
+	for tid in ids:
+		_check_committed_style(int(tid), "фишка бота %d обычная" % int(tid))
+	section("анимация бота выключается настройкой")
+	settings.bot_anim = false
+	await _bot_match_setup()
+	game._bot_seq = 21
+	game._bot_execute(21)
+	ok("без анимации стол собран сразу", _table_tile_count() == 3,
+		"фишек %d" % _table_tile_count())
+	ok("ход завершён сразу",
+		game.state.current == 1 and game.state.last_turn_tile_ids.size() == 3,
+		"current=%d last=%d" % [game.state.current, game.state.last_turn_tile_ids.size()])
+	settings.player_count = saved_count
+	settings.require_30 = saved_req
+	settings.bot_level = saved_level
+	settings.bot_anim = saved_anim
+	settings.set_bot(0, saved_bot0)
+	settings.set_bot(1, saved_bot1)
+
+
+## Локальный матч с ботом за 0-м местом и ригнутой рукой (красные
+## 5-6-7 + запасная синяя 9, чтобы бот не победил этим же ходом).
+## Возвращает id ряда. Рука уже показана (пересобрана).
+func _bot_match_setup() -> Array:
+	var settings := root.get_node_or_null("Settings")
 	settings.player_count = 2
 	settings.require_30 = false
 	settings.bot_level = 0
@@ -394,45 +460,17 @@ func test_bot_move_flies() -> void:
 	game.refresh()
 	for i in range(3):
 		await process_frame
-	seed(20240517)
-	game._bot_seq = 9
-	game._bot_execute(9)
-	var ids: Array = game.state.last_turn_tile_ids.duplicate()
-	ok("бот именно выложился, а не взял", ids.size() == 3, "last=%s" % [ids])
-	ok("все три фишки на столе", _flight_positions(ids).size() == 3)
-	await process_frame
-	await process_frame
-	var p1 := _flight_positions(ids)
-	await process_frame
-	await process_frame
-	var p2 := _flight_positions(ids)
-	var moved := 0
-	for tid in ids:
-		var a: int = int(tid)
-		if p1.has(a) and p2.has(a) \
-				and not (p1[a] as Vector2).is_equal_approx(p2[a]):
-			moved += 1
-	ok("фишки в движении", moved == 3, "движется %d из 3" % moved)
-	for i in range(70):
-		await process_frame
-	var p3 := _flight_positions(ids)
-	await process_frame
-	await process_frame
-	var p4 := _flight_positions(ids)
-	var home := 0
-	for tid in ids:
-		var a: int = int(tid)
-		if p3.has(a) and p4.has(a) \
-				and (p3[a] as Vector2).is_equal_approx(p4[a]):
-			home += 1
-	ok("все долетели", home == 3, "долетело %d из 3" % home)
-	for tid in ids:
-		_check_committed_style(int(tid), "фишка бота %d обычная" % int(tid))
-	settings.player_count = saved_count
-	settings.require_30 = saved_req
-	settings.bot_level = saved_level
-	settings.set_bot(0, saved_bot0)
-	settings.set_bot(1, saved_bot1)
+	return run
+
+
+## Сколько фишек сейчас показано на столе (по видам, а не по состоянию).
+func _table_tile_count() -> int:
+	var n := 0
+	for block in game.row_blocks:
+		var flow = block.get("flow")
+		if flow != null:
+			n += (flow.get("tile_views") as Array).size()
+	return n
 
 
 ## Позиции видов фишек на столе прямо сейчас (локальные): для проверки

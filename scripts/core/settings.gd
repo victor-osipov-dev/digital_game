@@ -21,6 +21,7 @@ var require_30: bool = true
 var text_scale: int = 2
 var tile_step: int = 5
 var bot_level: int = 1
+var bot_anim: bool = true
 var player_is_bot: Array = []
 var stat_games: int = 0
 var stat_wins: int = 0
@@ -185,6 +186,7 @@ func load_settings() -> void:
 		text_scale = clampi(int(cf.get_value("game", "text_scale", 2)), 0, TEXT_SCALES.size() - 1)
 		tile_step = clampi(int(cf.get_value("game", "tile_step", 5)), 0, TILE_WIDTHS.size() - 1)
 		bot_level = clampi(int(cf.get_value("game", "bot_level", 1)), 0, BOT_LEVEL_NAMES.size() - 1)
+		bot_anim = bool(cf.get_value("game", "bot_anim", true))
 		stat_games = maxi(0, int(cf.get_value("game", "stat_games", 0)))
 		stat_wins = maxi(0, int(cf.get_value("game", "stat_wins", 0)))
 		stat_losses = maxi(0, int(cf.get_value("game", "stat_losses", 0)))
@@ -207,6 +209,7 @@ func save_settings() -> void:
 	cf.set_value("game", "text_scale", text_scale)
 	cf.set_value("game", "tile_step", tile_step)
 	cf.set_value("game", "bot_level", bot_level)
+	cf.set_value("game", "bot_anim", bot_anim)
 	cf.set_value("game", "player_is_bot", player_is_bot)
 	cf.set_value("game", "stat_games", stat_games)
 	cf.set_value("game", "stat_wins", stat_wins)

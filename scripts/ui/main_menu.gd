@@ -10,6 +10,7 @@ var names_box: VBoxContainer = null
 var name_edits: Array = []
 var bot_checks: Array = []
 var check_30: CheckBox = null
+var bot_anim_check: CheckBox = null
 var help_overlay: ColorRect = null
 var stats_overlay: ColorRect = null
 var menu_scroll: ScrollContainer = null
@@ -272,6 +273,16 @@ func _build_ui() -> void:
 	check_30.add_theme_color_override("font_color", Color(1, 1, 1, 0.9))
 	check_30.toggled.connect(_on_require_30_toggled)
 	box.add_child(check_30)
+
+	bot_anim_check = CheckBox.new()
+	# Подпись короткая специально: у CheckBox нет переноса, длинная
+	# строка растягивала бы колонку шире окна на гигантском тексте.
+	bot_anim_check.text = "Анимация бота"
+	bot_anim_check.button_pressed = Settings.bot_anim
+	bot_anim_check.add_theme_font_size_override("font_size", Settings.fs(15))
+	bot_anim_check.add_theme_color_override("font_color", Color(1, 1, 1, 0.9))
+	bot_anim_check.toggled.connect(_on_bot_anim_toggled)
+	box.add_child(bot_anim_check)
 
 	box.add_child(_make_option_row("Текст:", Settings.TEXT_SCALE_NAMES, Settings.text_scale, _on_text_scale))
 	box.add_child(_make_option_row("Карточки:", Settings.TILE_SIZE_NAMES, Settings.tile_step, _on_tile_step))
@@ -594,6 +605,10 @@ func _on_bot_toggled(pressed: bool, index: int) -> void:
 
 func _on_require_30_toggled(pressed: bool) -> void:
 	Settings.require_30 = pressed
+	Settings.save_settings()
+
+func _on_bot_anim_toggled(pressed: bool) -> void:
+	Settings.bot_anim = pressed
 	Settings.save_settings()
 
 func _on_text_scale(index: int) -> void:

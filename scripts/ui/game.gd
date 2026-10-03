@@ -1371,7 +1371,12 @@ func _bot_execute(seq: int) -> void:
 	var action := String(plan.get("action", ""))
 	var action_ok := false
 	if action == "place":
-		if state.apply_ops(plan.get("ops", [])):
+		var placed_ok := false
+		if Settings.bot_anim:
+			placed_ok = await _bot_place_stepwise(plan.get("ops", []), seq)
+		else:
+			placed_ok = state.apply_ops(plan.get("ops", []))
+		if placed_ok:
 			var r := state.end_turn()
 			if r.get("ok", false):
 				action_ok = true
@@ -1400,6 +1405,54 @@ func _bot_execute(seq: int) -> void:
 		_show_win()
 	else:
 		_show_pass()
+
+
+## Постановка бота по одной фишке: применили операцию — показали
+## прилёт — пауза — следующая. Та же семантика, что у apply_ops,
+## только ссылка «nK» на новый ряд живёт между шагами, а не внутри
+## одного вызова: иначе вторая фишка в тот же ряд открыла бы новый.
+func _bot_place_stepwise(ops: Array, seq: int) -> bool:
+	var created := {}
+	for op in ops:
+		if seq != _bot_seq or state == null or state.finished \
+				or not _is_bot_turn() or not is_inside_tree():
+			return false
+		if not (op is Dictionary) or not _bot_apply_op(op, created):
+			return false
+		_anim_pending = true
+		refresh()
+		await get_tree().create_timer(0.55).timeout
+	return true
+
+
+## Один шаг плана бота. Диспетчер — как в GameState.apply_ops.
+func _bot_apply_op(op: Dictionary, created: Dictionary) -> bool:
+	if state == null or state.finished:
+		return false
+	var kind := String(op.get("op", ""))
+	if kind == "place":
+		var row := _bot_resolve_row(String(op.get("to", "")), created)
+		if row == null:
+			return false
+		return state.place_from_hand(int(op.get("tile", -1)), row.id, int(op.get("index", 99)))
+	if kind == "move":
+		var src := _bot_resolve_row(String(op.get("from", "")), created)
+		var dst := _bot_resolve_row(String(op.get("to", "")), created)
+		if src == null or dst == null:
+			return false
+		return state.move_tile(src.id, int(op.get("tile", -1)), dst.id, int(op.get("index", 99)))
+	return false
+
+
+func _bot_resolve_row(ref: String, created: Dictionary) -> GameState.Row:
+	if ref.begins_with("n"):
+		if not created.has(ref):
+			created[ref] = state.add_row().id
+		return state.row_by_id(int(created[ref]))
+	if ref.begins_with("r"):
+		return state.row_by_id(int(ref.substr(1)))
+	return null
+
 
 func _show_win() -> void:
 	_record_stats()
