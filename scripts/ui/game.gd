@@ -1105,9 +1105,7 @@ func _rebuild_ui() -> void:
 	# со всеми: массив чистим, иначе следующее наведение обратится
 	# к висячей ссылке (смена настроек посреди перетаскивания).
 	_row_slots.clear()
-	_slot_hover_pos = -1
-	_slot_hover_time = 0
-	_slot_grace_until = 0
+	_reset_slot_hover()
 	var was_pass := pass_overlay != null and pass_overlay.visible
 	var was_win := win_overlay != null and win_overlay.visible
 	var was_help := help_overlay != null and help_overlay.visible
@@ -1995,9 +1993,7 @@ func _on_resized() -> void:
 func on_drag_started(view: TileView) -> void:
 	_drag_view = view
 	_hint_ids.clear()
-	_slot_hover_pos = -1
-	_slot_hover_time = 0
-	_slot_grace_until = 0
+	_reset_slot_hover()
 	# Пока тянем карточку, стол не должен сам ловить touch-скролл:
 	# ScrollContainer перехватывает жест в щели между плитками, карточка
 	# отстаёт от пальца, а ряды начинают уезжать. Своё листание по краям
@@ -2008,9 +2004,7 @@ func _end_drag() -> void:
 	if _drag_view != null and is_instance_valid(_drag_view):
 		_drag_view.modulate = Color.WHITE
 	_drag_view = null
-	_slot_hover_pos = -1
-	_slot_hover_time = 0
-	_slot_grace_until = 0
+	_reset_slot_hover()
 	_clear_row_slots()
 	_set_drag_scroll_locked(false)
 	_pan_pressed = false
@@ -2077,6 +2071,12 @@ func _hover_slot_pos(global_pos: Vector2) -> int:
 ## соперникам ничего не уходит (живое превью им отключено). Появляется
 ## после 400 мс зависания над междурядьем, прячется через 1.5 с после
 ## ухода курсора — чтобы успели попасть.
+## Сброс трекинга зависания: следующее наведение считается заново.
+func _reset_slot_hover() -> void:
+	_slot_hover_pos = -1
+	_slot_hover_time = 0
+	_slot_grace_until = 0
+
 func _update_row_slot_hover() -> void:
 	if state == null or state.finished:
 		return
@@ -2085,24 +2085,31 @@ func _update_row_slot_hover() -> void:
 	if not _row_slots.is_empty():
 		# Слот показан: держим его, пока курсор в его зоне;
 		# при уходе прячем с задержкой, чтобы успеть попасть.
-		var slot_pos := int((_row_slots[0] as Control).get_meta("slot_pos", -1))
+		var shown := _row_slots[0] as Control
+		if shown == null or not is_instance_valid(shown):
+			_row_slots.clear()
+			_reset_slot_hover()
+			return
+		var slot_pos := int(shown.get_meta("slot_pos", -1))
 		if _hover_slot_pos(mouse) == slot_pos:
 			_slot_grace_until = 0
-			return
-		if _slot_grace_until == 0:
+		elif _slot_grace_until == 0:
 			_slot_grace_until = now + SLOT_GRACE_MS
 		elif now >= _slot_grace_until:
-			_slot_grace_until = 0
-			_slot_hover_pos = -1
-			_slot_hover_time = 0
+			_reset_slot_hover()
 			_clear_row_slots()
 		return
 	_slot_grace_until = 0
+	_track_gap_hover(mouse, now)
+
+
+## Трекинг зависания над междурядьем: стоим 400 мс почти не двигаясь —
+## показываем слот, ушли или дёрнулись — отсчёт заново.
+func _track_gap_hover(mouse: Vector2, now: int) -> void:
 	var pos := _hover_slot_pos(mouse)
 	if pos < 0:
 		if _slot_hover_pos >= 0:
-			_slot_hover_pos = -1
-			_slot_hover_time = 0
+			_reset_slot_hover()
 		return
 	if pos != _slot_hover_pos:
 		_slot_hover_pos = pos
@@ -2307,6 +2314,8 @@ func gui_do_drop(data: Dictionary, global_pos: Vector2) -> void:
 	var from := String(data["from"])
 	if hand_flow.get_global_rect().has_point(global_pos):
 		state.take_back_to_hand(int(data.get("row_id", -1)), tile_id)
+		_reset_slot_hover()
+		_clear_row_slots()
 	else:
 		var hit := _table_hit(global_pos)
 		var target: GameState.Row = hit["row"]
@@ -2322,6 +2331,11 @@ func gui_do_drop(data: Dictionary, global_pos: Vector2) -> void:
 			state.place_from_hand(tile_id, target.id, index)
 		else:
 			state.move_tile(int(data.get("row_id", -1)), tile_id, target.id, index)
+	# Постановка состоялась — призрак больше не нужен: иначе он пережил
+	# бы пересборку на протухшем индексе и показался бы чужим рядом
+	# (вживую: «пустой ряд перед самым первым»), а трекинг завис бы.
+	_reset_slot_hover()
+	_clear_row_slots()
 	invalid_row_ids.clear()
 	# Локальная постановка/возврат — тоже событие для анимации: refresh
 	# снимет позиции до пересборки и проиграет появление/уход карточки.
@@ -2434,6 +2448,13 @@ func refresh() -> void:
 				force.append(id)
 		_stagger_debt.clear()
 	if not shots.is_empty() or not force.is_empty():
+		# Прилетающие прячем сразу: иначе они стоят видимыми (под плашкой
+		# или в цепочке ботов), а к началу полёта прыгают в угол и летят —
+		# со стороны «поставились, убрались, полетели». Полёты вернут
+		# прозрачность сами; game over при обрыве нет — следующая
+		# пересборка строит виды заново, уже видимыми.
+		if not force.is_empty():
+			_hide_force_tiles(force)
 		_anim_gen += 1
 		_play_place_anim(shots, force, _anim_gen, stagger)
 
@@ -2461,6 +2482,14 @@ func _capture_flow(flow: FlowTiles, out: Array) -> void:
 			})
 
 ## Разница старого и нового состояния в живых view: id -> TileView.
+func _hide_force_tiles(force: Array) -> void:
+	var cur := {}
+	_collect_live(cur)
+	for id in force:
+		var tv := cur.get(int(id)) as TileView
+		if tv != null:
+			tv.modulate.a = 0.0
+
 func _collect_live(cur: Dictionary) -> void:
 	_collect_flow(hand_flow, cur)
 	for rb in row_blocks:

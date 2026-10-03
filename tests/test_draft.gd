@@ -600,6 +600,16 @@ func test_bot_chain_adopts_debt() -> void:
 	s2["lastTurn"] = [_nd, _ne, _nf]
 	s2["current"] = 0
 	game._on_state_received(s2, 0.0, false, false)
+	# Прилетающие спрятаны сразу, а не стоят видимо до полёта.
+	for i in range(5):
+		await process_frame
+	var hidden := 0
+	for tid in [_na, _nb, _nc, _nd, _ne, _nf]:
+		var pv := _placed_view(int(tid))
+		if pv != null and (pv as Control).modulate.a < 0.99:
+			hidden += 1
+	ok("фишки спрятаны до прилёта, а не стоят видимо", hidden == 6,
+		"скрыто %d" % hidden)
 	var r := await _landing_spread([_na, _nb, _nc, _nd, _ne, _nf],
 		game.turn_title_overlay, 1000)
 	ok("все шесть долетели", int(r["landed"]) == 6, "сели %d" % int(r["landed"]))

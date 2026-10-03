@@ -41,6 +41,12 @@ func _on_frame() -> void:
 		3:
 			phase = 4
 			_row_checks()
+			inst.call("refresh")
+		4:
+			phase = 5
+		5:
+			phase = 6
+			await _drop_checks()
 			quit(0 if fails == 0 else 1)
 
 func _empty_checks() -> void:
@@ -146,3 +152,53 @@ func _row_checks() -> void:
 	views = hf.get("tile_views")
 	check(not views.is_empty() and bool(views[0].get("face_down")) == false,
 		"hand face up again after bot turn")
+
+
+func _drop_checks() -> void:
+	var hover := inst as Control
+	var state = inst.get("state")
+	var rbs: Array = inst.get("row_blocks")
+	if rbs.is_empty():
+		check(false, "row blocks for drop check")
+		return
+	var r: Rect2 = (rbs[0] as Control).get_global_rect()
+	# Реальный дроп в щель под рядом: новый ряд встаёт ТУДА, а не в начало.
+	# Ловит регрессию «пустой ряд появляется перед самым первым рядом»,
+	# после которой междурядья для новых слотов уже не находятся.
+	var drop_tile: int = state.hand()[0].id
+	var drop_data := {kind="tile", tile_id=drop_tile, from="hand"}
+	var drop_pos := Vector2(r.get_center().x, r.end.y + 5.0)
+	check(hover.call("gui_can_drop", drop_data, drop_pos) == true,
+		"drop allowed in the gap")
+	# Как вживую: слот показан, дроп — в ту же щель. Постановка сразу
+	# гасит призрак, иначе он переживает пересборку на протухшем индексе.
+	hover.call("_show_row_slot", 1)
+	var shown: Array = hover.get("_row_slots")
+	check(shown.size() == 1, "slot shown before live-like drop")
+	hover.call("gui_do_drop", drop_data, drop_pos)
+	check((hover.get("_row_slots") as Array).is_empty(),
+		"slot cleared right on drop, not on release")
+	var tbl: Array = state.table
+	check(tbl.size() == 2, "table has two rows after gap drop, got %d" % tbl.size())
+	if tbl.size() != 2:
+		return
+	check((tbl[0] as Object).get("id") == (rbs[0] as Control).get("row_id"),
+		"old row stays first after gap drop")
+	var new_tiles: Array = (tbl[1] as Object).get("tiles")
+	check(new_tiles.size() == 1 and (new_tiles[0] as Object).get("id") == drop_tile,
+		"dropped tile lands in the new row at the gap")
+	# После дропа междурядья по-прежнему находятся для новых слотов.
+	inst.call("refresh")
+	await process_frame
+	await process_frame
+	var rbs3: Array = inst.get("row_blocks")
+	check(rbs3.size() == 2, "two row blocks, got %d" % rbs3.size())
+	if rbs3.size() == 2:
+		var r1: Rect2 = (rbs3[0] as Control).get_global_rect()
+		var r2: Rect2 = (rbs3[1] as Control).get_global_rect()
+		check(hover.call("_hover_slot_pos",
+			Vector2(r1.get_center().x, (r1.end.y + r2.position.y) * 0.5)) == 1,
+			"gap between rows still found after drop")
+		check(hover.call("_hover_slot_pos",
+			Vector2(r2.get_center().x, r2.end.y + 3.0)) == 2,
+			"gap below last row found after drop")
