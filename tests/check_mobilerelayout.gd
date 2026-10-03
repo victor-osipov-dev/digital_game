@@ -342,6 +342,14 @@ func _tabs_and_pages(lobby: Node, rooms_page: Control) -> void:
 	await process_frame
 	if create_box.visible or code_box.visible:
 		_fail("снятие вкладки не спрятало обе формы")
+	# Форма кода — сразу за формой создания, под своей вкладкой,
+	# а не в самом низу страницы.
+	var kids := (lobby.get("_page_rooms") as Control).get_children()
+	var ci := kids.find(create_box)
+	var di := kids.find(code_box)
+	if ci < 0 or di != ci + 1:
+		_fail("коробка кода не сразу за коробкой создания (%d vs %d)" % [ci, di])
+	_quick_pick(lobby)
 	# Пагинация: 7 комнат режутся 5 + 2.
 	var rooms := []
 	for i in range(7):
@@ -382,6 +390,7 @@ func _tabs_and_pages(lobby: Node, rooms_page: Control) -> void:
 		await process_frame
 	if box.get_child_count() != 5 or label.text != "Стр. 1 из 2":
 		_fail("возврат на первую страницу не сработал")
+	_quick_pick(lobby)
 	lobby.set("_rooms", [])
 	lobby.call("_render_rooms")
 	for i in range(2):
@@ -448,6 +457,27 @@ func _find_button_in(node: Node, text: String) -> Button:
 		if found != null:
 			return found
 	return null
+
+
+## Быстрый матч без очередей: из публичных комнат с людьми берём самую
+## полную, иначе — пусто (будем создавать свою). Пароли и пустые мимо.
+func _quick_pick(lobby: Node) -> void:
+	lobby.set("_rooms", [
+		{"code": "P1", "hasPassword": true, "filled": 3, "state": "lobby"},
+		{"code": "E1", "hasPassword": false, "filled": 0, "state": "lobby"},
+		{"code": "A2", "hasPassword": false, "filled": 2, "state": "lobby"},
+		{"code": "B4", "hasPassword": false, "filled": 4, "state": "playing"},
+	])
+	var best: Dictionary = lobby.call("_pick_quick_room")
+	if String(best.get("code", "")) != "B4":
+		_fail("быстрый матч взял не самую полную (%s)" % String(best.get("code", "?")))
+	lobby.set("_rooms", [
+		{"code": "P1", "hasPassword": true, "filled": 3, "state": "lobby"},
+		{"code": "E1", "hasPassword": false, "filled": 0, "state": "lobby"},
+	])
+	best = lobby.call("_pick_quick_room")
+	if not best.is_empty():
+		_fail("быстрый матч взял комнату без людей/с паролем")
 
 
 ## У кнопки есть подпись, минимум покрывает её целиком, а раскладка

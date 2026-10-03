@@ -59,10 +59,6 @@ var _room_pass: LineEdit = null
 var _require_30: CheckBox = null
 var _create_btn: Button = null
 var _play_btn: Button = null
-var _quick_row: BoxContainer = null
-var _quick_note: Label = null
-var _quick_leave_btn: Button = null
-var _in_queue := false
 var _tabs_row: BoxContainer = null
 var _tab_group: ButtonGroup = null
 var _tab_create_btn: Button = null
@@ -283,9 +279,6 @@ func _enter_auth() -> void:
 	_set_page(_page_auth)
 	_update_status()
 	_update_buttons()
-	# Вышли из аккаунта — очередь быстрого матча за нами не держится.
-	_in_queue = false
-	_quick_row.visible = false
 	# Надпись о связи сюда не переносится: на странице входа она была бы
 	# не к месту и залипала бы после успешного подключения, потому что
 	# чистится только вместе с busy-задачей.
@@ -539,12 +532,13 @@ func _make_room_row(room: Dictionary) -> Control:
 	join.custom_minimum_size = Vector2(Settings.touch_w(84), Settings.touch(38))
 	join.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	join.add_theme_font_size_override("font_size", Settings.fs(16))
-	join.pressed.connect(_do_join.bind(String(room.get("code", "")), String(room.get("server", ""))))
+	join.pressed.connect(func(): _do_join(String(room.get("code", "")),
+		String(room.get("server", "")), _join_pass.text))
 	box.add_child(join)
 	return row
 
 
-func _do_join(code: String, server_id: String) -> void:
+func _do_join(code: String, server_id: String, password: String) -> void:
 	if code.is_empty():
 		return
 	# Комната живёт на конкретном сервере, и партия потом будет только
@@ -559,7 +553,7 @@ func _do_join(code: String, server_id: String) -> void:
 		_enter_auth()
 		return
 	_set_busy("Заходим в %s…" % code)
-	var res := await Net.join_room(code, _join_pass.text)
+	var res := await Net.join_room(code, password)
 	_set_busy("")
 	if _enter_from_join(res):
 		return
@@ -574,7 +568,7 @@ func _do_join(code: String, server_id: String) -> void:
 				continue
 			if not await _switch_to(other_id, "Ищем комнату"):
 				return
-			var again := await Net.join_room(code, _join_pass.text)
+			var again := await Net.join_room(code, password)
 			if _enter_from_join(again):
 				return
 			# Не нашли и здесь. Возвращаемся домой: оставшись на чужом
@@ -660,46 +654,50 @@ func _do_quick() -> void:
 	if not Net.is_logged_in():
 		_enter_auth()
 		return
-	# Параметры очереди — из формы создания (места и «от 30»): она может
-	# быть скрыта за вкладкой, но значения в контролах живут.
-	_set_busy("Ищем соперника…")
-	var res := await Net.quick_join(_seats_option.get_selected_id(), _create_require_30())
+	# Простой быстрый матч без очередей: обновляем список, и если есть
+	# публичная комната хотя бы с одним человеком — заходим в самую
+	# полную; иначе создаём свою на 4 места и сразу ждём в ней.
+	await _load_rooms()
+	if not Net.servers.any_online():
+		return
+	var target := _pick_quick_room()
+	if not target.is_empty():
+		await _do_join(String(target.get("code", "")),
+			String(target.get("server", "")), "")
+		return
+	var entry := Net.servers.random_online()
+	if entry.is_empty():
+		_set_note(_rooms_note, Net.servers.offline_hint(), true)
+		return
+	if String(entry.get("id", "")) != String(Net.server_entry().get("id", "")):
+		if not await _switch_to(String(entry.get("id", "")), "Создаём комнату"):
+			return
+	_set_busy("Создаём комнату на %s…" % Net.servers.label_of(entry))
+	var res := await Net.create_room(4, _create_require_30(), "Быстрая игра", "")
 	_set_busy("")
-	match String(res.get("t", "")):
-		NetProtocol.QUICK_STATE:
-			_show_quick_queue(res.get("queue", {}))
-		NetProtocol.ROOM_STATE:
-			# Сервер собрал комнату и посадил нас: значит, пора в партию.
-			_show_lobby(res.get("room", {}))
-		_:
-			_set_note(_rooms_note, _reason(res, "Быстрый матч недоступен"), true)
+	if String(res.get("t", "")) == NetProtocol.ROOM_STATE:
+		_show_lobby(res.get("room", {}))
+		return
+	_set_note(_rooms_note, _reason(res, "Не удалось создать комнату"), true)
 
 
-## Состояние очереди: строка видна, только пока мы в ней стоим.
-func _show_quick_queue(queue: Dictionary) -> void:
-	_in_queue = bool(queue.get("inQueue", false))
-	_quick_row.visible = _in_queue
-	if _in_queue:
-		_quick_note.text = "В очереди %d. Ждём соперника." % maxi(1, int(queue.get("waiting", 1)))
-	_restack_rooms()
-	_update_buttons()
-
-
-func _on_net_quick_state(queue: Dictionary) -> void:
-	# Живые обновления очереди (кто-то встал/ушёл/собралась комната):
-	# без подписки строка «В очереди N» врала бы до следующего клика.
-	if visible and _page_rooms.visible:
-		_show_quick_queue(queue)
-
-
-func _do_quick_leave() -> void:
-	_set_busy("Выходим из очереди…")
-	await Net.quick_leave()
-	_set_busy("")
-	_in_queue = false
-	_quick_row.visible = false
-	_restack_rooms()
-	_update_buttons()
+## Кандидат для быстрого матча: публичная комната, где уже есть люди.
+## Из нескольких берём самую полную — там живее всего. Пустого
+## словаря нет — создавать свою.
+func _pick_quick_room() -> Dictionary:
+	var best := {}
+	var best_filled := 0
+	for r in _rooms:
+		var d: Dictionary = r
+		if bool(d.get("hasPassword", false)):
+			continue
+		var filled := int(d.get("filled", 0))
+		if filled < 1:
+			continue
+		if filled > best_filled:
+			best_filled = filled
+			best = d
+	return best
 
 
 ## Вкладки «Создать комнату» / «Войти по коду»: видна одна форма,
@@ -734,9 +732,6 @@ func _show_lobby(room: Dictionary) -> void:
 		return
 	_current_room = room
 	_lobby_room_code = String(room.get("code", ""))
-	# Мы в комнате — из очереди быстрого матча нас уже вывели на сервере.
-	_in_queue = false
-	_quick_row.visible = false
 	if visible:
 		# Мы смотрим на комнату — «застрявшей» больше нет, баннеру нечего
 		# показывать, а кнопки «вернуться» не нужны: мы уже внутри.
@@ -877,7 +872,7 @@ func _do_return_room() -> void:
 		_go_scene("res://scenes/game.tscn")
 		return
 	if not String(pending.get("code", "")).is_empty():
-		await _do_join(String(pending.get("code", "")), "")
+		await _do_join(String(pending.get("code", "")), "", "")
 
 
 ## «Покинуть комнату» с баннера: полный выход из лобби или партии, место
@@ -1114,9 +1109,7 @@ func _update_buttons() -> void:
 	_register_btn.disabled = busy or not linked
 	_refresh_btn.disabled = busy or not linked
 	_create_btn.disabled = busy or not authed
-	# Пока стоим в очереди быстрого матча — не встаём в неё дважды:
-	# выйти можно кнопкой «Не ждать» рядом.
-	_play_btn.disabled = busy or not authed or _in_queue
+	_play_btn.disabled = busy or not authed
 	_join_btn.disabled = busy or not authed
 	_start_btn.disabled = busy or not authed or not _lobby_ready
 	_leave_btn.disabled = busy or not authed
@@ -1397,7 +1390,6 @@ func _build() -> void:
 	Net.room_state.connect(_on_net_room_state)
 	Net.room_closed.connect(_on_net_room_left)
 	Net.game_state.connect(_on_net_game_state)
-	Net.quick_state.connect(_on_net_quick_state)
 	Net.pending_room_changed.connect(_refresh_stuck)
 	_tick = Timer.new()
 	_tick.wait_time = HEALTH_TICK_S
@@ -1534,22 +1526,6 @@ func _build_rooms() -> VBoxContainer:
 	_play_btn.pressed.connect(_do_quick)
 	_apply_accent(_play_btn, Color("2E7D32"), Color("388E3C"), Color("1B5E20"))
 	page.add_child(_play_btn)
-	# Строка очереди видна, только пока мы в ней стоим: подпись — сколько
-	# нас ждёт, рядом выход из очереди.
-	_quick_row = BoxContainer.new()
-	_quick_row.add_theme_constant_override("separation", 8)
-	page.add_child(_quick_row)
-	_stack_rows.append(_quick_row)
-	_quick_note = Label.new()
-	_quick_note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_quick_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_quick_note.add_theme_font_size_override("font_size", Settings.fs(15))
-	_quick_note.add_theme_color_override("font_color", Color(1, 1, 1, 0.9))
-	_quick_row.add_child(_quick_note)
-	_quick_leave_btn = _button("Не ждать", 15)
-	_quick_leave_btn.pressed.connect(_do_quick_leave)
-	_quick_row.add_child(_quick_leave_btn)
-	_quick_row.visible = false
 
 	# --- вкладки: создать комнату или войти по коду. Видна только одна
 	# форма, а в начале — ни одной: список комнат при этом показывается
@@ -1616,6 +1592,28 @@ func _build_rooms() -> VBoxContainer:
 	_apply_accent(_create_btn, Color("2E7D32"), Color("388E3C"), Color("1B5E20"))
 	_create_box.add_child(_create_btn)
 
+	# --- по коду (форма за вкладкой): коробка стоит сразу за созданием,
+	# чтобы форма открывалась под своей вкладкой, а не в самом низу.
+	_code_box = VBoxContainer.new()
+	_code_box.add_theme_constant_override("separation", 8)
+	_code_box.visible = false
+	page.add_child(_code_box)
+	_code_box.add_child(_header("Войти по коду", 15))
+	var code_row := BoxContainer.new()
+	code_row.add_theme_constant_override("separation", 8)
+	_code_box.add_child(code_row)
+	_stack_rows.append(code_row)
+	_join_code = _field("код")
+	_join_code.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	code_row.add_child(_join_code)
+	_join_pass = _field("пароль", true)
+	_join_pass.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	code_row.add_child(_join_pass)
+	_join_btn = _button("Войти", 15)
+	_join_btn.pressed.connect(func(): _do_join(
+		_join_code.text.strip_edges().to_upper(), "", _join_pass.text))
+	_code_box.add_child(_join_btn)
+
 	# --- список
 	page.add_child(_header("Все комнаты", 19))
 	var head := BoxContainer.new()
@@ -1662,26 +1660,6 @@ func _build_rooms() -> VBoxContainer:
 	_page_next.pressed.connect(_page_step.bind(1))
 	_page_row.add_child(_page_next)
 	_page_row.visible = false
-
-	# --- по коду (форма за вкладкой)
-	_code_box = VBoxContainer.new()
-	_code_box.add_theme_constant_override("separation", 8)
-	_code_box.visible = false
-	page.add_child(_code_box)
-	_code_box.add_child(_header("Войти по коду", 15))
-	var code_row := BoxContainer.new()
-	code_row.add_theme_constant_override("separation", 8)
-	_code_box.add_child(code_row)
-	_stack_rows.append(code_row)
-	_join_code = _field("код")
-	_join_code.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	code_row.add_child(_join_code)
-	_join_pass = _field("пароль", true)
-	_join_pass.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	code_row.add_child(_join_pass)
-	_join_btn = _button("Войти", 15)
-	_join_btn.pressed.connect(func(): _do_join(_join_code.text.strip_edges().to_upper(), ""))
-	_code_box.add_child(_join_btn)
 
 	_logout_row(page)
 	return page

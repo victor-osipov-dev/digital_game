@@ -356,7 +356,7 @@ func _run_match_guest(ts: String) -> void:
 	if found.is_empty():
 		return
 
-	await lobby._do_join(String(found.get("code", "")), String(found.get("server", "")))
+	await lobby._do_join(String(found.get("code", "")), String(found.get("server", "")), "")
 	var in_room := await _wait_for(25, func():
 		return lobby._page_lobby.visible or (get_tree().current_scene != null and get_tree().current_scene.name == "Game"))
 	_step("guest: вход в комнату", in_room, lobby._lobby_code.text)
