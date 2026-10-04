@@ -29,6 +29,12 @@ func force_relayout() -> void:
 	_last_width = -1.0
 	_relayout()
 
+## Ряд уже разложен: ширина известна и карточки встали на свои места.
+## Свежий ряд (только что созданный блок) этой ширины ещё не получил —
+## до первого layout все view лежат в (0,0), и целить туда нельзя.
+func is_laid_out() -> bool:
+	return _last_width > 0.0
+
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_RESIZED:
 		_maybe_relayout()

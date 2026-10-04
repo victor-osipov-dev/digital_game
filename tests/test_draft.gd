@@ -519,6 +519,11 @@ func test_bot_commit_no_mid_state() -> void:
 				% [int(r["title_frame"]), int(r["last_frame"])])
 		ok("посадки разнесены во времени", int(r["spread_ms"]) >= 300,
 			"разброс %d мс" % int(r["spread_ms"]))
+	# Посадка обязана совпасть с раскладкой рядов (см. _layout_rest_check):
+	# полёт с целью в начало ряда тоже «сел», но карточки при этом слиплись.
+	var layout_err := await _layout_rest_check()
+	ok("карточки легли там, где раскладывает ряд", layout_err == "",
+		layout_err)
 	game._online = false
 
 
@@ -598,6 +603,73 @@ func _landing_spread(need: Array, title_ov: Control = null, max_frames: int = 60
 	return out
 
 
+## Карточки обязаны лежать там, где их раскладывает ряд. Полёт с целью
+## (0,0) «садится» успешно — посадка сама по себе ничего не доказывает,
+## но повторная раскладка сразу сдвинет их влево, а две карточки в одной
+## точке — это слипшаяся стопка. Ждём конца презентации, снимаем позиции,
+## пересчитываем раскладку и требуем, чтобы ничего не изменилось.
+func _layout_rest_check(max_frames: int = 400) -> String:
+	for i in range(max_frames):
+		if game._present_queue.is_empty() and not game._present_busy \
+				and not game._flight_active and not game._refresh_pending \
+				and not game._title_pending:
+			break
+		await process_frame
+	if game._present_busy or game._flight_active:
+		return "презентация не доиграла за %d кадров" % max_frames
+	# Очередь не считает немедленные переезды (_play_place_anim) — ждём,
+	# пока позиции улягутся, и сравниваем только покой.
+	var prev := _row_positions()
+	var stable := 0
+	for i in range(180):
+		var now := _row_positions()
+		if now == prev:
+			stable += 1
+			if stable >= 5:
+				break
+		else:
+			stable = 0
+			prev = now
+		await process_frame
+	for block in game.row_blocks:
+		var flow = block.get("flow")
+		if flow == null:
+			continue
+		var views: Array = flow.get("tile_views")
+		if not bool(flow.call("is_laid_out")):
+			return "ряд не разложен (row_id=%d)" % int(block.get("row_id"))
+		var before := []
+		for item in views:
+			before.append((item as Control).position)
+		for a in range(views.size()):
+			for b in range(a + 1, views.size()):
+				if (before[a] as Vector2).distance_to(
+						before[b] as Vector2) < 0.01:
+					return "ряд %d: карточки слиплись в точке %s" \
+						% [int(block.get("row_id")), before[a]]
+		flow.call("force_relayout")
+		for a in range(views.size()):
+			var now: Vector2 = (views[a] as Control).position
+			if (before[a] as Vector2).distance_to(now) > 0.01:
+				return "ряд %d: карточка легла %s, а раскладка даёт %s" \
+					% [int(block.get("row_id")), before[a], now]
+	return ""
+
+
+## Покой всех карточек на столе: id вида → его локальная позиция.
+func _row_positions() -> Dictionary:
+	var out := {}
+	for block in game.row_blocks:
+		var flow = block.get("flow")
+		if flow == null:
+			continue
+		for item in flow.get("tile_views"):
+			var v := item as Control
+			if v != null:
+				out[v.get_instance_id()] = v.position
+	return out
+
+
 ## Цепочка ботов идёт очередью презентаций: шаги первого — титр второго —
 ## шаги второго — титр игрока. Второй коммит приходит, пока первый ещё
 ## летит (боты ходят каждые 1.4–2.4 с), — пересборка должна подождать
@@ -663,6 +735,11 @@ func test_bot_chain_queued() -> void:
 			int(r["title_frame"]) > bot1_end and int(r["title_frame"]) < bot2_start,
 			"титр на кадре %d, первый бот сел на %d, второй начал с %d"
 				% [int(r["title_frame"]), bot1_end, bot2_start])
+	# Посадка обязана совпасть с раскладкой рядов: иначе карточки
+	# «долетели» в (0,0) — начало ряда — и слиплись в стопку.
+	var layout_err := await _layout_rest_check()
+	ok("карточки легли там, где раскладывает ряд", layout_err == "",
+		layout_err)
 	game._online = false
 
 

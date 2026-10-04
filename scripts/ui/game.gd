@@ -2575,16 +2575,25 @@ func refresh() -> void:
 	_anim_force = []
 	var stagger := _anim_stagger
 	_anim_stagger = false
+	# Ждущие показа снимаем ДО постановки шагов: при свободной очереди
+	# сегмент выходит из неё немедленно, и после этого список был бы пуст —
+	# немедленный полёт увёл бы карточки минуя очередь. Двойной прилёт
+	# (очередь целится в раскладку, повторный — в угол старта, где уже
+	# стоят) гасил бы стагger и рвал карточки обратно в угол.
+	var waiting: Array = _present_ids()
 	# Пошаговый прилёт — в очередь презентаций (там же титры), а не
 	# сразу на экран: цепочки ботов иначе рвут друг друга.
 	if stagger and not force.is_empty() and state != null and not state.finished:
 		_enqueue_steps(force)
+		for id in force:
+			if not waiting.has(int(id)):
+				waiting.append(int(id))
 		force = []
-	# Гасим всё, что ждёт показа (очередь + сироты) — безусловно, после
-	# пересборки и после постановки новых шагов: пересборка воскрешает
-	# виды видимыми, а их полёт ещё впереди. Пропущенный здесь случай
-	# (перерисовка без метки анимации) и был виден как «встали разом».
-	var waiting: Array = _present_ids()
+	# Гасим всё, что ждёт показа (очередь + сироты + вставшие в эту
+	# перерисовку шаги) — безусловно, после пересборки: пересборка
+	# воскрешает виды видимыми, а их полёт ещё впереди. Пропущенный здесь
+	# случай (перерисовка без метки анимации) и был виден как «встали
+	# разом».
 	if not waiting.is_empty():
 		_hide_force_tiles(waiting)
 	if not shots.is_empty() or not force.is_empty():
@@ -2729,6 +2738,19 @@ func _play_queued_steps(ids: Array, tree: SceneTree, gen: int) -> void:
 			# собран) — показ не состоялся. Запоминаем: фишка вернётся на
 			# экран — покажем её своим чередом, а не считаем посаженной.
 			_present_orphans.append(int(id))
+	if views.is_empty():
+		return
+	# Пересборка только что пересоздала RowBlock'и: их FlowTiles ширины
+	# ещё не получил, все view лежат в (0,0) — целевой точкой полёта было
+	# бы начало ряда, и карточки слепились бы там (видимо: сначала встали
+	# по местам, потом поэтапно улетели влево). Ждём layout, как в
+	# _play_place_anim; спрятаны заранее — вспышки в (0,0) не будет.
+	for i in range(3):
+		if _views_laid_out(views):
+			break
+		await tree.process_frame
+	if gen != _present_gen:
+		return
 	var step := 0
 	for tv in views:
 		if gen != _present_gen:
@@ -2736,9 +2758,18 @@ func _play_queued_steps(ids: Array, tree: SceneTree, gen: int) -> void:
 		if is_instance_valid(tv):
 			_fly_in_tile(tv, step, 0.45, 2.0)
 			step += 1
-	if views.is_empty():
-		return
 	await tree.create_timer(minf(float(maxi(views.size() - 1, 0)) * 0.45, 2.0) + 0.8).timeout
+
+## Все карточки уже разложены своими рядами? Свежий ряд ширины ещё не
+## получил (см. FlowTiles.is_laid_out) — до этого целиться нельзя.
+func _views_laid_out(views: Array) -> bool:
+	for v in views:
+		if not is_instance_valid(v):
+			continue
+		var p := (v as Control).get_parent()
+		if p is FlowTiles and not (p as FlowTiles).is_laid_out():
+			return false
+	return true
 
 ## Все показанные сейчас фишки: id, сама фишка и положение на экране.
 func _capture_tiles() -> Array:
@@ -2898,6 +2929,10 @@ func _fly_in_tile(tv: TileView, step: int, gap: float = 0.05, cap: float = 0.4) 
 		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT).set_delay(delay)
 	tw.tween_property(tv, "scale", Vector2.ONE, 0.32) \
 		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT).set_delay(delay)
+	# Раскладка — истина в последней инстанции: пока карточка летела, ряд
+	# мог пересчитаться (ширина ряда меняется от полосы прокрутки), и цель
+	# полёта устарела бы — карточка осталась бы мимо своего места.
+	tw.finished.connect(_rest_layout.bind(tv))
 
 ## Фишка сменила место: переезжает из старого положения в новое.
 func _slide_tile(tv: TileView, from_global: Vector2) -> void:
@@ -2910,6 +2945,18 @@ func _slide_tile(tv: TileView, from_global: Vector2) -> void:
 	tw.bind_node(tv)
 	tw.tween_property(tv, "position", final_local, 0.3) \
 		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.finished.connect(_rest_layout.bind(tv))
+
+## Переезд/полёт кончились — возвращаем карточку в раскладку ряда: если за
+## время анимации ряд пересчитался (другая ширина — от полосы
+## прокрутки), цель устарела, и карточка осталась бы стоять мимо своего
+## места. Пока тянем карточку — не трогаем: раскладка увела бы её из руки.
+func _rest_layout(tv: TileView) -> void:
+	if not is_instance_valid(tv) or _drag_view != null:
+		return
+	var p := tv.get_parent()
+	if p is FlowTiles:
+		(p as FlowTiles).force_relayout()
 
 ## Ушедшая фишка: призрак улетает в верхний правый угол и уменьшается —
 ## под ней уже пусто.
