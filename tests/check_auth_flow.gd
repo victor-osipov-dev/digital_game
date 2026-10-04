@@ -129,6 +129,8 @@ func _checks() -> void:
 	_check_ya_poll_dispatch()
 	_check_web_fast_path()
 	_check_ya_benefit_modal()
+	_check_ya_benefit_width()
+	_check_hidden_pages()
 	_check_tab_padding()
 
 
@@ -284,6 +286,36 @@ func _find_modal_button(node: Node, text: String) -> Button:
 		if found != null:
 			return found
 	return null
+
+
+## Модалка не уже своей самой длинной кнопки (ловили вживую срезанное
+## «Войти через Я...» — панель схлопывалась под короткий заголовок).
+func _check_ya_benefit_width() -> void:
+	var lobby := inst
+	lobby.call("_show_ya_benefit")
+	var panel := inst.get("_ya_panel") as PanelContainer
+	var yes := _find_modal_button(inst.get("_ya_modal"), "Войти через Яндекс")
+	var need := 0.0
+	if yes != null:
+		var font: Font = yes.get_theme_font("font")
+		if font != null:
+			need = font.get_string_size(yes.text, HORIZONTAL_ALIGNMENT_LEFT, -1,
+				yes.get_theme_font_size("font_size")).x
+		var sb := yes.get_theme_stylebox("normal")
+		if sb != null:
+			need += sb.content_margin_left + sb.content_margin_right
+	check(panel != null and panel.custom_minimum_size.x + 1.0 >= need,
+		"модалка шире кнопки входа (panel %.0f, need %.0f)"
+			% [panel.custom_minimum_size.x if panel != null else -1.0, need])
+
+
+## Быстрый вход не показывает старую страницу: фон модалки — пустая шапка.
+func _check_hidden_pages() -> void:
+	var lobby := inst
+	lobby.call("_hide_all_pages")
+	check(not _page_visible("_page_auth") and not _page_visible("_page_rooms")
+		and not _page_visible("_page_lobby"),
+		"все страницы спрятаны под модалкой")
 
 
 func _lobby_source() -> String:

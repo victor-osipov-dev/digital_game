@@ -61,6 +61,7 @@ var _ya_busy := false
 ## Модалка пользы перед входом через Яндекс (только Web): объясняет,
 ## зачем входить, и даёт честный выход гостем. Строится лениво.
 var _ya_modal: ColorRect = null
+var _ya_panel: PanelContainer = null
 
 var _server_label: Label = null
 var _server_box: VBoxContainer = null
@@ -509,7 +510,9 @@ func _ya_log(msg: String) -> void:
 ## 7. Залогинен (сессия) или уже авторизован в Яндексе — входим молча:
 ##    сначала тихий профиль БЕЗ диалога, модалку не показываем.
 func _enter_web_fast() -> void:
-	_set_page(_page_auth)
+	# Страницы прячем все: фоном модалки должна быть пустая шапка лобби,
+	# а не старая страница входа (иначе обе видны одновременно).
+	_hide_all_pages()
 	_update_status()
 	_update_buttons()
 	_set_auth_note("")
@@ -598,11 +601,17 @@ func _build_ya_benefit() -> void:
 	no.pressed.connect(_on_ya_benefit_no)
 	box.add_child(no)
 	_ya_modal = dim
+	_ya_panel = panel
 
 
 func _show_ya_benefit() -> void:
 	if _ya_modal == null:
 		_build_ya_benefit()
+	# Ширина панели — по вьюпорту, иначе на широком она схлопывается
+	# под короткий заголовок и текст кнопок срезается (ловили вживую:
+	# «Войти через Я...»). 440 хватает самой длинной кнопке.
+	var vw := get_viewport_rect().size.x
+	(_ya_panel as PanelContainer).custom_minimum_size = Vector2(minf(440.0, vw - 32.0), 0)
 	(_ya_modal as ColorRect).visible = true
 
 
@@ -1395,6 +1404,12 @@ func _set_page(page: VBoxContainer) -> void:
 	for p in [_page_auth, _page_rooms, _page_lobby]:
 		(p as Control).visible = p == page
 	_update_status()
+
+
+## Спрятать все страницы (фон быстрого Web-входа: пустая шапка + модалка).
+func _hide_all_pages() -> void:
+	for p in [_page_auth, _page_rooms, _page_lobby]:
+		(p as Control).visible = false
 
 
 func _set_busy(text: String) -> void:
