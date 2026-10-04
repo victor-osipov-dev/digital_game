@@ -8,7 +8,7 @@ extends SceneTree
 #   1) правый край — ни один видимый Control (за исключением
 #      содержимого горизонтально-прокручиваемых контейнеров) не
 #      вылезает за 576: именно так ломалось «даже при среднем»;
-#   2) числа в фишке — ширина «88»/«★» и высота шрифта обязаны
+#   2) числа в фишке — ширина «88»/«*» и высота шрифта обязаны
 #      влезать в саму фишку на всех шести размерах карточек;
 #   3) границы самого fs() — пол для мелкого текста (на «Маленьком»
 #      fs(12) не мельчает допустимого) и точная таблица значений.
@@ -36,6 +36,8 @@ func _boot() -> void:
 	var saved_step: int = settings.tile_step
 
 	_check_fs_bounds(settings)
+
+	_check_web_glyphs()
 
 	for idx in range(3):
 		settings.text_scale = idx
@@ -218,7 +220,9 @@ func _tile_round(idx: int, step: int) -> void:
 		view.free()
 		return
 	var w88: float = font.get_string_size("88", HORIZONTAL_ALIGNMENT_LEFT, -1, fsize).x
-	var wstar: float = font.get_string_size("★", HORIZONTAL_ALIGNMENT_LEFT, -1, fsize).x
+	# Джокер — ASCII-звёздочка, а не «★»: геометрических глифов нет во
+	# встроенном шрифте Web-сборки (тофу вместо символа).
+	var wstar: float = font.get_string_size("*", HORIZONTAL_ALIGNMENT_LEFT, -1, fsize).x
 	var widest := maxf(w88, wstar)
 	if widest > ts.x - 6.0:
 		_fail("масштаб %d, фишка %dx%d: цифра шириной %.0f не влезает"
@@ -290,6 +294,64 @@ func _find_button(node: Node, text: String) -> Button:
 		if found != null:
 			return found
 	return null
+
+
+# ---------------------------------------------------------------- глифы Web
+
+## Во встроенном шрифте Web-сборки нет системного фолбэка: стрелки,
+## геометрия и дингбаты рисуются тофу-квадратом. Ловили вживую: «▶»
+## у своего места в лобби, «★» джокера, «☰» кнопки-бургера — заменены
+## на «» », «*», «...». Скан идёт по коду без комментариев: в комментариях
+## эти символы безвредны. Проверяются только Web-поверхности (scripts/ui
+## и переводы): Android-файлы сюда не входят.
+func _check_web_glyphs() -> void:
+	var risky := []
+	for cp in range(0x2190, 0x2200):
+		risky.append(cp)
+	for cp in range(0x25A0, 0x27C0):
+		risky.append(cp)
+	for dir_path in ["res://scripts/ui", "res://scripts/core"]:
+		var dir := DirAccess.open(dir_path)
+		if dir == null:
+			_fail("не открывается " + dir_path)
+			continue
+		for fn in dir.get_files():
+			if fn.ends_with(".gd"):
+				_scan_glyph_file(dir_path + "/" + fn, risky)
+
+
+func _scan_glyph_file(path: String, risky: Array) -> void:
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		_fail("не читается " + path)
+		return
+	var idx := 0
+	while not f.eof_reached():
+		idx += 1
+		var code := _strip_gd_comment(f.get_line())
+		for i in code.length():
+			var cp := code.unicode_at(i)
+			if int(cp) in risky:
+				_fail("%s:%d запрещённый для Web глиф U+%04X" % [path, idx, cp])
+	f.close()
+
+
+## Отрезает `#`-комментарий вне строк: внутри строк `#` встречается
+## (hex-цвета, URL с якорем) и резать по нему нельзя.
+func _strip_gd_comment(line: String) -> String:
+	var in_str := false
+	var i := 0
+	while i < line.length():
+		var c := line[i]
+		if c == "\\":
+			i += 2
+			continue
+		if c == "\"":
+			in_str = not in_str
+		elif c == "#" and not in_str:
+			return line.left(i)
+		i += 1
+	return line
 
 
 func _fail(msg: String) -> void:

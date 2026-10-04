@@ -380,7 +380,10 @@ func _build_ui() -> void:
 	_top_pinned = [cp_save_btn, cp_restore_btn, hint_btn]
 	_top_overflow = [help_btn, settings_btn, menu_btn]
 	_burger_btn = Button.new()
-	_burger_btn.text = Lang.t("☰")
+	# Три точки вместо «☰»: триграммы нет во встроенном шрифте Web-сборки
+	# (тофу-квадрат), системного фолбэка там нет. Тултип «Действия»
+	# смысл сохраняет.
+	_burger_btn.text = Lang.t("...")
 	_burger_btn.tooltip_text = Lang.t("Действия")
 	_burger_btn.custom_minimum_size = Vector2(60, Settings.touch(46))
 	_burger_btn.clip_text = true
@@ -391,7 +394,7 @@ func _build_ui() -> void:
 
 	# Ловец кликов мимо меню: закрывает бургер и съедает нажатие,
 	# чтобы оно не проваливалось в стол. Лежит под панелью, над всем
-	# остальным; кнопка «☰» под ним, но её тап тоже ловится сюда же —
+	# остальным; кнопка «...» под ним, но её тап тоже ловится сюда же —
 	# повторный тап закрывает, как и раньше.
 	_burger_catcher = ColorRect.new()
 	_burger_catcher.color = Color(0, 0, 0, 0)
@@ -898,7 +901,7 @@ func _hide_burger_panel() -> void:
 		_burger_catcher.visible = _burger_open
 
 
-## Панель под кнопку «☰», правым краем по ней: поверх раскладки, ничего
+	## Панель под кнопку «...», правым краем по ней: поверх раскладки, ничего
 ## не сдвигает. Ширина — по содержимому, но не шире окна.
 func _place_burger_panel() -> void:
 	if _burger_panel == null or _burger_btn == null:

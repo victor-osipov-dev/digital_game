@@ -79,7 +79,7 @@ func _build() -> void:
 	var tile_base := int(round(ts.y * 0.4))
 	var fsize := clampi(Settings.fs(tile_base), 8, int((ts.x - 6.0) * 0.82))
 	var label := Label.new()
-	label.text = Lang.t("★") if tile.is_joker else str(tile.value)
+	label.text = Lang.t("*") if tile.is_joker else str(tile.value)
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	label.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
