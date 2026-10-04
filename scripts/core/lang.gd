@@ -119,6 +119,7 @@ const _EN := {
 "Игроков:": "Players:",
 "Имена игроков:": "Player names:",
 "Ищем комнату": "Looking for a room",
+"К результату": "Back to result",
 "Каждый ход — ровно одно действие: выложить хотя бы одно число из руки":
 	"Each turn is exactly one action: place at least one tile from your hand",
 "Как играть": "How to play",
@@ -207,6 +208,7 @@ const _EN := {
 "Помощь": "Help",
 "Поражений: %d": "Losses: %d",
 "Поражений:": "Losses:",
+"Посмотреть стол": "View table",
 "Правила игры": "How to play",
 "Продолжить": "Continue",
 "Пропуск хода": "Skip turn",

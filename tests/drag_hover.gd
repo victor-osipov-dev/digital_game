@@ -48,6 +48,7 @@ func _on_frame() -> void:
 			phase = 6
 			await _drop_checks()
 			await _pan_checks()
+			await _win_checks()
 			quit(0 if fails == 0 else 1)
 
 func _empty_checks() -> void:
@@ -284,6 +285,58 @@ func _pan_checks() -> void:
 		"foreign turn: pan from tile scrolls table (0 -> %d)" % scroll.scroll_vertical)
 	settings.call("set_bot", 0, false)
 	inst.call("refresh")
+
+
+## После победы стол можно посмотреть (только чтение): кнопка уводит
+## оверлей, плавающая возвращает обратно. Двигать ничего нельзя.
+func _win_checks() -> void:
+	var hover := inst as Control
+	var state = inst.get("state")
+	# Доигрываем в лоб. Статистику не пишем (флаг уже стоит), иначе
+	# тест пачкал бы конфиг игрока.
+	inst.set("_stats_recorded", true)
+	state.finished = true
+	state.winner = 0
+	inst.call("refresh")
+	await process_frame
+	await process_frame
+	inst.call("_show_win")
+	var ov := inst.get("win_overlay") as Control
+	check(ov != null and ov.visible, "win screen shown")
+	if ov == null:
+		return
+	var view_btn := _find_button_text(ov, "Посмотреть")
+	check(view_btn != null, "view-table button exists")
+	if view_btn == null:
+		return
+	view_btn.pressed.emit()
+	await process_frame
+	check(not ov.visible, "win overlay hidden for inspection")
+	var back := inst.get("_inspect_btn") as Button
+	check(back != null and back.visible, "back button shown")
+	check(not bool(hover.call("_can_act")), "finished game is read-only")
+	check(not bool(inst.call("_modal_open")), "no modal over inspected table")
+	var rbs: Array = inst.get("row_blocks")
+	if not rbs.is_empty():
+		var flow = (rbs[0] as Control).get("flow")
+		var views: Array = flow.get("tile_views") if flow != null else []
+		if not views.is_empty():
+			check(not bool(views[0].get("draggable")), "finished tiles not draggable")
+	if back != null:
+		back.pressed.emit()
+		await process_frame
+		check(ov.visible, "back returns win screen")
+		check(not back.visible, "back button hidden again")
+
+
+func _find_button_text(node: Node, part: String) -> Button:
+	if node is Button and String((node as Button).text).contains(part):
+		return node as Button
+	for child in node.get_children():
+		var found := _find_button_text(child, part)
+		if found != null:
+			return found
+	return null
 
 
 ## Первая видимая фишка стола с запасом сверху под жест: жест целиком

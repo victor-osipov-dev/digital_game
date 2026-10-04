@@ -58,6 +58,9 @@ var _confirm_action: Callable = Callable()
 var toast_tween: Tween = null
 var title_tween: Tween = null
 var _again_btn: Button = null
+## Плавающая кнопка возврата на экран победы из просмотра стола.
+## Видна только в режиме просмотра (партия кончена, оверлей скрыт).
+var _inspect_btn: Button = null
 var _settings_panel: PanelContainer = null
 var _settings_rows: Array = []
 var _top_actions: FlowContainer = null
@@ -1020,6 +1023,32 @@ func _build_win_overlay() -> void:
 	to_menu_btn.pressed.connect(_on_leave_to_menu)
 	btn_box.add_child(to_menu_btn)
 
+	# Третья кнопка — отдельным рядом: в ряд влезают только две
+	# (touch_w режет ширину 44% окна), а текст здесь длиннее.
+	var view_box := HBoxContainer.new()
+	view_box.alignment = BoxContainer.ALIGNMENT_CENTER
+	box.add_child(view_box)
+
+	var view_btn := Button.new()
+	view_btn.text = Lang.t("Посмотреть стол")
+	view_btn.custom_minimum_size = Vector2(Settings.touch_w(240), Settings.touch(60))
+	view_btn.add_theme_font_size_override("font_size", Settings.fs(19))
+	view_btn.pressed.connect(_show_table_inspect)
+	view_box.add_child(view_btn)
+
+	# Возврат из просмотра — плавающей кнопкой: оверлей победы в это
+	# время скрыт вместе со своей кнопкой.
+	_inspect_btn = Button.new()
+	_inspect_btn.text = Lang.t("К результату")
+	_inspect_btn.custom_minimum_size = Vector2(Settings.touch_w(180), Settings.touch(60))
+	_inspect_btn.add_theme_font_size_override("font_size", Settings.fs(19))
+	_inspect_btn.top_level = true
+	_inspect_btn.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT,
+		Control.PRESET_MODE_MINSIZE, 16)
+	_inspect_btn.visible = false
+	_inspect_btn.pressed.connect(_hide_table_inspect)
+	add_child(_inspect_btn)
+
 func _build_help_overlay() -> void:
 	help_overlay = ColorRect.new()
 	help_overlay.color = Color(0, 0, 0, 0.78)
@@ -1152,6 +1181,7 @@ func _rebuild_ui() -> void:
 	_reset_slot_hover()
 	var was_pass := pass_overlay != null and pass_overlay.visible
 	var was_win := win_overlay != null and win_overlay.visible
+	var was_inspect := _inspect_btn != null and _inspect_btn.visible
 	var was_help := help_overlay != null and help_overlay.visible
 	var was_settings := settings_overlay != null and settings_overlay.visible
 	var pass_t := pass_title.text if pass_title != null else ""
@@ -1169,6 +1199,7 @@ func _rebuild_ui() -> void:
 	_show_wait(wait_t)
 	pass_overlay.visible = was_pass
 	win_overlay.visible = was_win
+	_inspect_btn.visible = was_inspect
 	help_overlay.visible = was_help
 	settings_overlay.visible = was_settings
 	turn_title_overlay.visible = false
@@ -1312,6 +1343,8 @@ func _new_match() -> void:
 	state = GameState.create(Settings.player_count, Array(Settings.player_names), Settings.require_30)
 	invalid_row_ids.clear()
 	win_overlay.visible = false
+	if _inspect_btn != null:
+		_inspect_btn.visible = false
 	pass_overlay.visible = false
 	_show_wait("")
 	_show_pass(true)
@@ -1349,6 +1382,8 @@ func _can_act() -> bool:
 func _net_begin() -> void:
 	pass_overlay.visible = false
 	win_overlay.visible = false
+	if _inspect_btn != null:
+		_inspect_btn.visible = false
 	_bot_seq += 1
 	_bot_active = false
 	_hint_ids.clear()
@@ -1461,6 +1496,8 @@ func _on_state_received(view: Dictionary, grace: float, paused: bool, waiting: b
 		_record_stats()
 		win_title.text = Lang.t("Победитель - %s") % state.player_name(state.winner)
 		win_overlay.visible = true
+		if _inspect_btn != null:
+			_inspect_btn.visible = false
 		_show_wait("")
 		_present_queue.clear()
 		_present_gen += 1
@@ -1960,6 +1997,25 @@ func _show_win() -> void:
 	_record_stats()
 	win_title.text = Lang.t("Победитель - %s") % state.player_name(state.winner)
 	win_overlay.visible = true
+	if _inspect_btn != null:
+		_inspect_btn.visible = false
+
+
+## Экран победы скрыт — смотрим финальный стол. Только чтение: finished
+## гасит драги (_can_act), дропы (gui_can_drop) и кнопки (_update_buttons),
+## а листать стол паном можно — так и задумано.
+func _show_table_inspect() -> void:
+	if state == null or not state.finished:
+		return
+	win_overlay.visible = false
+	_inspect_btn.visible = true
+
+
+## Вернуться на экран победы из просмотра стола.
+func _hide_table_inspect() -> void:
+	_inspect_btn.visible = false
+	if state != null and state.finished:
+		win_overlay.visible = true
 
 
 ## Одна запись в статистику на партию. Победа — за нами: в одиночной
