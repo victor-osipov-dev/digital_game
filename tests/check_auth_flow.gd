@@ -126,6 +126,7 @@ func _checks() -> void:
 	check(_page_visible("_page_rooms"), "successful register switches to rooms page")
 	_check_password_remembered()
 	_check_auth_error_matrix()
+	_check_ya_poll_dispatch()
 
 
 ## Матрица ошибок входа/регистрации: каждая причина — и клиентская
@@ -213,6 +214,26 @@ func _check_auth_error_matrix() -> void:
 	check(_auth_note_text() == "Wrong login or password" and _auth_note_visible(),
 		"серверная причина переведена, got: %s" % _auth_note_text())
 	Lang.set_lang("ru")
+
+
+## Диспетчер опроса SDK в лобби: kind "sdk" обязан уходить в
+## poll_sdk_ready, а не падать в poll_player (у него нет ключа "ready").
+## Без этой ветки _do_ya_login всегда считал SDK неготовым и молча
+## отказывал даже под dev-proxy со стабом («ничего не происходит»).
+func _check_ya_poll_dispatch() -> void:
+	var f := FileAccess.open("res://scripts/ui/online_lobby.gd", FileAccess.READ)
+	if f == null:
+		check(false, "online_lobby.gd читается")
+		return
+	var src := f.get_as_text()
+	f.close()
+	var i_sdk := src.find('== "sdk"')
+	var i_ready := src.find("poll_sdk_ready", i_sdk)
+	var i_player := src.find("poll_player", i_sdk)
+	check(i_sdk >= 0 and i_ready >= 0 and (i_player < 0 or i_ready < i_player),
+		"ветка \"sdk\" ведёт в poll_sdk_ready до poll_player")
+	check(src.contains('_ysdk_call("ensure_sdk")'),
+		"_do_ya_login сам просит SDK (не только главное меню)")
 
 
 ## Пароль помнится на устройстве: пишется в сессию при наборе в поле,

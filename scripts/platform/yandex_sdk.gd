@@ -1,8 +1,12 @@
 extends RefCounted
 
 ## Мост к SDK Яндекс Игр (только Web, TEST MODE: только lifecycle API,
-## обычной рекламы ЯИ не подключаем). SDK подгружается динамически
-## скрипт-тегом — без кастомного shell. Вне Web все вызовы тихие no-op.
+## обычной рекламы ЯИ не подключаем). Тег <script src="/sdk.js"> кладёт
+## в <head> пресет Yandex_Web (html/head_include): под dev-proxy это стаб
+## прокси, в проде залитого архива — настоящий SDK (относительный путь
+## рекомендован доками). ensure_sdk() уже загруженный window.YaGames НЕ
+## трогает, а только init() — иначе CDN-скрипт затёр бы стаб прокси и
+## init падал бы с «No parent to post message». Вне Web все вызовы тихие no-op.
 ## Без class_name специально: Android-сборка этот файл не содержит,
 ## game.gd грузит его через load() под OS.has_feature("web").
 
@@ -25,18 +29,23 @@ static func _eval(js: String):
 
 
 ## Подключить SDK (один раз) и сказать LoadingAPI.ready(), когда готов.
-## Rejection init (игра открыта не из Яндекс Игр — «No parent to post
-## message») ловим тут же во флаг, иначе дальше всё молча отвечает nosdk
-## и причина не видна нигде.
+## Уже загруженный window.YaGames (тег из shell: стаб dev-proxy или прод)
+## только init() — повторная загрузка с CDN затёрла бы его и дала
+## «No parent to post message» под прокси. Rejection init ловим во флаг,
+## иначе дальше всё молча отвечает nosdk и причина не видна нигде.
 static func ensure_sdk() -> void:
 	_eval("(function(){if(window.__ysdkRequested)return;window.__ysdkRequested=true;" \
 		+ "window.__ysdkInitError='';" \
-		+ "var s=document.createElement('script');s.src='" + SDK_URL + "';" \
-		+ "s.onload=function(){try{YaGames.init().then(function(ysdk){window.__ysdk=ysdk;" \
+		+ "function initNow(){try{YaGames.init().then(function(ysdk){window.__ysdk=ysdk;" \
 		+ "try{ysdk.features.LoadingAPI.ready();}catch(e){}})" \
 		+ ".catch(function(e){window.__ysdkInitError=String(e&&e.message||e);});}catch(e){" \
-		+ "window.__ysdkInitError=String(e&&e.message||e);}};" \
-		+ "s.onerror=function(){window.__ysdkInitError='sdk load failed'};" \
+		+ "window.__ysdkInitError=String(e&&e.message||e);}}" \
+		+ "if(window.YaGames){initNow();return;}" \
+		+ "var s=document.createElement('script');s.src='/sdk.js';s.onload=initNow;" \
+		+ "s.onerror=function(){var c=document.createElement('script');" \
+		+ "c.src='" + SDK_URL + "';c.onload=initNow;" \
+		+ "c.onerror=function(){window.__ysdkInitError='sdk load failed'};" \
+		+ "document.head.appendChild(c);};" \
 		+ "document.head.appendChild(s);})()")
 
 

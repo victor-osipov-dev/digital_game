@@ -409,6 +409,10 @@ func _do_ya_login() -> void:
 		return
 	_ya_busy = true
 	_update_buttons()
+	# ensure_sdk идемпотентен (сторожок __ysdkRequested): зовём и отсюда,
+	# а не только из главного меню — иначе прямой заход в лобби ждал бы
+	# SDK, который никто не попросил загрузить.
+	_ysdk_call("ensure_sdk")
 	# SDK нет (игра открыта не из Яндекс Игр) — дальше всё равно ответит
 	# отказом; объясняем сразу и честно, а не «без входа...» в конце.
 	for i in range(20):
@@ -482,6 +486,8 @@ func _ysdk_poll(kind: String) -> Dictionary:
 		return {"done": true}
 	if String(kind) == "auth":
 		return (sdk as GDScript).poll_auth_dialog()
+	if String(kind) == "sdk":
+		return (sdk as GDScript).poll_sdk_ready()
 	return (sdk as GDScript).poll_player()
 
 

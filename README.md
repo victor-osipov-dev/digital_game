@@ -1091,7 +1091,7 @@ godot --headless --path . --script res://tests/test_partner_ads.gd  # выбор
 
 | Сборка | Пресет | Артефакт |
 |---|---|---|
-| Яндекс Игры (Web) | `Yandex_Web` | `build/web/` (дефолтный shell, SDK грузится динамически) |
+| Яндекс Игры (тег /sdk.js в head_include пресета; рантайм только init готового YaGames) |
 | RuStore (Android) | `RuStore_Android` | `build/android/digital-game.aab`, Gradle, versionCode наращивать |
 
 > Открытый GUI-редактор периодически перезаписывает `export_presets.cfg`
@@ -1150,3 +1150,22 @@ godot --headless --path . --script res://tests/test_partner_ads.gd  # выбор
   подсказка, ранний выход → отказ), interstitial после партии, Маркет
   при установленном / браузер без него / возврат в игру, вход через
   Яндекс (авторизован/гость/отказ).
+
+### Локальный запуск под dev-proxy Яндекс Игр
+
+* Сначала пересобрать Web пресетом `Yandex_Web` — тег
+  `<script src="/sdk.js">` вшит пресетом (`html/head_include`) и обязан
+  быть в `build/web/index.html`. Путь относительный: так требуют доки
+  (заливка архивом в прод и стаб прокси локально); абсолютный CDN-URL
+  не использовать.
+* Запуск: `pnpm dlx @yandex-games/sdk-dev-proxy -p "<repo>\build\web"
+  --dev-mode=true`, игра — `https://localhost:8080` (порт меняется
+  `--port`; обращаться лучше по `127.0.0.1` — резолв `localhost`
+  в IPv6 иногда висит).
+* Проверки без браузера: `/sdk.js` отдаёт 200 (~24 КБ, внутри
+  `window.YaGames`), `/` содержит тег. Рантайм `ensure_sdk()` готовый
+  `YaGames` только `init()` и НЕ грузит CDN поверх — иначе настоящий
+  SDK вне iframe падает `No parent to post message`.
+* Стаб в dev-mode: гость `Guest` + `getUniqueID`, `openAuthDialog` —
+  модалка, rewarded/fullscreen — оверлеи с таймером. Онлайн-вход идёт
+  через серверный `auth.ya` как `ya:<uid>`.
