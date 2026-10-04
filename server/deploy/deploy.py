@@ -392,6 +392,11 @@ DG_LISTEN_PORT={PORT}
 # клиента = потеря связи у всех, кто ещё не обновился.
 DG_TLS_CERT={REMOTE_TLS}/cert.pem
 DG_TLS_KEY={REMOTE_TLS}/key.pem
+# Публичный сертификат (Let's Encrypt) для DNS-имён Web-клиентов.
+# Подаётся только по SNI DNS-имени (см. tls_select.js); без него и по IP —
+# прежний самоподписанный. Пусто — работает только legacy-режим.
+DG_TLS_LE_CERT={REMOTE_TLS}/le-cert.pem
+DG_TLS_LE_KEY={REMOTE_TLS}/le-key.pem
 
 # --- кластер ------------------------------------------------------------
 DG_CLUSTER_SECRET={secret}

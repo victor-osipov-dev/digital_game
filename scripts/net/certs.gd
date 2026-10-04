@@ -26,11 +26,25 @@ const Lang := preload("res://scripts/core/lang.gd")
 
 const DIR := "res://certs/"
 
-static var _cache := {}
-
 ## Расширения в порядке предпочтения. .crt — родной для движка,
 ## .pem принимается на случай, если в репозитории остались старые файлы.
 const EXTS: Array[String] = [".crt", ".pem"]
+
+static var _cache := {}
+
+## Голый IPv4-адрес (ему нужен зашитый сертификат) против DNS-имени
+## (ему хватает системного корня — браузерного или ОС).
+static func is_ip_host(host: String) -> bool:
+	var parts := String(host).strip_edges().split(".")
+	if parts.size() != 4:
+		return false
+	for part in parts:
+		if part.is_empty() or not part.is_valid_int():
+			return false
+		var n := int(part)
+		if n < 0 or n > 255:
+			return false
+	return true
 
 ## Сертификат сервера либо null, если его нет в сборке.
 static func find(server_id: String, host: String) -> X509Certificate:
@@ -113,6 +127,11 @@ static func missing_in(list: Array) -> PackedStringArray:
 		if not (raw is Dictionary):
 			continue
 		var entry: Dictionary = raw
-		if find(String(entry.get("id", "")), String(entry.get("host", ""))) == null:
+		var host := String(entry.get("host", ""))
+		# DNS-имена сверяются системным корнем — зашитый сертификат им
+		# не нужен и никогда не понадобится, в отчёт не попадают.
+		if not is_ip_host(host):
+			continue
+		if find(String(entry.get("id", "")), host) == null:
 			out.append(String(entry.get("id", "")))
 	return out

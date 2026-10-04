@@ -486,6 +486,22 @@ test('плохой логин отклоняется', () => {
   assert.strictEqual(r.ok, false);
 });
 
+test('SNI: DNS-имя — публичный контекст, IP и пустое — прежний', () => {
+  const { isIpLiteral, selectTlsContext } = require('../src/tls_select');
+  for (const ip of ['85.209.2.116', '31.56.196.114', '127.0.0.1', '0.0.0.0']) {
+    assert.strictEqual(isIpLiteral(ip), true, ip);
+    assert.strictEqual(selectTlsContext(ip), 'legacy', ip);
+  }
+  for (const bad of ['', 'rudigitalgame.fimdi.ru', 'RUDIGITALGAME.FIMDI.RU', 'example.com', '1.2.3', '1.2.3.4.5', 'abc.def', '256.1.1.1', '1.2.3.-1']) {
+    assert.strictEqual(isIpLiteral(bad), false, bad);
+  }
+  assert.strictEqual(selectTlsContext(''), 'legacy', 'пустое SNI');
+  assert.strictEqual(selectTlsContext(null), 'legacy', 'null SNI');
+  assert.strictEqual(selectTlsContext('rudigitalgame.fimdi.ru'), 'le');
+  assert.strictEqual(selectTlsContext('RUDIGITALGAME.FIMDI.RU'), 'le', 'регистр не важен');
+  assert.strictEqual(selectTlsContext('lvdigitalgame.fimdi.ru'), 'le');
+});
+
 test('вход через Yandex ID создаёт аккаунт ya:uid', () => {
   const r = accounts.loginYa('123456789', 'Яндекс Игрок');
   assert.strictEqual(r.ok, true, r.reason);

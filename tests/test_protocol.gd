@@ -20,6 +20,8 @@ func _initialize() -> void:
 	_parse_realistic()
 	print("== Корректные сообщения не портятся ==")
 	_keeps_types()
+	print("== Адреса и доверие TLS по платформам ==")
+	_addrs_and_trust()
 	print("")
 	if _fail == 0:
 		print("ТЕСТ ПРОТОКОЛА: ПРОШЛО %d" % _pass)
@@ -139,3 +141,29 @@ func _keeps_types() -> void:
 	# Идентификаторы команд на клиенте и на сервере обязаны совпадать,
 	# иначе наблюдательский вход уйдёт в никуда.
 	_ok(NetProtocol.LOBBY_OPEN == "lobby.open", "lobby.open написан одинаково")
+	_ok(NetProtocol.YA_LOGIN == "auth.ya", "auth.ya написан одинаково")
+
+
+## Web-сборка ходит на те же серверы по DNS-именам (браузер не прощает
+## самоподписанные сертификаты), остальные — по голым IP с пинами.
+## DNS-имена сверяются системным корнем — зашитый сертификат им не нужен.
+func _addrs_and_trust() -> void:
+	var web: Array = Servers.builtin_for(true)
+	var mob: Array = Servers.builtin_for(false)
+	_ok(web.size() == 2 and mob.size() == 2, "по два сервера на платформу")
+	var ru_web := {}
+	var ru_mob := {}
+	for e in web:
+		if String((e as Dictionary).get("id", "")) == "srv-ru":
+			ru_web = e
+	for e in mob:
+		if String((e as Dictionary).get("id", "")) == "srv-ru":
+			ru_mob = e
+	_ok(String(ru_web.get("host", "")) == "rudigitalgame.fimdi.ru", "web идёт по DNS")
+	_ok(String(ru_mob.get("host", "")) == "85.209.2.116", "остальные — по IP")
+	_ok(not Certs.is_ip_host("rudigitalgame.fimdi.ru"), "DNS — не IP")
+	_ok(Certs.is_ip_host("85.209.2.116"), "IP опознаётся")
+	_ok(not Certs.is_ip_host(""), "пусто — не IP")
+	_ok(not Certs.is_ip_host("1.2.3.500"), "мусор — не IP")
+	_ok(Certs.missing_in([{"id": "srv-ru", "host": "rudigitalgame.fimdi.ru"}]).is_empty(),
+		"DNS не требует зашитого сертификата")

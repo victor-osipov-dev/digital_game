@@ -290,18 +290,18 @@ func test_seat_count_mismatch() -> void:
 
 func test_servers_list() -> void:
 	section("список серверов")
-	ok("в игре зашиты оба сервера", Servers.BUILTIN.size() == 2,
-		"зашито %d" % Servers.BUILTIN.size())
+	ok("в игре зашиты оба сервера", Servers.builtin().size() == 2,
+		"зашито %d" % Servers.builtin().size())
 	var seen := {}
-	for entry in Servers.BUILTIN:
+	for entry in Servers.builtin():
 		seen[String(entry["id"])] = true
 		ok("адрес непустой", not String(entry["host"]).is_empty(), String(entry["id"]))
 		ok("порт задан", int(entry["port"]) > 0, String(entry["id"]))
-	ok("серверы различимы по id", seen.size() == Servers.BUILTIN.size())
+	ok("серверы различимы по id", seen.size() == Servers.builtin().size())
 	# Подпись собирает экземпляр: проверяем, что он не течёт при сборке
 	# мусора, иначе меню будет жечь память на каждом открытии.
 	var probe := Servers.new()
-	ok("у сервера есть подпись", _label(probe, Servers.BUILTIN[0]) != "")
+	ok("у сервера есть подпись", _label(probe, Servers.builtin()[0]) != "")
 	probe.free()
 
 
@@ -310,10 +310,10 @@ func test_certs() -> void:
 	# Собирать игру без сертификатов нельзя, но и ронять сборку из-за
 	# отсутствующего файла — тоже нельзя: клиент обязан честно молчать
 	# и не подключаться, а не работать по открытой сети.
-	var ids := Certs.missing_in(Servers.BUILTIN)
+	var ids := Certs.missing_in(Servers.builtin())
 	# Сколько бы их ни было, опции TLS собираются, а список серверов
 	# не падает — иначе не войти даже в одиночную игру.
-	for entry in Servers.BUILTIN:
+	for entry in Servers.builtin():
 		var opts := Certs.tls_options_for(entry)
 		ok("опции TLS собираются для %s" % String(entry["id"]), opts != null)
 

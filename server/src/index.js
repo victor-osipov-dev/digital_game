@@ -2,9 +2,11 @@
 
 const http = require('http');
 const https = require('https');
+const tls = require('tls');
 const fs = require('fs');
 const { config } = require('./config');
 const log = require('./log');
+const { selectTlsContext } = require('./tls_select');
 const { Db } = require('./db');
 const { Accounts } = require('./accounts');
 const { Cluster } = require('./cluster');
@@ -78,7 +80,31 @@ function createServer() {
   }
   const cert = readTls(config.tlsCertFile, 'сертификат');
   const key = readTls(config.tlsKeyFile, 'ключ');
-  return https.createServer({ cert, key, minVersion: 'TLSv1.2' }, handle);
+  if (!config.tlsLeCertFile && !config.tlsLeKeyFile) {
+    return https.createServer({ cert, key, minVersion: 'TLSv1.2' }, handle);
+  }
+  if (!config.tlsLeCertFile || !config.tlsLeKeyFile) {
+    throw new Error('задан только один из DG_TLS_LE_CERT/DG_TLS_LE_KEY — нужны оба или ни одного');
+  }
+  const leCert = readTls(config.tlsLeCertFile, 'LE-сертификат');
+  const leKey = readTls(config.tlsLeKeyFile, 'LE-ключ');
+  const legacyCtx = tls.createSecureContext({ cert, key });
+  const leCtx = tls.createSecureContext({ cert: leCert, key: leKey });
+  log.info('TLS: самоподписанный по умолчанию, публичный — по SNI DNS-имени');
+  return https.createServer({
+    cert,
+    key,
+    minVersion: 'TLSv1.2',
+    SNICallback: (servername, cb) => {
+      try {
+        if (selectTlsContext(servername) === 'le') {
+          cb(null, leCtx);
+          return;
+        }
+      } catch (_) { /* падаем в legacy ниже */ }
+      cb(null, legacyCtx);
+    },
+  }, handle);
 }
 
 // Читаем файлы и РАЗЛИЧАЕМ две разные беды, которые раньше сливались в

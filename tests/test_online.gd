@@ -72,7 +72,7 @@ func _run() -> void:
 	# --- сертификаты -------------------------------------------------
 	# Первым делом: без них дальше идти незачем, а падать будет позже и
 	# невнятно — на попытке подключиться.
-	var missing := Certs.missing_in(Servers.BUILTIN)
+	var missing := Certs.missing_in(Servers.builtin())
 	if not missing.is_empty():
 		print("  доложить: python server/deploy/deploy.py --certs-only")
 		_abort("сертификатов нет: %s" % ", ".join(missing))

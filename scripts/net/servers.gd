@@ -26,8 +26,10 @@ const PH_WAIT_AUTH := 1
 const PH_WAIT_LIST := 2
 
 # Зашитый эталон. Адрес — голый IP: домена у машин нет, и клиент шлёт
-# WSS напрямую на этот адрес и порт.
-const BUILTIN := [
+# WSS напрямую на этот адрес и порт. Web-сборке IP не годятся (браузер
+# не прощает самоподписанные сертификаты), поэтому у неё свой эталон —
+# те же серверы по DNS-именам с публичными сертификатами.
+const BUILTIN_IP := [
 	{
 		"id": "srv-ru",
 		"name": "Россия",
@@ -43,12 +45,40 @@ const BUILTIN := [
 		"port": 6767,
 	},
 ]
+const BUILTIN_WEB := [
+	{
+		"id": "srv-ru",
+		"name": "Россия",
+		"region": "ru",
+		"host": "rudigitalgame.fimdi.ru",
+		"port": 6767,
+	},
+	{
+		"id": "srv-lv",
+		"name": "Латвия",
+		"region": "lv",
+		"host": "lvdigitalgame.fimdi.ru",
+		"port": 6767,
+	},
+]
+
 
 var _entries: Array = []
 var _loaded := false
 # id -> {online, ms, reason, checked_at}
 var _health := {}
 var _probing := false
+
+
+## Эталон под платформу: параметр — ради тестов без браузера.
+static func builtin_for(is_web: bool) -> Array:
+	return BUILTIN_WEB if is_web else BUILTIN_IP
+
+
+## Эталон текущей сборки.
+static func builtin() -> Array:
+	return builtin_for(OS.has_feature("web"))
+
 
 func _ready() -> void:
 	load_list()
@@ -61,7 +91,7 @@ func load_list() -> Array:
 	if _loaded:
 		return _entries
 	var stored := _read_file()
-	_entries = _merge(BUILTIN, stored)
+	_entries = _merge(builtin(), stored)
 	_save(_entries)
 	_loaded = true
 	return _entries
