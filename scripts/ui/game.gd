@@ -1883,8 +1883,12 @@ func _bot_execute(seq: int) -> void:
 		var dr := state.draw_from_deck()
 		if dr.get("ok", false):
 			_note_draw(bot_seat, dr.get("tile", null))
+			_anim_draw_only(dr.get("tile", null))
 		action_ok = bool(dr.get("ok", false))
 	elif action == "skip":
+		# Тихо, как взятие: снимок не нужен, иначе смена руки при передаче
+		# хода устроила бы перелёт всей руки вместо незаметной смены.
+		_anim_pending = false
 		action_ok = bool(state.skip_turn().get("ok", false))
 	if not action_ok:
 		if state.can_draw():
@@ -1892,7 +1896,9 @@ func _bot_execute(seq: int) -> void:
 			var fb := state.draw_from_deck()
 			if fb.get("ok", false):
 				_note_draw(fb_seat, fb.get("tile", null))
+				_anim_draw_only(fb.get("tile", null))
 		elif state.can_skip():
+			_anim_pending = false
 			state.skip_turn()
 	invalid_row_ids.clear()
 	_bot_active = false
@@ -2004,6 +2010,19 @@ func _note_draw(seat: int, tile) -> void:
 	if tile != null:
 		_draw_marks[seat] = (tile as Tile).id
 	_drew_seat = seat
+
+
+## Тихий ход бота (взятие): никакого снимка до/после — взятие сразу
+## передаёт ход, и снимок застал бы старую руку: при пересборке чужая
+## рука вылетала бы призраками, а наша прилетала бы целиком — со стороны
+## «боту прилетело несколько карточек». Force со взятой на всякий случай:
+## если у неё вдруг есть вид, прилетит только она. Место (-1) не важно:
+## офлайн force в очередь не встаёт, идёт немедленным путём.
+func _anim_draw_only(tile) -> void:
+	if tile == null:
+		return
+	_anim_pending = false
+	_anim_force[int((tile as Tile).id)] = -1
 
 
 ## Id фишек руки смотрящего — для опознания взятой по сети.

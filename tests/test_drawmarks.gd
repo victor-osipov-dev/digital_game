@@ -17,6 +17,7 @@ var fails := 0
 var total := 0
 var game: Node = null
 var view: Dictionary = {}
+var catalog: Array = []
 var _na := 0
 var _nb := 0
 var _nc := 0
@@ -38,6 +39,7 @@ func _boot() -> void:
 		quit(1)
 		return
 	ViewBuilder.set_catalog(data["catalog"])
+	catalog = data["catalog"]
 	view = data["game"]["seat0"]
 	_pick_ids(data, view)
 	var packed := load("res://scenes/game.tscn") as PackedScene
@@ -53,6 +55,7 @@ func _boot() -> void:
 
 	test_draw_marks_tile()
 	await test_bot_draw_marked()
+	await test_bot_draw_flies_single()
 
 	if fails == 0:
 		print("\nВЗЯТИЕ: все %d проверок прошли" % total)
@@ -143,6 +146,128 @@ func test_bot_draw_marked() -> void:
 	game._on_state_received(s3, 0.0, false, false)
 	ok("выкладка не помечается", game.get("_drew_seat") == -1)
 	game._online = false
+
+
+## Бот берёт из колоды: прилетает ровно одна фишка, а не вся рука.
+## Регрессия: снимок до/после слайдил всю переехавшую руку — со стороны
+## «боту прилетело несколько карточек», хотя брал он одну.
+func test_bot_draw_flies_single() -> void:
+	section("бот берёт одну фишку — летит только она")
+	var settings := root.get_node_or_null("Settings")
+	var saved_count = settings.player_count
+	var saved_req = settings.require_30
+	var saved_level = settings.bot_level
+	var saved_bot0 = settings.is_bot(0)
+	var saved_bot1 = settings.is_bot(1)
+	settings.player_count = 2
+	settings.require_30 = false
+	settings.bot_level = 0
+	settings.set_bot(0, true)
+	settings.set_bot(1, false)
+	game._clear_draft()
+	game._new_match()
+	game._bot_seq = 51
+	for i in range(3):
+		await process_frame
+	# Рука без комбинаций (цвета и значения разные): выложить нечего —
+	# план обязан взять из колоды, детерминированно.
+	var hand: Array = []
+	var used_colors := {}
+	var used_values := {}
+	for t in catalog:
+		var d := t as Dictionary
+		if bool(d.get("is_joker", false)):
+			continue
+		var cc := int(d.get("color", -1))
+		var vv := int(d.get("value", 0))
+		if used_colors.has(cc) or used_values.has(vv):
+			continue
+		used_colors[cc] = true
+		used_values[vv] = true
+		hand.append(ViewBuilder.tile(int(d.get("id", 0))))
+		if hand.size() >= 4:
+			break
+	ok("рука без комбинаций собрана", hand.size() == 4, "фишек %d" % hand.size())
+	(game.state.players[0] as GameState.Player).hand = hand
+	game.refresh()
+	for i in range(3):
+		await process_frame
+	game._bot_execute(51)
+	var drawn := -1
+	var marks: Dictionary = game.get("_draw_marks")
+	for seat in marks:
+		drawn = int(marks[seat])
+	ok("бот взял ровно одну", drawn > 0, "drawn=%d" % drawn)
+	# Смена руки при передаче хода — немая: ни прилётов, ни слайдов.
+	# Раньше здесь летела вся рука (чужая — призраками, наша — прилётом).
+	var maxfly := 0
+	for i in range(40):
+		await process_frame
+		maxfly = maxi(maxfly, _flying_ids().size())
+	ok("при взятии ничего не летает", maxfly == 0, "максимум %d" % maxfly)
+	for i in range(3):
+		await process_frame
+	var calm := []
+	for i in range(10):
+		await process_frame
+		calm.append(_all_positions())
+	var steady := true
+	for snapshot in calm:
+		if snapshot != calm[0]:
+			steady = false
+	ok("стол и рука стоят с первых кадров", steady, "разъехались")
+	for i in range(120):
+		await process_frame
+		if _flying_ids().is_empty():
+			break
+	ok("к концу ничего не зависло в полёте", _flying_ids().is_empty(),
+		"летят: %s" % [_flying_ids()])
+	settings.player_count = saved_count
+	settings.require_30 = saved_req
+	settings.bot_level = saved_level
+	settings.set_bot(0, saved_bot0)
+	settings.set_bot(1, saved_bot1)
+
+
+## Id фишек, которые сейчас летят или спрятаны под полёт (alpha < 1).
+func _flying_ids() -> Array:
+	var out := []
+	var flows := [game.hand_flow]
+	for block in game.row_blocks:
+		var flow = block.get("flow")
+		if flow != null:
+			flows.append(flow)
+	for flow in flows:
+		if flow == null:
+			continue
+		for item in flow.get("tile_views"):
+			var v := item as Control
+			if v == null:
+				continue
+			if (v as Control).modulate.a < 0.99:
+				var tile = v.get("tile")
+				if tile != null:
+					out.append(int(tile.get("id")))
+	return out
+
+
+## Позиции всех видов (рука + стол) по возрастанию — для проверки покоя.
+func _all_positions() -> Array:
+	var out := []
+	var flows := [game.hand_flow]
+	for block in game.row_blocks:
+		var flow = block.get("flow")
+		if flow != null:
+			flows.append(flow)
+	for flow in flows:
+		if flow == null:
+			continue
+		for item in flow.get("tile_views"):
+			var v := item as Control
+			if v != null:
+				out.append(v.position)
+	out.sort()
+	return out
 
 
 ## Галочка взятой фишки: флаг вида (сам бейдж рисуется в _draw).
