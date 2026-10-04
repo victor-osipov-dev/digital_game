@@ -357,8 +357,9 @@ func _build_ui() -> void:
 		_on_hint_pressed, Lang.t("Подсказка"))
 	if OS.has_feature("web") and ResourceLoader.exists("res://assets/ui/ad_badge.png"):
 		# Web: подсказка за просмотр rewarded — иконка честно говорит,
-		# что кнопка ведёт к рекламе.
-		hint_btn.icon = load("res://assets/ui/ad_badge.png") as Texture2D
+		# что кнопка ведёт к рекламе. Исходник 64px уменьшаем до 22:
+		# в натуральную величину он выше кнопки и выживал из неё текст.
+		hint_btn.icon = _fit_icon(load("res://assets/ui/ad_badge.png") as Texture2D, 22)
 	_top_actions.add_child(hint_btn)
 
 	var help_btn := _make_top_button("?", Lang.t("Помощь"), _open_help, Lang.t("Помощь"))
@@ -778,6 +779,10 @@ func _top_button_need(btn: Button) -> float:
 	if font != null:
 		w = maxf(w, font.get_string_size(btn.text, HORIZONTAL_ALIGNMENT_LEFT, -1,
 			btn.get_theme_font_size("font_size")).x)
+	# Кнопка с иконкой (подсказка на Web): ширина иконки плюс зазор,
+	# иначе минимум считался только по тексту и текст срезался.
+	if btn.icon != null:
+		w += float((btn.icon as Texture2D).get_width()) + 4.0
 	var sb := btn.get_theme_stylebox("normal")
 	if sb != null:
 		w += sb.content_margin_left + sb.content_margin_right
@@ -847,6 +852,15 @@ func _sync_top_bar() -> void:
 		_place_burger_panel()
 	elif not was_collapsed:
 		_set_burger_open(false, false)
+
+
+## Уменьшить иконку до высоты h с сохранением пропорций (исходники
+## вроде ad_badge 64px в кнопку 46px целиком не влезают). Static для тестов.
+static func _fit_icon(tex: Texture2D, h: int) -> ImageTexture:
+	var img := tex.get_image()
+	var w := maxi(1, int(round(float(h) * float(img.get_width()) / float(maxi(1, img.get_height())))))
+	img.resize(w, h, Image.INTERPOLATE_LANCZOS)
+	return ImageTexture.create_from_image(img)
 
 
 ## Значок-бургер s×s: три белые полосы со скруглёнными концами на

@@ -113,6 +113,7 @@ func _after_title_checks() -> void:
 	_hand_panel_checks()
 	_flow_center_checks()
 	await _burger_checks()
+	_hint_icon_checks()
 	await _topbar_width_checks()
 	await _topbar_capped_checks()
 	_button_radius_audit(inst)
@@ -254,6 +255,28 @@ func _burger_checks() -> void:
 	for i in range(4):
 		await process_frame
 	root.size = saved_size
+
+
+func _hint_icon_checks() -> void:
+	# Вне Web иконки подсказки нет (ветка под OS.has_feature), поэтому
+	# проверяем сам ресайз и учёт иконки в ширине кнопки, а не живую кнопку.
+	var game_script := load("res://scripts/ui/game.gd")
+	var src := Image.create(64, 32, false, Image.FORMAT_RGBA8)
+	var small = game_script.call("_fit_icon",
+		ImageTexture.create_from_image(src), 22)
+	check(small != null and (small as ImageTexture).get_height() == 22
+		and (small as ImageTexture).get_width() == 44,
+		"badge 64x32 shrinks to 44x22 keeping aspect")
+	var hint := inst.get("hint_btn") as Button
+	check(hint != null and not String(hint.text).is_empty(),
+		"hint keeps its text next to the icon")
+	if hint != null:
+		var need0: float = inst.call("_top_button_need", hint)
+		hint.icon = small
+		var need1: float = inst.call("_top_button_need", hint)
+		check(need1 > need0, "need() counts icon width (%.0f -> %.0f)"
+			% [need0, need1])
+		hint.icon = null
 
 
 func _topbar_width_checks() -> void:
