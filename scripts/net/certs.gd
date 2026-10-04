@@ -109,6 +109,11 @@ static func _read(path: String, ext: String) -> X509Certificate:
 static func tls_options_for(entry: Dictionary) -> TLSOptions:
 	var id := String(entry.get("id", ""))
 	var host := String(entry.get("host", ""))
+	# DNS-имя сверяет системный корень (браузерный или ОС) — зашитый
+	# сертификат не нужен, и искать его не надо: иначе каждый коннект
+	# в Web-журнал падала бы ложная ошибка «сертификат не найден».
+	if not is_ip_host(host):
+		return TLSOptions.client(null, host)
 	var cert := find(id, host)
 	if cert == null:
 		# Зашитого сертификата нет — проверять будет нечем, и самоподписанный

@@ -2089,9 +2089,10 @@ func _show_win_ad() -> void:
 
 ## Состояние post-game рекламы (по умолчанию — закрыта: вне Web её нет).
 func _poll_endgame_ad() -> Dictionary:
-	if not OS.has_feature("web") or not ResourceLoader.exists(YANDEX_SDK_SCRIPT):
+	var sdk = _ysdk_script()
+	if sdk == null:
 		return {"closed": true, "error": "nosdk"}
-	return (load(YANDEX_SDK_SCRIPT) as GDScript).poll_endgame_ad()
+	return (sdk as GDScript).poll_endgame_ad()
 
 
 ## Экран победы скрыт — смотрим финальный стол. Только чтение: finished
@@ -2113,11 +2114,27 @@ func _hide_table_inspect() -> void:
 
 ## Вызов lifecycle API Яндекс Игр (только Web; elsewhere no-op внутри).
 func _ysdk(method: StringName) -> void:
+	var sdk = _ysdk_script()
+	if sdk == null:
+		return
+	(sdk as GDScript).call(method)
+
+
+## Загрузчик моста SDK (один load на файл — дубли rlint не любит).
+func _ysdk_script():
 	if not OS.has_feature("web"):
-		return
+		return null
 	if not ResourceLoader.exists(YANDEX_SDK_SCRIPT):
-		return
-	(load(YANDEX_SDK_SCRIPT) as GDScript).call(method)
+		return null
+	return load(YANDEX_SDK_SCRIPT)
+
+
+## Готов ли SDK (для понятных сообщений вне Яндекс Игр).
+func _ysdk_sdk_ready() -> Dictionary:
+	var sdk = _ysdk_script()
+	if sdk == null:
+		return {"ready": false, "error": "nosdk"}
+	return (sdk as GDScript).poll_sdk_ready()
 
 
 ## Партнёрская карточка на экране победы (только Android/RuStore,
@@ -2433,6 +2450,14 @@ func _request_hint_ad() -> void:
 		return
 	_hint_ad_pending = true
 	_update_buttons()
+	# SDK грузится асинхронно — подождём его, а не отказ сразу.
+	for i in range(16):
+		var rs := _ysdk_sdk_ready()
+		if bool(rs.get("ready", false)) or not String(rs.get("error", "")).is_empty():
+			break
+		await get_tree().create_timer(0.5).timeout
+		if state == null or not _hint_ad_pending:
+			return
 	_ysdk(&"show_hint_rewarded")
 	var rewarded := false
 	for i in range(360):
@@ -2450,15 +2475,19 @@ func _request_hint_ad() -> void:
 		_give_hint()
 	else:
 		if state != null:
-			toast(Lang.t("Досмотрите рекламу до конца, чтобы получить подсказку"), false)
+			if bool(_ysdk_sdk_ready().get("ready", false)):
+				toast(Lang.t("Досмотрите рекламу до конца, чтобы получить подсказку"), false)
+			else:
+				toast(Lang.t("Вход и реклама работают только внутри Яндекс Игр"), false)
 		_update_buttons()
 
 
 ## Состояние rewarded (по умолчанию — отказ: вне Web рекламы нет).
 func _poll_hint_ad() -> Dictionary:
-	if not OS.has_feature("web") or not ResourceLoader.exists(YANDEX_SDK_SCRIPT):
+	var sdk = _ysdk_script()
+	if sdk == null:
 		return {"rewarded": false, "closed": true, "error": "nosdk"}
-	return (load(YANDEX_SDK_SCRIPT) as GDScript).poll_hint_ad()
+	return (sdk as GDScript).poll_hint_ad()
 
 func _on_resized() -> void:
 	_update_hint_zone_size()

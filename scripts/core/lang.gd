@@ -72,6 +72,7 @@ const _EN := {
 "Войдите через Яндекс, чтобы играть по сети": "Sign in with Yandex to play online",
 "Войти по коду": "Join by code",
 "Войти через Яндекс": "Sign in with Yandex",
+"Вход и реклама работают только внутри Яндекс Игр": "Sign-in and ads only work inside Yandex Games",
 "Войти": "Sign in",
 "Воспользуйтесь кнопкой «Продолжить»": "Use the \"Continue\" button",
 "Все комнаты": "All rooms",

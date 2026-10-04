@@ -409,6 +409,21 @@ func _do_ya_login() -> void:
 		return
 	_ya_busy = true
 	_update_buttons()
+	# SDK нет (игра открыта не из Яндекс Игр) — дальше всё равно ответит
+	# отказом; объясняем сразу и честно, а не «без входа...» в конце.
+	for i in range(20):
+		var rs := _ysdk_poll("sdk")
+		if bool(rs.get("ready", false)) or not String(rs.get("error", "")).is_empty():
+			break
+		await get_tree().create_timer(0.5).timeout
+		if not is_instance_valid(self) or not visible:
+			_ya_busy = false
+			return
+	if not bool(_ysdk_poll("sdk").get("ready", false)):
+		_ya_busy = false
+		_update_buttons()
+		_set_auth_note(Lang.t("Вход и реклама работают только внутри Яндекс Игр"), true)
+		return
 	_set_auth_note(Lang.t("Получаем профиль Яндекс…"))
 	var profile := await _ya_profile()
 	if String(profile.get("uid", "")).is_empty() \

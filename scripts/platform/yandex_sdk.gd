@@ -25,12 +25,29 @@ static func _eval(js: String):
 
 
 ## Подключить SDK (один раз) и сказать LoadingAPI.ready(), когда готов.
+## Rejection init (игра открыта не из Яндекс Игр — «No parent to post
+## message») ловим тут же во флаг, иначе дальше всё молча отвечает nosdk
+## и причина не видна нигде.
 static func ensure_sdk() -> void:
 	_eval("(function(){if(window.__ysdkRequested)return;window.__ysdkRequested=true;" \
+		+ "window.__ysdkInitError='';" \
 		+ "var s=document.createElement('script');s.src='" + SDK_URL + "';" \
 		+ "s.onload=function(){try{YaGames.init().then(function(ysdk){window.__ysdk=ysdk;" \
-		+ "try{ysdk.features.LoadingAPI.ready();}catch(e){}});}catch(e){}};" \
+		+ "try{ysdk.features.LoadingAPI.ready();}catch(e){}})" \
+		+ ".catch(function(e){window.__ysdkInitError=String(e&&e.message||e);});}catch(e){" \
+		+ "window.__ysdkInitError=String(e&&e.message||e);}};" \
+		+ "s.onerror=function(){window.__ysdkInitError='sdk load failed'};" \
 		+ "document.head.appendChild(s);})()")
+
+
+## Готов ли SDK: {ready, error}. Вызывать после небольшой паузы —
+## скрипту нужно время загрузиться.
+static func poll_sdk_ready() -> Dictionary:
+	var r = _eval("({r:!!window.__ysdk,e:String(window.__ysdkInitError||'')})")
+	if r == null or not (r is Dictionary):
+		return {"ready": false, "error": "nosdk"}
+	return {"ready": bool((r as Dictionary).get("r", false)),
+		"error": String((r as Dictionary).get("e", ""))}
 
 
 ## Игрок реально играет (ходить/партия началась).
