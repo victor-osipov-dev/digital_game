@@ -56,6 +56,7 @@ func _boot() -> void:
 	test_draw_marks_tile()
 	await test_bot_draw_marked()
 	await test_bot_draw_flies_single()
+	await test_no_stagger_when_bot_anim_off()
 
 	if fails == 0:
 		print("\nВЗЯТИЕ: все %d проверок прошли" % total)
@@ -227,6 +228,62 @@ func test_bot_draw_flies_single() -> void:
 	settings.bot_level = saved_level
 	settings.set_bot(0, saved_bot0)
 	settings.set_bot(1, saved_bot1)
+
+
+## Выключенная «анимация бота» убирает поэтапность и в сети: коммит бота
+## не встаёт шагами в очередь, а прилетает сразу, как в одиночной игре.
+## Титры при этом остаются (как офлайн) — проверяется только показ шагов.
+func test_no_stagger_when_bot_anim_off() -> void:
+	section("без анимации бота шаги очередью не идут")
+	var settings := root.get_node_or_null("Settings")
+	var saved_anim = settings.bot_anim
+	settings.bot_anim = false
+	game._clear_draft()
+	game._online = true
+	var s0: Dictionary = view.duplicate(true)
+	for i in range((s0["players"] as Array).size()):
+		(s0["players"] as Array)[i]["isBot"] = (i == 1 or i == 2)
+	s0["current"] = 0
+	game._on_state_received(s0, 0.0, false, false)
+	for i in range(20):
+		await process_frame
+	var s1: Dictionary = s0.duplicate(true)
+	(s1["table"] as Array).append({"id": 55, "tileIds": [_na, _nb, _nc]})
+	s1["lastTurn"] = [_na, _nb, _nc]
+	s1["current"] = 2
+	game._on_state_received(s1, 0.0, false, false)
+	# Очередного полёта нет — только титр; фишки сели быстро, а не вразбивку.
+	# (Сегмент из очереди выходит синхронно, поэтому смотрим флаг полёта,
+	# а не саму очередь: она пуста в обоих режимах.)
+	ok("шаги очередью не летят", not game._flight_active,
+		"презентация летит очередью")
+	var placed := 0
+	for i in range(150):
+		await process_frame
+		placed = _visible_count([_na, _nb, _nc])
+		if placed == 3 and _flying_ids().is_empty():
+			break
+	ok("все три сели быстро", placed == 3, "видно %d из 3" % placed)
+	settings.bot_anim = saved_anim
+	game._online = false
+
+
+## Сколько из перечисленных фишек видно на столе (alpha доросла).
+func _visible_count(ids: Array) -> int:
+	var n := 0
+	for block in game.row_blocks:
+		var flow = block.get("flow")
+		if flow == null:
+			continue
+		for item in flow.get("tile_views"):
+			var v := item as Control
+			if v == null:
+				continue
+			var tile = v.get("tile")
+			if tile != null and ids.has(int(tile.get("id"))) \
+					and (v as Control).modulate.a > 0.99:
+				n += 1
+	return n
 
 
 ## Id фишек, которые сейчас летят или спрятаны под полёт (alpha < 1).

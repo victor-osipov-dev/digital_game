@@ -2729,9 +2729,11 @@ func refresh() -> void:
 	# офлайн force не бывает: он заполняется только из состояний сервера.
 	# Загрузка стола (первое состояние) — не ход: тем же немедленным путём,
 	# что и раньше, иначе вход в текущую партию вешал бы весь стол «шагами»
-	# в очередь и держал бы пересборки в отложенных.
+	# в очередь и держал бы пересборки в отложенных. Выключенная «анимация
+	# бота» тоже гасит очередь: всё прилетает сразу, как в одиночной игре.
 	if (stagger or (_online and not load)) and not force.is_empty() \
-			and state != null and not state.finished:
+			and state != null and not state.finished \
+			and (not _online or Settings.bot_anim):
 		_enqueue_steps_grouped(force_map)
 		for id in force:
 			if not waiting.has(int(id)):
