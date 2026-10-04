@@ -3,7 +3,7 @@ extends SceneTree
 # ==============================================================
 #  Пометки взятия из колоды.
 #
-#  Своё взятие — зелёный шарик в углу фишки, пока она в руке взявшего
+#  Своё взятие — галочка с кружочком в углу фишки, пока она в руке взявшего
 #  (выложил — убрался, взял новую — заменился). Чужое взятие
 #  (бот или соперник по сети) — «· взял» у имени в чипах: рука +1
 #  при том же столе и пустом lastTurn.
@@ -62,7 +62,7 @@ func _boot() -> void:
 		quit(1)
 
 
-## Взятая из колоды помечается шариком, пока она в руке: выложил —
+## Взятая из колоды помечается галочкой с кружочком, пока она в руке: выложил —
 ## убралась сама, взял новую — заменилась. Чип показывает «· взял».
 func test_draw_marks_tile() -> void:
 	section("взятая фишка помечается галочкой")
@@ -89,10 +89,10 @@ func test_draw_marks_tile() -> void:
 		if tid != took and bool((game.call("get_tile_marks", tid) as Dictionary).get("drawn", false)):
 			others_clean = false
 	ok("у остальных метки нет", others_clean)
-	# Ход вернулся к взявшему — шарик на фишке в его руке.
+	# Ход вернулся к взявшему — галочка на фишке в его руке.
 	game.state.current = 0
 	game.refresh()
-	ok("шарик виден на фишке", _hand_badge(took))
+	ok("галочка видна на фишке", _hand_badge(took))
 	ok("чип показывает взятие", _chip_has("взял"))
 	# Выложил (фишка ушла из руки) — метка снялась сама.
 	var hand: Array = game.state.players[0].hand
@@ -103,7 +103,7 @@ func test_draw_marks_tile() -> void:
 	game.refresh()
 	var tm2: Dictionary = game.call("get_tile_marks", took)
 	ok("после выкладки метки нет", not bool(tm2.get("drawn", false)))
-	# Хелпер пометки: место без фишки — только чип, без шарика.
+	# Хелпер пометки: место без фишки — только чип, без галочки.
 	game.call("_note_draw", 1, null)
 	ok("пометка места работает", game.get("_drew_seat") == 1)
 	ok("чип показывает и чужое взятие", _chip_has("взял"))
@@ -145,7 +145,7 @@ func test_bot_draw_marked() -> void:
 	game._online = false
 
 
-## Шарик взятой фишки: флаг вида (сам шарик рисуется в _draw).
+## Галочка взятой фишки: флаг вида (сам бейдж рисуется в _draw).
 func _hand_badge(tile_id: int) -> bool:
 	var views: Array = []
 	if game.hand_flow != null and game.hand_flow.get("tile_views") != null:

@@ -507,8 +507,7 @@ func test_bot_commit_no_mid_state() -> void:
 	s2["lastTurn"] = [_na, _nb, _nc]
 	s2["current"] = 2
 	game._on_state_received(s2, 0.0, false, false)
-	# Подсветка — на авторе коммита, а не на state.current (ход ушёл
-	# дальше, но показ ещё от первого бота).
+	# Подсветка — на авторе коммита, а не на state.current (показ ещё от первого бота).
 	ok("подсветка — автор летящего коммита",
 		game._highlight_seat() == 1 and game.state.current == 2,
 		"подсветка %d, current %d" % [game._highlight_seat(), game.state.current])
@@ -893,8 +892,9 @@ func _check_placed_style(tile_id: int, msg: String) -> void:
 		return
 	ok("поставленная фишка прозрачная, alpha=%f" % view.modulate.a, view.modulate.a < 0.99)
 	var sb := view.get_theme_stylebox("panel")
-	ok("у поставленной фишки зелёная рамка",
-		sb is StyleBoxFlat and (sb as StyleBoxFlat).border_color == Color("43A047"))
+	ok("у черновой фишки зелёная рамка и галочка",
+		sb is StyleBoxFlat and (sb as StyleBoxFlat).border_color == Color("43A047") \
+			and bool(view.get("mark_draft")))
 
 
 ## Принятый прошлый ход: обычный, только с зелёной рамкой. Прозрачность
