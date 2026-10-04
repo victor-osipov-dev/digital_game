@@ -1094,6 +1094,11 @@ godot --headless --path . --script res://tests/test_partner_ads.gd  # выбор
 | Яндекс Игры (Web) | `Yandex_Web` | `build/web/` (дефолтный shell, SDK грузится динамически) |
 | RuStore (Android) | `RuStore_Android` | `build/android/digital-game.aab`, Gradle, versionCode наращивать |
 
+> Открытый GUI-редактор периодически перезаписывает `export_presets.cfg`
+> и `.godot/export_credentials.cfg` дефолтами (имена пресетов, пути,
+> подпись). Перед каждым релизным экспортом сверяй имена пресетов;
+> эталон — git (`git diff export_presets.cfg` должен быть пуст).
+
 ### Что где лежит
 
 * `scripts/platform/` — `partner_ad.gd` + `partner_ad_card.gd` +
