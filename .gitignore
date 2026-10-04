@@ -24,4 +24,15 @@ __pycache__/
 server/deploy/tls/
 *.key
 *.pem
+# Релизные ключи Android: никогда в репозиторий (потеря = конец обновлений).
+*.keystore
+*.jks
+# Локальный путь к Android SDK (у каждого свой).
+local.properties
+# Кэш Gradle внутри проекта.
+.gradle/
+# Артефакты экспорта (Web/AAB собираются локально).
+/build/
+# Промежуточные файлы сборки Android-плагина (AAR в bin/ нужны и коммитятся).
+addons/MarketHelper/plugin/build/
 

@@ -158,6 +158,16 @@ func _ready() -> void:
 	# молчит при свежем входе, поэтому сразу читаем текущее состояние.
 	Net.pending_room_changed.connect(_refresh_online_note)
 	_refresh_online_note()
+	_ysdk(&"ensure_sdk")
+
+
+## Вызов lifecycle API Яндекс Игр (только Web; elsewhere no-op внутри).
+func _ysdk(method: StringName) -> void:
+	if not OS.has_feature("web"):
+		return
+	if not ResourceLoader.exists("res://scripts/platform/yandex_sdk.gd"):
+		return
+	(load("res://scripts/platform/yandex_sdk.gd") as GDScript).call(method)
 
 
 ## Листание, начатое пальцем на кнопке, чекбоксе или поле ввода внутри

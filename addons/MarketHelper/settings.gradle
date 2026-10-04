@@ -1,0 +1,20 @@
+pluginManagement {
+    plugins {
+        id 'com.android.library' version '8.3.2'
+    }
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+rootProject.name = "MarketHelper"
+include ':markethelper'
+project(':markethelper').projectDir = file('plugin')

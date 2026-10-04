@@ -141,7 +141,9 @@ const _EN := {
 "Маленький": "Small",
 "Меню": "Menu",
 "Место %d:  %s": "Seat %d:  %s",
+"Может пригодиться Power Bank": "A Power Bank may come in handy",
 "Мусор в ходе": "Garbage in turn",
+"На Яндекс Маркете": "On Yandex Market",
 "На поле можно временно разбивать ряды (в том числе на 1 число),":
 	"You may temporarily split rows (even down to 1 tile),",
 "Набор: 3 или 4 числа одного значения разных цветов (например 7 красная, 7 синяя, 7 чёрная).":
@@ -154,6 +156,7 @@ const _EN := {
 "Начинаем…": "Starting…",
 "Начинает хост комнаты": "Room host starts",
 "Начинайте.": "You start.",
+"Не получилось открыть ссылку": "Couldn't open the link",
 "Не удалось войти в комнату": "Couldn't join the room",
 "Не удалось войти": "Couldn't sign in",
 "Не удалось начать партию": "Couldn't start the game",
@@ -187,6 +190,8 @@ const _EN := {
 "Перестраивать можно любые ряды на столе, включая выложенные другими игроками:":
 	"You can rearrange any rows on the table, including opponents':",
 "Перетащите сюда число - новый ряд": "Drag a tile here - new row",
+"Подборка на Яндекс Маркете": "A selection on Yandex Market",
+"Подборка настольных игр": "A selection of board games",
 "По сети": "Online",
 "Побед: %d": "Wins: %d",
 "Побед:": "Wins:",
@@ -208,6 +213,7 @@ const _EN := {
 "Помощь": "Help",
 "Поражений: %d": "Losses: %d",
 "Поражений:": "Losses:",
+"Посмотреть": "View",
 "Посмотреть стол": "View table",
 "Правила игры": "How to play",
 "Продолжить": "Continue",
@@ -217,6 +223,7 @@ const _EN := {
 "Размер текста и карточек": "Text and tile size",
 "Расклад сохранён (чекпоинт)": "Layout saved (checkpoint)",
 "Регистрация": "Sign up",
+"Реклама": "Ad",
 "Россия": "Russia",
 "Самый первый ход игры (первый игрок) должен быть не меньше 30 очков (сумма чисел),":
 	"The very first turn of the game (first player) must be at least 30 points (tile total),",

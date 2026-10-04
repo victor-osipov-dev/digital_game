@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.digitalgame.markethelper">
+
+    <!-- Точечная видимость ровно одного пакета (НЕ список приложений).
+         Без этого на Android 11+ PackageManager пакет не видит. -->
+    <queries>
+        <package android:name="ru.beru.android" />
+    </queries>
+
+    <application>
+        <!-- Регистрация v2-плагина: имя синглтона = MarketHelper. -->
+        <meta-data
+            android:name="org.godotengine.plugin.v2.MarketHelper"
+            android:value="com.digitalgame.markethelper.MarketHelperPlugin" />
+    </application>
+</manifest>

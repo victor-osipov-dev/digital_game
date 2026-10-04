@@ -1,0 +1,27 @@
+plugins {
+    id 'com.android.library'
+}
+
+android {
+    namespace 'com.digitalgame.markethelper'
+    compileSdk 34
+
+    defaultConfig {
+        minSdk 24
+    }
+
+    buildTypes {
+        release {
+            // Минимум — AAR и так без кода Cerberus; proguard не нужен.
+            consumerProguardFiles 'consumer-rules.pro'
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'org.godotengine:godot:4.7.2.stable'
+}

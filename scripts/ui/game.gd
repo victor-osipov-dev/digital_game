@@ -14,6 +14,13 @@ const DRAG_SCROLL_SPEED := 480.0
 # declared in the current scope».
 const ScrollDragClass := preload("res://scripts/ui/scroll_drag.gd")
 const UiThemeClass := preload("res://scripts/ui/ui_theme.gd")
+# Пути скриптов партнёрской рекламы (только Android; Web-сборка их не
+# содержит — поэтому load(), а не preload/class_name).
+const PARTNER_AD_SCRIPT := "res://scripts/platform/partner_ad.gd"
+const PARTNER_AD_CARD_SCRIPT := "res://scripts/platform/partner_ad_card.gd"
+const MARKET_HELPER_SCRIPT := "res://scripts/platform/market_helper.gd"
+# Мост SDK Яндекс Игр (только Web-сборка; в Android-PCK файла нет).
+const YANDEX_SDK_SCRIPT := "res://scripts/platform/yandex_sdk.gd"
 # Черновик стола шлём повторно, пока ход не завершён, — иначе соперник
 # с потерянным пакетом или вошедший посреди хода увидит пустой стол.
 const DRAFT_RESEND_MS := 3000
@@ -61,6 +68,12 @@ var _again_btn: Button = null
 ## Плавающая кнопка возврата на экран победы из просмотра стола.
 ## Видна только в режиме просмотра (партия кончена, оверлей скрыт).
 var _inspect_btn: Button = null
+## VBox экрана победы — туда встаёт рекламная карточка (ниже кнопок).
+var _win_box: VBoxContainer = null
+## Реклама уже показана за эту партию (максимум один раз за финал).
+var _partner_ad_shown := false
+## Время последнего нажатия на рекламу (защита от двойного Intent).
+var _partner_ad_open_ms := 0
 var _settings_panel: PanelContainer = null
 var _settings_rows: Array = []
 var _top_actions: FlowContainer = null
@@ -607,6 +620,7 @@ func _go_menu() -> void:
 
 
 func _on_leave_to_menu() -> void:
+	_ysdk(&"gameplay_stop")
 	# Из сетевой партии выход — это мягкий выход из комнаты на сервере:
 	# место и партия держатся за игроком, и главное меню предложит
 	# вернуться или покинуть комнату с концами. Полный выход — room.drop.
@@ -993,6 +1007,7 @@ func _build_win_overlay() -> void:
 	box.alignment = BoxContainer.ALIGNMENT_CENTER
 	box.add_theme_constant_override("separation", 24)
 	win_overlay.add_child(box)
+	_win_box = box
 
 	win_title = Label.new()
 	win_title.text = ""
@@ -1200,6 +1215,11 @@ func _rebuild_ui() -> void:
 	pass_overlay.visible = was_pass
 	win_overlay.visible = was_win
 	_inspect_btn.visible = was_inspect
+	if was_win:
+		# Пересборка съела детей оверлея вместе с карточкой — показываем
+		# заново (флаг _partner_ad_shown гасим: это тот же финал).
+		_partner_ad_shown = false
+		_maybe_show_partner_ad()
 	help_overlay.visible = was_help
 	settings_overlay.visible = was_settings
 	turn_title_overlay.visible = false
@@ -1338,6 +1358,7 @@ func _new_match() -> void:
 	_anim_stagger = false
 	_anim_load = false
 	_states_seen = 0
+	_partner_ad_shown = false
 	_drew_seat = -1
 	_draw_marks.clear()
 	state = GameState.create(Settings.player_count, Array(Settings.player_names), Settings.require_30)
@@ -1384,6 +1405,7 @@ func _net_begin() -> void:
 	win_overlay.visible = false
 	if _inspect_btn != null:
 		_inspect_btn.visible = false
+	_ysdk(&"gameplay_start")
 	_bot_seq += 1
 	_bot_active = false
 	_hint_ids.clear()
@@ -1405,6 +1427,7 @@ func _net_begin() -> void:
 	_anim_stagger = false
 	_anim_load = false
 	_states_seen = 0
+	_partner_ad_shown = false
 	_drew_seat = -1
 	_draw_marks.clear()
 	# «Заново» на экране победы — это про локальную партию: сервер не умеет
@@ -1498,6 +1521,8 @@ func _on_state_received(view: Dictionary, grace: float, paused: bool, waiting: b
 		win_overlay.visible = true
 		if _inspect_btn != null:
 			_inspect_btn.visible = false
+		_ysdk(&"gameplay_stop")
+		_maybe_show_partner_ad()
 		_show_wait("")
 		_present_queue.clear()
 		_present_gen += 1
@@ -1809,6 +1834,7 @@ func _show_pass(first: bool = false) -> void:
 
 func _on_pass_ready() -> void:
 	pass_overlay.visible = false
+	_ysdk(&"gameplay_start")
 
 func _show_turn_title() -> void:
 	if state == null:
@@ -2000,6 +2026,8 @@ func _show_win() -> void:
 	win_overlay.visible = true
 	if _inspect_btn != null:
 		_inspect_btn.visible = false
+	_ysdk(&"gameplay_stop")
+	_maybe_show_partner_ad()
 
 
 ## Экран победы скрыт — смотрим финальный стол. Только чтение: finished
@@ -2017,6 +2045,56 @@ func _hide_table_inspect() -> void:
 	_inspect_btn.visible = false
 	if state != null and state.finished:
 		win_overlay.visible = true
+
+
+## Вызов lifecycle API Яндекс Игр (только Web; elsewhere no-op внутри).
+func _ysdk(method: StringName) -> void:
+	if not OS.has_feature("web"):
+		return
+	if not ResourceLoader.exists(YANDEX_SDK_SCRIPT):
+		return
+	(load(YANDEX_SDK_SCRIPT) as GDScript).call(method)
+
+
+## Партнёрская карточка на экране победы (только Android/RuStore,
+## TEST MODE). Показ — максимум один за финал партии, строго после её
+## окончания: во время игры, между ходами и в поле её нет по построению.
+func _maybe_show_partner_ad() -> void:
+	if not OS.has_feature("android"):
+		return
+	if state == null or not state.finished:
+		return
+	if _partner_ad_shown or _win_box == null:
+		return
+	if not ResourceLoader.exists(PARTNER_AD_SCRIPT) \
+			or not ResourceLoader.exists(PARTNER_AD_CARD_SCRIPT):
+		return
+	_partner_ad_shown = true
+	var pad = load(PARTNER_AD_SCRIPT)
+	var battery := -1
+	if ResourceLoader.exists(MARKET_HELPER_SCRIPT):
+		battery = int((load(MARKET_HELPER_SCRIPT) as GDScript).battery_percent())
+	var ad: Dictionary = (pad as GDScript).pick(battery)
+	ad["image"] = String((pad as GDScript).image_path(String(ad.get("kind", ""))))
+	var card = (load(PARTNER_AD_CARD_SCRIPT) as GDScript).new()
+	_win_box.add_child(card)
+	card.setup(ad)
+	card.open_requested.connect(_on_partner_ad_open)
+
+
+## Переход по рекламе — только явным нажатием кнопки. Двойной тап за
+## секунду второй Intent не создаёт. Неудача — аккуратный тост, игра
+## продолжается без ошибок.
+func _on_partner_ad_open(url: String) -> void:
+	var now := Time.get_ticks_msec()
+	if now - _partner_ad_open_ms < 1000:
+		return
+	_partner_ad_open_ms = now
+	var ok := false
+	if OS.has_feature("android") and ResourceLoader.exists(MARKET_HELPER_SCRIPT):
+		ok = bool((load(MARKET_HELPER_SCRIPT) as GDScript).open_partner_link(String(url)))
+	if not ok:
+		toast(Lang.t("Не получилось открыть ссылку"), true)
 
 
 ## Одна запись в статистику на партию. Победа — за нами: в одиночной

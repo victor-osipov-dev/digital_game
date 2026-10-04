@@ -15,7 +15,7 @@ run/main_scene="res://scenes/main_menu.tscn"
 config/features=PackedStringArray("4.7", "GL Compatibility")
 boot_splash/bg_color=Color(0.05098, 0.06275, 0.0902, 1)
 boot_splash/show_image=false
-config/icon="res://icon.svg"
+config/icon="res://icon.png"
 
 [autoload]
 
@@ -44,3 +44,7 @@ rendering_device/driver.windows="d3d12"
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
 textures/vram_compression/import_etc2_astc=true
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/MarketHelper/plugin.cfg")
