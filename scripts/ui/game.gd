@@ -385,11 +385,15 @@ func _build_ui() -> void:
 	# фолбэка там же нет. Та же техника, что у рисованных иконок чекбоксов
 	# в ui_theme (PNG ради иконки не везём).
 	_burger_btn.text = ""
-	_burger_btn.icon = _burger_icon(30)
+	_burger_btn.icon = _burger_icon(36)
 	_burger_btn.expand_icon = false
+	# Иконка строго по центру: выравнивания задаём явно, а clip_text
+	# убираем — именно он при пустом тексте прижимал иконку к левому краю.
+	_burger_btn.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_burger_btn.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_burger_btn.clip_text = false
 	_burger_btn.tooltip_text = Lang.t("Действия")
 	_burger_btn.custom_minimum_size = Vector2(60, Settings.touch(46))
-	_burger_btn.clip_text = true
 	_burger_btn.add_theme_font_size_override("font_size", Settings.fs(18))
 	_burger_btn.pressed.connect(_toggle_burger_menu)
 	_burger_btn.visible = false
