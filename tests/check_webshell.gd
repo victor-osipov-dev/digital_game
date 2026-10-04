@@ -31,6 +31,7 @@ func _boot() -> void:
 		return
 	test_preset(preset)
 	test_bridge(bridge)
+	test_bridge_reads(bridge)
 	if fails == 0:
 		print("\nWEB SHELL: все %d проверок прошли" % total)
 		quit(0)
@@ -65,6 +66,20 @@ func test_bridge(bridge: String) -> void:
 		"иначе прокси-стаб не используется")
 	ok("CDN остался только запасным вариантом",
 		bridge.contains("SDK_URL"), "фолбэк для устаревших сборок")
+
+
+func test_bridge_reads(bridge: String) -> void:
+	section("чтение объектов из JS")
+	ok("опросы идут через _eval_dict",
+		bridge.contains("_eval_dict"), "иначе вернётся opaque-объект")
+	ok("_eval_dict крутит через JSON.stringify",
+		bridge.contains("JSON.stringify"), "иначе не Dictionary")
+	ok("не осталось прямых чтений объектным литералом",
+		not bridge.contains('_eval("({'),
+		"eval отдаёт JavaScriptObject, а не Dictionary — опросы вечно nosdk")
+	ok("все пять опросов на _eval_dict",
+		bridge.count("_eval_dict(") >= 6,
+		"helper + ready/hint/endgame/auth/player")
 
 
 func _read(path: String) -> String:

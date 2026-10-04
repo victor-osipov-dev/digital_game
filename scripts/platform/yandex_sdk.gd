@@ -33,6 +33,23 @@ static func _eval(js: String):
 	return bridge.eval(js, true)
 
 
+## Чтение объекта из JS: eval отдаёт JS-объекты как opaque
+## JavaScriptObject, а не Dictionary (поймано логами dev-proxy: init ok,
+## а все опросы отвечали "nosdk"). Поэтому гоняем через JSON.stringify
+## в строке + JSON.parse_string — получается настоящий Dictionary.
+## Пусто/не-Web/битый JSON — {} (коллеры отвечают дефолтом как раньше).
+static func _eval_dict(js_expr: String) -> Dictionary:
+	var raw = _eval("JSON.stringify(" + js_expr + ")")
+	if raw == null:
+		return {}
+	if raw is Dictionary:
+		return raw
+	var parsed = JSON.parse_string(str(raw))
+	if parsed is Dictionary:
+		return parsed
+	return {}
+
+
 ## Подключить SDK (один раз) и сказать LoadingAPI.ready(), когда готов.
 ## Уже загруженный window.YaGames (тег из shell: стаб dev-proxy или прод)
 ## только init() — повторная загрузка с CDN затёрла бы его и дала
@@ -66,11 +83,11 @@ static func ensure_sdk() -> void:
 ## Готов ли SDK: {ready, error}. Вызывать после небольшой паузы —
 ## скрипту нужно время загрузиться.
 static func poll_sdk_ready() -> Dictionary:
-	var r = _eval("({r:!!window.__ysdk,e:String(window.__ysdkInitError||'')})")
-	if r == null or not (r is Dictionary):
+	var r := _eval_dict("({r:!!window.__ysdk,e:String(window.__ysdkInitError||'')})")
+	if r.is_empty():
 		return {"ready": false, "error": "nosdk"}
-	return {"ready": bool((r as Dictionary).get("r", false)),
-		"error": String((r as Dictionary).get("e", ""))}
+	return {"ready": bool(r.get("r", false)),
+		"error": String(r.get("e", ""))}
 
 
 ## Игрок реально играет (ходить/партия началась).
@@ -102,13 +119,13 @@ static func show_hint_rewarded() -> void:
 
 ## Состояние rewarded за подсказку: {rewarded, closed, error}.
 static func poll_hint_ad() -> Dictionary:
-	var r = _eval("({r:!!window.__yaHintRewarded,c:!!window.__yaHintClosed," \
+	var r := _eval_dict("({r:!!window.__yaHintRewarded,c:!!window.__yaHintClosed," \
 		+ "e:String(window.__yaHintError||'')})")
-	if r == null or not (r is Dictionary):
+	if r.is_empty():
 		return {"rewarded": false, "closed": true, "error": "nosdk"}
-	return {"rewarded": bool((r as Dictionary).get("r", false)),
-		"closed": bool((r as Dictionary).get("c", false)),
-		"error": String((r as Dictionary).get("e", ""))}
+	return {"rewarded": bool(r.get("r", false)),
+		"closed": bool(r.get("c", false)),
+		"error": String(r.get("e", ""))}
 
 
 ## Fullscreen после партии (после обратного отсчёта). Флаги:
@@ -125,11 +142,11 @@ static func show_endgame_fullscreen() -> void:
 
 ## Состояние post-game рекламы: {closed, error}.
 static func poll_endgame_ad() -> Dictionary:
-	var r = _eval("({c:!!window.__yaEndClosed,e:String(window.__yaEndError||'')})")
-	if r == null or not (r is Dictionary):
+	var r := _eval_dict("({c:!!window.__yaEndClosed,e:String(window.__yaEndError||'')})")
+	if r.is_empty():
 		return {"closed": true, "error": "nosdk"}
-	return {"closed": bool((r as Dictionary).get("c", false)),
-		"error": String((r as Dictionary).get("e", ""))}
+	return {"closed": bool(r.get("c", false)),
+		"error": String(r.get("e", ""))}
 
 
 ## Диалог авторизации Yandex ID — только явная кнопка с объяснением выгод
@@ -145,11 +162,11 @@ static func open_auth_dialog() -> void:
 
 ## Состояние диалога: {done, error}.
 static func poll_auth_dialog() -> Dictionary:
-	var r = _eval("({d:!!window.__yaAuthDone,e:String(window.__yaAuthError||'')})")
-	if r == null or not (r is Dictionary):
+	var r := _eval_dict("({d:!!window.__yaAuthDone,e:String(window.__yaAuthError||'')})")
+	if r.is_empty():
 		return {"done": true, "error": "nosdk"}
-	return {"done": bool((r as Dictionary).get("d", false)),
-		"error": String((r as Dictionary).get("e", ""))}
+	return {"done": bool(r.get("d", false)),
+		"error": String(r.get("e", ""))}
 
 
 ## Профиль игрока: запускает getPlayer, результат — в poll_player.
@@ -170,12 +187,12 @@ static func request_player() -> void:
 
 ## Состояние профиля: {done, data ({uid, name, authorized} или null), error}.
 static func poll_player() -> Dictionary:
-	var r = _eval("({d:!!window.__yaPlayerDone,t:(window.__yaPlayerData||null)," \
+	var r := _eval_dict("({d:!!window.__yaPlayerDone,t:(window.__yaPlayerData||null)," \
 		+ "e:String(window.__yaPlayerError||'')})")
-	if r == null or not (r is Dictionary):
+	if r.is_empty():
 		return {"done": true, "data": null, "error": "nosdk"}
-	var data = (r as Dictionary).get("t", null)
+	var data = r.get("t", null)
 	if data != null and not (data is Dictionary):
 		data = null
-	return {"done": bool((r as Dictionary).get("d", false)),
-		"data": data, "error": String((r as Dictionary).get("e", ""))}
+	return {"done": bool(r.get("d", false)),
+		"data": data, "error": String(r.get("e", ""))}
