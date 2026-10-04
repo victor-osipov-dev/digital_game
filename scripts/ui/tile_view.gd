@@ -76,23 +76,24 @@ func _build() -> void:
 	# Число масштабируется и по фишке, и по шкале текста, но потолок —
 	# сама фишка: шире карточки цифра быть не может ни при какой
 	# настройке (0.82 оставляет запас под самый широкий глиф «88»).
-	var tile_base := int(round(ts.y * 0.4))
-	var fsize := clampi(Settings.fs(tile_base), 8, int((ts.x - 6.0) * 0.82))
-	var label := Label.new()
-	label.text = Lang.t("*") if tile.is_joker else str(tile.value)
-	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	label.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	label.add_theme_font_size_override("font_size", fsize)
-	label.add_theme_color_override("font_color", Color.WHITE)
-	label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.5))
-	label.add_theme_constant_override("outline_size", maxi(2, int(fsize / 6)))
-	add_child(label)
-
+	# У джокера цифры нет: вместо неё звезда рисуется полигоном в _draw
+	# (глифа «звёздочка» нет во встроенном шрифте Web-сборки — был тофу).
 	if tile.is_joker:
 		tooltip_text = Lang.t("Джокер — заменяет любое число любого цвета")
 	else:
+		var tile_base := int(round(ts.y * 0.4))
+		var fsize := clampi(Settings.fs(tile_base), 8, int((ts.x - 6.0) * 0.82))
+		var label := Label.new()
+		label.text = str(tile.value)
+		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		label.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		label.add_theme_font_size_override("font_size", fsize)
+		label.add_theme_color_override("font_color", Color.WHITE)
+		label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.5))
+		label.add_theme_constant_override("outline_size", maxi(2, int(fsize / 6)))
+		add_child(label)
 		tooltip_text = "%s %d" % [Tile.color_name(tile.color), tile.value]
 	base_alpha = modulate.a
 
@@ -126,10 +127,42 @@ func _draw() -> void:
 			c + Vector2(0, r), c + Vector2(-r, 0),
 		]), Color("FFD54F"))
 		return
+	# Джокер: белая звезда с тёмной обводкой по центру (вместо цифры).
+	if tile != null and tile.is_joker:
+		_draw_star()
 	# Свежие свои: взятая из колоды и только что выложенные (черновик —
 	# прозрачность и зелёная рамка при этом остаются как были).
 	if mark_drawn or mark_draft:
 		_draw_badge()
+
+
+## Внешний радиус звезды джокера под размер фишки: с обводкой (x1.14)
+## диаметр занимает ~0.82 меньшей стороны — тот же запас, что у цифр.
+static func star_outer(ts: Vector2) -> float:
+	return minf(ts.x, ts.y) * 0.36
+
+
+## Вершины пятиконечной звезды (луч вверх), 10 точек: внешний/внутренний
+## радиусы чередуются. Классическая пропорция 0.382.
+static func star_points(c: Vector2, r_out: float) -> PackedVector2Array:
+	var pts := PackedVector2Array()
+	var r_in := r_out * 0.382
+	for k in range(10):
+		var r := r_out if k % 2 == 0 else r_in
+		var a := -PI * 0.5 + float(k) * PI / 5.0
+		pts.append(c + Vector2(cos(a), sin(a)) * r)
+	return pts
+
+
+## Звезда джокера — рисованный полигон, а не глиф: звездочки нет во
+## встроенном шрифте Web-сборки (был тофу-квадрат), системного фолбэка
+## там же нет. Та же техника, что у ромба рубашки выше и галочки бейджа.
+func _draw_star() -> void:
+	var ts := Settings.tile_size()
+	var c := ts * 0.5
+	var r := star_outer(ts)
+	draw_colored_polygon(star_points(c, r * 1.14), Color(0, 0, 0, 0.5))
+	draw_colored_polygon(star_points(c, r), Color.WHITE)
 
 func _get_drag_data(pos: Vector2) -> Variant:
 	if not draggable or tile == null or controller == null:

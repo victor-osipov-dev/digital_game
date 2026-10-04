@@ -190,6 +190,17 @@ func _burger_checks() -> void:
 	check(bool(inst.get("_top_collapsed")), "big text collapses top buttons into burger")
 	var burger = inst.get("_burger_btn")
 	check(burger != null and (burger as Control).visible, "burger button visible when collapsed")
+	# Значок рисуется кодом (три полосы), а не глифом: триграммы нет во
+	# встроенном шрифте Web-сборки. Текста у кнопки нет вообще.
+	check(String((burger as Button).text).is_empty(), "burger has no glyph text")
+	var bicon := (burger as Button).icon as ImageTexture
+	check(bicon != null and bicon.get_width() == bicon.get_height()
+		and bicon.get_width() >= 24, "burger icon is a square texture")
+	if bicon != null:
+		var bimg := bicon.get_image()
+		var mid := bimg.get_pixel(bimg.get_width() / 2, bimg.get_height() / 2)
+		check(mid.a > 0.5, "burger middle bar is painted")
+		check(bimg.get_pixel(0, 0).a < 0.1, "burger corners stay transparent")
 	var box = inst.get("_burger_box")
 	var bar = inst.get("_top_actions")
 	var overflowed := true

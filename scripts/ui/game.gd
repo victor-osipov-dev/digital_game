@@ -380,10 +380,13 @@ func _build_ui() -> void:
 	_top_pinned = [cp_save_btn, cp_restore_btn, hint_btn]
 	_top_overflow = [help_btn, settings_btn, menu_btn]
 	_burger_btn = Button.new()
-	# Три точки вместо «☰»: триграммы нет во встроенном шрифте Web-сборки
-	# (тофу-квадрат), системного фолбэка там нет. Тултип «Действия»
-	# смысл сохраняет.
-	_burger_btn.text = Lang.t("...")
+	# Значок-бургер рисуется кодом (_burger_icon), а не глифом: триграммы
+	# нет во встроенном шрифте Web-сборки (был тофу-квадрат), системного
+	# фолбэка там же нет. Та же техника, что у рисованных иконок чекбоксов
+	# в ui_theme (PNG ради иконки не везём).
+	_burger_btn.text = ""
+	_burger_btn.icon = _burger_icon(30)
+	_burger_btn.expand_icon = false
 	_burger_btn.tooltip_text = Lang.t("Действия")
 	_burger_btn.custom_minimum_size = Vector2(60, Settings.touch(46))
 	_burger_btn.clip_text = true
@@ -394,7 +397,7 @@ func _build_ui() -> void:
 
 	# Ловец кликов мимо меню: закрывает бургер и съедает нажатие,
 	# чтобы оно не проваливалось в стол. Лежит под панелью, над всем
-	# остальным; кнопка «...» под ним, но её тап тоже ловится сюда же —
+	# остальным; кнопка-бургер под ним, но её тап тоже ловится сюда же —
 	# повторный тап закрывает, как и раньше.
 	_burger_catcher = ColorRect.new()
 	_burger_catcher.color = Color(0, 0, 0, 0)
@@ -842,6 +845,25 @@ func _sync_top_bar() -> void:
 		_set_burger_open(false, false)
 
 
+## Значок-бургер s×s: три белые полосы со скруглёнными концами на
+## прозрачном фоне. Рисуем попиксельно, как иконки чекбоксов в ui_theme.
+func _burger_icon(s: int) -> ImageTexture:
+	var img := Image.create(s, s, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0, 0, 0, 0))
+	var col := Color(1, 1, 1, 0.92)
+	var hw := float(s) * 0.31
+	var hr := maxf(1.5, float(s) * 0.06)
+	for row in [0.3, 0.5, 0.7]:
+		var yc := float(s) * float(row)
+		for y in range(s):
+			for x in range(s):
+				var dx := maxf(absf(float(x) + 0.5 - float(s) * 0.5) - hw, 0.0)
+				var dy := absf(float(y) + 0.5 - yc)
+				if Vector2(dx, dy).length() <= hr:
+					img.set_pixel(x, y, col)
+	return ImageTexture.create_from_image(img)
+
+
 func _toggle_burger_menu() -> void:
 	# Тап, закрывший меню через ловец, отдаёт ещё и release в кнопку
 	# под ним: без паузы меню тут же открылось бы обратно.
@@ -901,7 +923,7 @@ func _hide_burger_panel() -> void:
 		_burger_catcher.visible = _burger_open
 
 
-	## Панель под кнопку «...», правым краем по ней: поверх раскладки, ничего
+	## Панель под кнопку-бургер, правым краем по ней: поверх раскладки, ничего
 ## не сдвигает. Ширина — по содержимому, но не шире окна.
 func _place_burger_panel() -> void:
 	if _burger_panel == null or _burger_btn == null:
