@@ -507,6 +507,11 @@ func test_bot_commit_no_mid_state() -> void:
 	s2["lastTurn"] = [_na, _nb, _nc]
 	s2["current"] = 2
 	game._on_state_received(s2, 0.0, false, false)
+	# Подсветка — на авторе коммита, а не на state.current (ход ушёл
+	# дальше, но показ ещё от первого бота).
+	ok("подсветка — автор летящего коммита",
+		game._highlight_seat() == 1 and game.state.current == 2,
+		"подсветка %d, current %d" % [game._highlight_seat(), game.state.current])
 	var r := await _landing_spread([_na, _nb, _nc], game.turn_title_overlay)
 	ok("все три долетели", int(r["landed"]) == 3, "сели %d" % int(r["landed"]))
 	ok("плашка «Ход» показывалась", bool(r["seen_title"]))
@@ -670,6 +675,15 @@ func _row_positions() -> Dictionary:
 	return out
 
 
+## Текст подписи чипа игрока: chips_box строится строго по порядку мест.
+func _chip_text(seat: int) -> String:
+	var box: HBoxContainer = game.chips_box
+	if seat < 0 or seat >= box.get_child_count():
+		return ""
+	var lab = (box.get_child(seat) as PanelContainer).get_child(0)
+	return lab.text if lab is Label else ""
+
+
 ## Цепочка ботов идёт очередью презентаций: шаги первого — титр второго —
 ## шаги второго — титр игрока. Второй коммит приходит, пока первый ещё
 ## летит (боты ходят каждые 1.4–2.4 с), — пересборка должна подождать
@@ -706,6 +720,13 @@ func test_bot_chain_queued() -> void:
 	game._on_state_received(s1, 0.0, false, false)
 	for i in range(10):
 		await process_frame
+	# Пока летят фишки первого бота — обводят его и подписаны «ходит»:
+	# показ ещё его, хотя по состоянию ход уже у следующего места.
+	ok("подсветка — автор летящих шагов",
+		game._highlight_seat() == 1 and game.state.current == 2,
+		"подсветка %d, current %d" % [game._highlight_seat(), game.state.current])
+	ok("чип летящего бота подписан «ходит»",
+		_chip_text(1).contains(Lang.t(" · ходит")), _chip_text(1))
 	# Второй бот выложил ещё три, пока первый ещё летит. Пересборка в
 	# полёте откладывается — иначе твины умрут и всё встанет разом.
 	var s2: Dictionary = s1.duplicate(true)
@@ -713,6 +734,11 @@ func test_bot_chain_queued() -> void:
 	s2["lastTurn"] = [_nd, _ne, _nf]
 	s2["current"] = 0
 	game._on_state_received(s2, 0.0, false, false)
+	# Главный регресс: current уже наш (0), а показ ещё у первого бота —
+	# обводка не перескакивает посреди чужой анимации.
+	ok("пока летит чужой ход — обводка не перескакивает",
+		game._highlight_seat() == 1 and game.state.current == 0,
+		"подсветка %d, current %d" % [game._highlight_seat(), game.state.current])
 	# Пока показ ждёт своего череда, фишка обязана быть невидимой —
 	# пересборка не смеет её «воскрешать». Плюс посадки: наблюдение за
 	# ними нельзя начинать после полёта — не увидит прозрачности.
@@ -740,6 +766,20 @@ func test_bot_chain_queued() -> void:
 	var layout_err := await _layout_rest_check()
 	ok("карточки легли там, где раскладывает ряд", layout_err == "",
 		layout_err)
+	# Очередь пуста — подсветка по состоянию. Осталось наше место
+	# (s2.current = 0): чип зелёный, с рамкой и подписью «ваш ход».
+	ok("после показа обводка по состоянию",
+		game._highlight_seat() == game.state.current,
+		"подсветка %d, current %d" % [game._highlight_seat(), game.state.current])
+	var lab0 := _chip_text(0)
+	ok("наш ход подписан явно",
+		lab0.contains(Lang.t(" · вы")) and lab0.contains(Lang.t(" · ваш ход")),
+		lab0)
+	var sb0 := (game.chips_box.get_child(0) as PanelContainer) \
+		.get_theme_stylebox("panel") as StyleBoxFlat
+	ok("наша фишка зелёная и обведена толще",
+		sb0.border_width_left >= 3 and sb0.bg_color.g > sb0.bg_color.b,
+		"рамка %d, фон %s" % [sb0.border_width_left, sb0.bg_color])
 	game._online = false
 
 

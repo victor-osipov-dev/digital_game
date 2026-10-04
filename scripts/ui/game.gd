@@ -123,12 +123,23 @@ var _waiting: bool = false
 var _anim_pending: bool = false
 # Id фишек, чей прилёт анимируем принудительно, даже если снимок их уже
 # видел: черновик показывал эти фишки прозрачными до коммита, и обычное
-# сравнение «до/после» решило бы, что они никуда не прилетали.
-var _anim_force: Array = []
+# сравнение «до/после» решило бы, что они никуда не прилетали. Каждый id
+# несёт своё место (mover коммита) — сегменты очереди показывают шаги
+# строго «своего» игрока, а не слипаются в одну кучу с чужим именем.
+var _anim_force: Dictionary = {}
 # Ход сетевого бота анимируем поэтапно, как локального: прилёты идут
 # друг за другом, а не все разом. Метку ставит _apply_state по прошлому
 # состоянию (ходил бот), гасится в refresh вместе с остальным.
 var _anim_stagger := false
+# Первое состояние партии — загрузка стола (вход/режойн), а не чей-то
+# ход. Его force летит немедленным путём и в очередь не встаёт: иначе
+# весь стол «показывался бы шагами», пересборки копились бы в отложенных
+# (чужой черновик по дороге пропадал бы), а подсветка на входе прыгала
+# бы на место предыдущего показа. Метка однократная — на refresh.
+var _anim_load := false
+# Состояний партии уже получено: первое после _new_match/_net_begin и
+# есть загрузка. Считает только _on_state_received.
+var _states_seen := 0
 # Поколение анимации: несколько перерисовок с меткой в одном кадре
 # (черновик и коммит разом) планируют столько же продолжений, а летит
 # только последнее — по самым свежим видам. Иначе дубли твинов дёргают
@@ -164,8 +175,16 @@ var _title_pending := false
 var _pending_title_seat: int = -1
 ## Id, чьи виды не нашлись в момент показа (стол показан из черновика
 ## соперника или ряд ещё не собран). Показ не считается состоявшимся:
-## вернёмся к ним, когда фишка появится на экране.
+## вернёмся к ним, когда фишка появится на экране. Формат: {id, seat} —
+## место сегмента, породившего сироту, чтобы её пересборка встала в
+## очередь «от того же игрока».
 var _present_orphans: Array = []
+## Чей ход мы ПОКАЗЫВАЕМ сверху прямо сейчас: автор летящих шагов или
+## титра, а не state.current. Сервер уже передал ход дальше, пока
+## долетают фишки прошлого игрока, и по состоянию чип следующего
+## загорался бы посреди чужой анимации — зрителю непонятно, чьи это
+## фишки. Очередь пуста (-1) — показываем текущего по состоянию.
+var _shown_seat: int = -1
 
 # --- отсчёт хода (сетевая партия) ---------------------------------------
 #
@@ -1279,6 +1298,15 @@ func _new_match() -> void:
 	_title_pending = false
 	_pending_title_seat = -1
 	_present_orphans.clear()
+	# Метки анимации от прошлой партии: не сброшенные id шагов уехали бы
+	# в локальную игру и «прилетали» бы чужие фишки; показываемое место
+	# держало бы подсветку несуществующего игрока. Счётчик состояний —
+	# следующее состояние снова будет загрузкой стола.
+	_shown_seat = -1
+	_anim_force.clear()
+	_anim_stagger = false
+	_anim_load = false
+	_states_seen = 0
 	_drew_seat = -1
 	_draw_marks.clear()
 	state = GameState.create(Settings.player_count, Array(Settings.player_names), Settings.require_30)
@@ -1335,6 +1363,13 @@ func _net_begin() -> void:
 	_title_pending = false
 	_pending_title_seat = -1
 	_present_orphans.clear()
+	# Как в _new_match: без сброса метки прошлой комнаты привязали бы
+	# подсветку и шаги к чужому месту новой партии.
+	_shown_seat = -1
+	_anim_force.clear()
+	_anim_stagger = false
+	_anim_load = false
+	_states_seen = 0
 	_drew_seat = -1
 	_draw_marks.clear()
 	# «Заново» на экране победы — это про локальную партию: сервер не умеет
@@ -1390,6 +1425,10 @@ func _on_net_state(view: Dictionary, grace: float, paused: bool, waiting: bool) 
 
 func _on_state_received(view: Dictionary, grace: float, paused: bool, waiting: bool) -> void:
 	_sending = false
+	# Первое состояние партии — загрузка стола, а не ход: force первого
+	# полетит немедленным путём (см. _anim_load), в очередь не встанет.
+	_anim_load = _states_seen == 0
+	_states_seen += 1
 	_hint_ids.clear()
 	invalid_row_ids.clear()
 	# Состояние с сервера — единственный источник «прилетающих» фишкок.
@@ -1401,9 +1440,20 @@ func _on_state_received(view: Dictionary, grace: float, paused: bool, waiting: b
 	# приносит только СВОИ новые фишки (стол предыдущего уже применён), а
 	# метка поэтапности живёт до самой пересборки — терять ни то, ни другое
 	# нельзя: потерянные фишки показались бы разом минуя очередь.
+	# Чьи это фишки: место перед current при непустом lastTurn (выкладка
+	# передаёт ход — выкладывал предыдущий), иначе само current. Считаем
+	# ДО _apply_state — там ещё прошлое состояние; счётчик мест одинаков.
+	var mv_seat := -1
+	if state != null and state.player_count() > 0:
+		var n_st := state.player_count()
+		var cur_v := clampi(int(view.get("current", 0)), 0, n_st - 1)
+		if (view.get("lastTurn", []) as Array).is_empty():
+			mv_seat = cur_v
+		else:
+			mv_seat = (cur_v - 1 + n_st) % n_st
 	for id in _fresh_committed_ids(view):
 		if not _anim_force.has(int(id)):
-			_anim_force.append(int(id))
+			_anim_force[int(id)] = mv_seat
 	_apply_state(view, grace, paused, waiting)
 	# Чужой ход — показываем, кто ходит. Наш собственный ход требует
 	# действия игрока, и подсказка с названием мешала бы.
@@ -1421,6 +1471,10 @@ func _on_state_received(view: Dictionary, grace: float, paused: bool, waiting: b
 		_refresh_pending = false
 		_title_pending = false
 		_pending_title_seat = -1
+		# Показ прерван (gen++ выше) — хвост очистки очереди его не
+		# сбросил бы: подсветка уехала бы на последнего показанного игрока
+		# вместо победителя по state.current.
+		_shown_seat = -1
 		refresh()
 		return
 	pass_overlay.visible = false
@@ -1729,6 +1783,11 @@ func _show_turn_title() -> void:
 func _turn_title_text(seat: int) -> String:
 	var who := "?"
 	if state != null and seat >= 0 and seat < state.player_count():
+		# Наш ход в сетевой партии — кричим явно. «Ход: <ник>» на своём
+		# же устройстве читается как чужой ход, а таймер сверху так и
+		# вовсе не объясняет, что делать именно сейчас.
+		if _online and state.local_seat >= 0 and seat == state.local_seat:
+			return Lang.t("Ваш ход!")
 		who = (state.players[seat] as GameState.Player).pname
 		# Серверный бот ходит сам, и пометить его обязаны: иначе партия,
 		# сидящая на паузе или идущая на чужих устройствах, выглядит как
@@ -2571,10 +2630,17 @@ func refresh() -> void:
 	# соперника, ряд ещё не собран). Фишка появилась — ставим в очередь
 	# своим чередом, а не показываем мгновенно.
 	_requeue_orphans()
-	var force: Array = _anim_force
-	_anim_force = []
+	# Словарь id→место: по месту группируем сегменты, по ключам — плоский
+	# список для немедленного полёта и списка ждущих (там место не нужно).
+	var force_map: Dictionary = _anim_force
+	_anim_force = {}
+	var force: Array = []
+	for id in force_map:
+		force.append(int(id))
 	var stagger := _anim_stagger
 	_anim_stagger = false
+	var load := _anim_load
+	_anim_load = false
 	# Ждущие показа снимаем ДО постановки шагов: при свободной очереди
 	# сегмент выходит из неё немедленно, и после этого список был бы пуст —
 	# немедленный полёт увёл бы карточки минуя очередь. Двойной прилёт
@@ -2582,9 +2648,16 @@ func refresh() -> void:
 	# стоят) гасил бы стагger и рвал карточки обратно в угол.
 	var waiting: Array = _present_ids()
 	# Пошаговый прилёт — в очередь презентаций (там же титры), а не
-	# сразу на экран: цепочки ботов иначе рвут друг друга.
-	if stagger and not force.is_empty() and state != null and not state.finished:
-		_enqueue_steps(force)
+	# сразу на экран: цепочки ботов иначе рвут друг друга. Сетевой коммит
+	# идёт туда же и без stagger (наш ход после чужих шагов и чужого титра
+	# летел бы мимо очереди — прилёт накладывался бы на чужой показ);
+	# офлайн force не бывает: он заполняется только из состояний сервера.
+	# Загрузка стола (первое состояние) — не ход: тем же немедленным путём,
+	# что и раньше, иначе вход в текущую партию вешал бы весь стол «шагами»
+	# в очередь и держал бы пересборки в отложенных.
+	if (stagger or (_online and not load)) and not force.is_empty() \
+			and state != null and not state.finished:
+		_enqueue_steps_grouped(force_map)
 		for id in force:
 			if not waiting.has(int(id)):
 				waiting.append(int(id))
@@ -2614,9 +2687,10 @@ func refresh() -> void:
 ## Все id, которых показ ещё ждёт: очередь шагов и сироты.
 func _present_ids() -> Array:
 	var out: Array = []
-	for id in _present_orphans:
-		if not out.has(int(id)):
-			out.append(int(id))
+	for o in _present_orphans:
+		var oid := int((o as Dictionary).get("id", -1))
+		if oid >= 0 and not out.has(oid):
+			out.append(oid)
 	for seg in _present_queue:
 		if String((seg as Dictionary).get("kind", "")) != "steps":
 			continue
@@ -2626,21 +2700,41 @@ func _present_ids() -> Array:
 	return out
 
 
-## Фишки-сироты появились на экране — показываем их теперь.
+## Есть ли этот id уже среди сирот (словари {id, seat}).
+func _orphan_has(iid: int) -> bool:
+	for o in _present_orphans:
+		if int((o as Dictionary).get("id", -1)) == iid:
+			return true
+	return false
+
+
+## Фишки-сироты появились на экране — показываем их теперь, своими
+## чередами и от тех же мест, чьи шаги их породили.
 func _requeue_orphans() -> void:
 	if _present_orphans.is_empty():
 		return
 	var live := {}
 	_collect_live(live)
 	var found: Array = []
-	for id in _present_orphans:
-		if live.has(int(id)):
-			found.append(int(id))
+	var keep: Array = []
+	for o in _present_orphans:
+		if live.has(int((o as Dictionary).get("id", -1))):
+			found.append(o)
+		else:
+			keep.append(o)
 	if found.is_empty():
 		return
-	for id in found:
-		_present_orphans.erase(int(id))
-	_enqueue_steps(found)
+	_present_orphans = keep
+	var order: Array = []
+	var groups := {}
+	for o in found:
+		var seat := int((o as Dictionary).get("seat", -1))
+		if not groups.has(seat):
+			groups[seat] = []
+			order.append(seat)
+		(groups[seat] as Array).append(int((o as Dictionary).get("id", -1)))
+	for seat in order:
+		_enqueue_steps(groups[seat], seat)
 
 
 ## Отложенная пересборка/титр — после конца полёта. Если следующий сегмент
@@ -2670,8 +2764,9 @@ func _after_present() -> void:
 
 
 ## Шаги в очередь: дубли номеров ни к чему (повторные рассылки несут
-## те же фишки), порядок — как пришли.
-func _enqueue_steps(ids: Array) -> void:
+## те же фишки), порядок — как пришли. seat — чьи это фишки: подсветка
+## сверху следует за показываемым местом, а не за state.current.
+func _enqueue_steps(ids: Array, seat: int = -1) -> void:
 	var fresh: Array = []
 	for id in ids:
 		var iid := int(id)
@@ -2679,9 +2774,25 @@ func _enqueue_steps(ids: Array) -> void:
 			fresh.append(iid)
 	if fresh.is_empty():
 		return
-	_present_queue.append({"kind": "steps", "ids": fresh})
+	_present_queue.append({"kind": "steps", "ids": fresh, "seat": seat})
 	_steps_since_title = true
 	_pump_present()
+
+
+## Словарь id→место раскладываем по сегментам: свои фишки — своим
+## игрокам, в порядке появления id. Два коммита, пришедшие за один
+## полёт, летят раздельно — и подсветка честно переходит между ними.
+func _enqueue_steps_grouped(id_seats: Dictionary) -> void:
+	var order: Array = []
+	var groups := {}
+	for id in id_seats:
+		var seat := int(id_seats[id])
+		if not groups.has(seat):
+			groups[seat] = []
+			order.append(seat)
+		(groups[seat] as Array).append(int(id))
+	for seat in order:
+		_enqueue_steps(groups[seat], seat)
 
 
 ## Крутит очередь презентаций: титр — шаги — титр — шаги. Данные уже
@@ -2702,11 +2813,21 @@ func _pump_present() -> void:
 			# врать про «Ход: Бот», когда ходит другой, нельзя.
 			var seat := int(seg.get("seat", -1))
 			if _title_fresh(seat):
+				# Показать его — и обвести подсветкой на нём же: титр и
+				# чип обязаны говорить об одном игроке.
+				if seat >= 0:
+					_show_seat(seat)
 				_flash_turn_title(String(seg.get("text", "")))
 				await tree.create_timer(1.45).timeout
 		else:
+			var sseat := int(seg.get("seat", -1))
+			# Пока летят эти фишки — обводим их автора: state.current уже
+			# следующий, и по состоянию чипы перескочили бы на него
+			# посреди чужого показа.
+			if sseat >= 0:
+				_show_seat(sseat)
 			_flight_active = true
-			await _play_queued_steps(seg.get("ids", []), tree, gen)
+			await _play_queued_steps(seg.get("ids", []), tree, gen, sseat)
 			_flight_active = false
 			# Пересборка/титр, заказанные посреди полёта, применяем сейчас:
 			# тут же — до того, как цикл успеет взять следующий сегмент.
@@ -2716,13 +2837,40 @@ func _pump_present() -> void:
 	if gen == _present_gen:
 		_present_queue.clear()
 		_present_busy = false
+		# Показ кончился — подсветка возвращается на state.current.
+		_show_seat(-1)
 	if _refresh_pending or _title_pending:
 		call_deferred("_after_present")
 
 
+## Подсветка сверху: чей ход мы ПОКАЗЫВАЕМ сейчас (автор летящих шагов
+## или титра), а не чей он по серверу. Очередь пуста — текущий по
+## состоянию. Вызывается при каждом смене показываемого места: чипы
+## перерисовываются сразу, иначе рамка ехала бы только со следующим
+## refresh.
+func _show_seat(seat: int) -> void:
+	if _shown_seat == seat:
+		return
+	_shown_seat = seat
+	_update_chips()
+
+
+## Место для подсветки чипов: показываемое, если очередь показа занята,
+## иначе текущее по состоянию.
+func _highlight_seat() -> int:
+	if _shown_seat >= 0:
+		return _shown_seat
+	if state == null:
+		return -1
+	return state.current
+
+
 ## Пошаговый прилёт из очереди: ищем живые виды по id (пересборки могли
 ## их пересоздать), прячем и летим друг за другом, как локальный бот.
-func _play_queued_steps(ids: Array, tree: SceneTree, gen: int) -> void:
+## seat — место автора сегмента: пропавшие виды запоминаем вместе с ним,
+## чтобы их пересборка встала в очередь «от того же игрока».
+func _play_queued_steps(ids: Array, tree: SceneTree, gen: int,
+		seat: int = -1) -> void:
 	if tree == null or gen != _present_gen:
 		return
 	var cur := {}
@@ -2733,11 +2881,11 @@ func _play_queued_steps(ids: Array, tree: SceneTree, gen: int) -> void:
 		if tv != null:
 			tv.modulate.a = 0.0
 			views.append(tv)
-		elif not _present_orphans.has(int(id)):
+		elif not _orphan_has(int(id)):
 			# Вида нет (стол показан из черновика соперника, ряд ещё не
 			# собран) — показ не состоялся. Запоминаем: фишка вернётся на
 			# экран — покажем её своим чередом, а не считаем посаженной.
-			_present_orphans.append(int(id))
+			_present_orphans.append({"id": int(id), "seat": seat})
 	if views.is_empty():
 		return
 	# Пересборка только что пересоздала RowBlock'и: их FlowTiles ширины
@@ -2987,14 +3135,27 @@ func _update_chips() -> void:
 	for child in chips_box.get_children():
 		chips_box.remove_child(child)
 		child.free()
+	# Обводим ПОКАЗЫВАЕМОЕ место (очередь презентаций), а не сырое
+	# state.current: сервер уже передал ход дальше, пока долетают фишки
+	# прошлого игрока, и по состоянию чип перескочил бы на следующего
+	# посреди чужого показа — для зрителя это и есть «обвели не того».
+	var shown := _highlight_seat()
 	for i in state.player_count():
 		var chip := PanelContainer.new()
 		var sb := StyleBoxFlat.new()
-		var is_now := i == state.current
-		sb.bg_color = Color(0.24, 0.45, 0.85, 0.4) if is_now else Color(1, 1, 1, 0.07)
+		var is_now := i == shown
+		# Наш ход (только сетевая партия: offline local_seat = -1) —
+		# свой цвет, толстая рамка и пульс: «мы ходим» должно читаться
+		# сразу, не только по рамке среди чужих подсветок.
+		var mine := is_now and not state.finished and i == state.local_seat
+		sb.bg_color = Color(0.16, 0.55, 0.32, 0.55) if mine \
+			else (Color(0.24, 0.45, 0.85, 0.4) if is_now \
+			else Color(1, 1, 1, 0.07))
 		sb.set_corner_radius_all(8)
-		sb.border_color = Color(0.56, 0.73, 0.98, 0.9) if is_now else Color(1, 1, 1, 0.12)
-		sb.set_border_width_all(2 if is_now else 1)
+		sb.border_color = Color(0.5, 0.95, 0.6, 0.95) if mine \
+			else (Color(0.56, 0.73, 0.98, 0.9) if is_now \
+			else Color(1, 1, 1, 0.12))
+		sb.set_border_width_all(3 if mine else (2 if is_now else 1))
 		sb.content_margin_left = 8.0
 		sb.content_margin_right = 8.0
 		sb.content_margin_top = 4.0
@@ -3013,9 +3174,12 @@ func _update_chips() -> void:
 		# за столом. Офлайн-ботов одиночной игры не трогаем.
 		if _online and state.is_bot_player(i):
 			lab.text += Lang.t(" · бот")
-		# Слово «ходит» рядом с подсветкой: по одному цвету рамки в сетевой
-		# партии не понять, чья очередь, а текст читается сразу.
-		if is_now and not state.finished:
+		# Слово рядом с подсветкой: по одному цвету рамки в сетевой партии
+		# не понять, чья очередь. Своему ходу — «ваш ход» (и оно же
+		# объясняет, почему чип зелёный и пульсирует).
+		if mine:
+			lab.text += Lang.t(" · ваш ход")
+		elif is_now and not state.finished:
 			lab.text += Lang.t(" · ходит")
 		# Кто последним брал из колоды: своё взятие видно галочкой на
 		# фишке, а чужое (бот или соперник) — только здесь.
@@ -3024,9 +3188,17 @@ func _update_chips() -> void:
 		if _online and not state.is_connected_player(i):
 			lab.text += Lang.t(" · нет связи")
 		lab.add_theme_font_size_override("font_size", Settings.fs(16))
-		lab.add_theme_color_override("font_color", Color(1, 1, 1, 0.95) if is_now else Color(1, 1, 1, 0.6))
+		lab.add_theme_color_override("font_color", Color(0.82, 1, 0.88) \
+			if mine else (Color(1, 1, 1, 0.95) if is_now else Color(1, 1, 1, 0.6)))
 		chip.add_child(lab)
 		chips_box.add_child(chip)
+		if mine:
+			# Пульс фона: наш ход обязан выделяться в движении, а не только
+			# цветом. Твин привязан к чипу — вместе с ним и умрёт при
+			# следующей перерисовке, утечек нет.
+			var tw := chip.create_tween().set_loops()
+			tw.tween_property(sb, "bg_color:a", 0.3, 0.7)
+			tw.tween_property(sb, "bg_color:a", 0.62, 0.7)
 
 func _update_table() -> void:
 	for child in table_box.get_children():
