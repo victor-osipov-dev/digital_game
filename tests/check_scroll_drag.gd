@@ -188,6 +188,31 @@ func _boot() -> void:
 			"тач+мышь: сдвиг один (%d → %d, ждали %d)" % [b4, scroll.scroll_vertical, b4 + 10])
 		check(hits[0] == h5, "дубль потоков не нажал чекбокс (hits=%d)" % hits[0])
 
+		# --- 9.5) бросок с импульсом: отпущенный скролл катится сам ----
+		# В отличие от секций выше, движения разнесены по кадрам — как
+		# живой жест пальцем. Скорость считается по кадрам, поэтому
+		# однокадровая синтетика секций 3/6/8/9 импульса не даёт.
+		_center_in(scroll, cb)
+		scroll.scroll_vertical = 999999
+		var maxv := scroll.scroll_vertical
+		scroll.scroll_vertical = maxi(0, maxv - 600)
+		await process_frame
+		var bf := scroll.scroll_vertical
+		var pf := cb.get_global_rect().get_center()
+		_press(pf)
+		await process_frame
+		_motion(pf + Vector2(0, -25))
+		await process_frame
+		_motion(pf + Vector2(0, -50))
+		await process_frame
+		_release(pf + Vector2(0, -50))
+		var at_release := scroll.scroll_vertical
+		check(at_release > bf, "бросок сдвинул меню (%d → %d)" % [bf, at_release])
+		await create_timer(0.6).timeout
+		check(scroll.scroll_vertical > at_release or scroll.scroll_vertical >= maxv - 1,
+			"импульс докатил дальше (%d → %d, макс %d)"
+				% [at_release, scroll.scroll_vertical, maxv])
+
 	# --- 10) растянутое окно: тап не уезжает в соседний контрол -----
 	# На телефоне окно 1080x2400 при базе 576x1024, коэффициент 1.875.
 	# Отыгрыш тапа отдаёт координату вьюпорта, и push_input обязан

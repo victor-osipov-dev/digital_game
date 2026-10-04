@@ -19,6 +19,11 @@ extends RefCounted
 ##    поле ввода получает фокус. События досылаются в координатах
 ##    вьюпорта (push_input с in_local_coords): иначе растяжение экрана
 ##    сдвинет точку и тап попадёт в соседний контрол;
+##  - отпущенный бросок катится дальше по импульсу, как нативный скролл
+##    по пустому месту: скорость считаем по сэмплам за последние кадры,
+##    дальше едем твином с затуханием. Жест в пределах одного кадра
+##    импульса не даёт (там скорость — воля случая на границе
+##    миллисекунд): тесты шлют жесты одним кадром и ждут точную позицию;
 ##  - всё остальное (карточки, ряды, drop-цели, касания без скролл-предка)
 ##    не трогаем: эти жесты решают сами game._input и нативный ScrollContainer.
 ##
@@ -37,6 +42,11 @@ extends RefCounted
 ## Сколько пикселей должна пройти рука, прежде чем жест станет прокруткой.
 const DRAG_THRESHOLD := 10.0
 
+## Минимальная скорость пальца (px/с), при которой бросок катится дальше.
+const FLICK_SPEED := 90.0
+## Сколько секунд длится докат импульса.
+const FLICK_TIME := 0.35
+
 ## До какого пиксельного зазора координаты события и глобальные считаются
 ## одной системой (погрешность float).
 const COORD_EPSILON := 0.5
@@ -53,6 +63,10 @@ var _replay_pending := false
 var _replay_ctrl: Control = null
 var _replay_from := Vector2.ZERO
 var _replaying := false
+## Сэмплы жеста [pos, msec, frame] для скорости броска.
+var _samples: Array = []
+## Живой твин импульса: новое касание его гасит.
+var _inertia: Tween = null
 
 ## Разбор события. host — сцена, держащая _input (нужна корню дерева).
 ## При true событие помечается обработанным и до GUI не доходит.
@@ -65,12 +79,16 @@ func input(host: Node, event: InputEvent) -> bool:
 		var mb := event as InputEventMouseButton
 		if mb.button_index == MOUSE_BUTTON_LEFT:
 			if mb.pressed:
+				# Новое касание гасит чужой импульс — и наш, и нативный:
+				# иначе докат боролся бы с новым жестом за скролл.
+				_kill_inertia()
 				consumed = _press(host, mb.position, false)
 			elif _pressed:
 				consumed = _finish()
 	elif event is InputEventScreenTouch:
 		var st := event as InputEventScreenTouch
 		if st.pressed:
+			_kill_inertia()
 			consumed = _press(host, st.position, true)
 		elif _pressed:
 			consumed = _finish()
@@ -121,6 +139,7 @@ func _press(host: Node, pos: Vector2, from_touch: bool) -> bool:
 	_use_global = use_global
 	_from = p
 	_prev = p
+	_samples = [[p, Time.get_ticks_msec(), Engine.get_process_frames()]]
 	return true
 
 
@@ -137,6 +156,7 @@ func _drag(host: Node, pos: Vector2) -> bool:
 		var c := host as CanvasItem
 		if c != null:
 			pos = c.get_global_mouse_position()
+	_push_sample(pos)
 	var total := pos - _from
 	if not _moved:
 		_prev = pos
@@ -182,8 +202,13 @@ func _finish() -> bool:
 	var was_moved := _moved
 	var ctrl := _ctrl
 	var from := _from
+	var scroll := _scroll
+	var vel := _flick_velocity()
 	_drop()
+	_samples.clear()
 	if was_moved:
+		# Бросок катится дальше по импульсу, как нативный скролл.
+		_launch_inertia(scroll, vel)
 		return true
 	# Тап: событие мыши кнопка уже не увидит (мы его съели), поэтому
 	# отыгрываем ей пару press+release — как после обычного касания.
@@ -192,6 +217,72 @@ func _finish() -> bool:
 	_replay_from = from
 	self.call_deferred("_replay")
 	return true
+
+
+## Сэмпл движения; старше ~120 мс забываем — скорость только свежая.
+func _push_sample(pos: Vector2) -> void:
+	_samples.append([pos, Time.get_ticks_msec(), Engine.get_process_frames()])
+	while _samples.size() > 8:
+		_samples.pop_front()
+	var now: int = Time.get_ticks_msec()
+	while _samples.size() > 2 and now - int(_samples[0][1]) > 120:
+		_samples.pop_front()
+
+
+## Скорость пальца по свежим сэмплам. Жест в пределах одного кадра
+## импульса не даёт: скорость там — воля случая на границе миллисекунд,
+## а тесты шлют жесты одним кадром и ждут точную позицию.
+func _flick_velocity() -> Vector2:
+	if _samples.size() < 2:
+		return Vector2.ZERO
+	var first: Array = _samples[0]
+	var last: Array = _samples[_samples.size() - 1]
+	if int(last[2]) - int(first[2]) < 1:
+		return Vector2.ZERO
+	var dt := float(int(last[1]) - int(first[1])) / 1000.0
+	if dt <= 0.0:
+		return Vector2.ZERO
+	return ((last[0] as Vector2) - (first[0] as Vector2)) / dt
+
+
+## Докат по импульсу вдоль быстрой оси с затуханием. Новое касание
+## (любое — наше или нативное) гасит его в input().
+func _launch_inertia(scroll: ScrollContainer, vel: Vector2) -> void:
+	_kill_inertia()
+	if scroll == null or not is_instance_valid(scroll):
+		return
+	var vertical := absf(vel.y) >= absf(vel.x)
+	if vertical and scroll.vertical_scroll_mode == ScrollContainer.SCROLL_MODE_DISABLED:
+		vertical = false
+	elif not vertical and scroll.horizontal_scroll_mode == ScrollContainer.SCROLL_MODE_DISABLED:
+		vertical = true
+	if vertical and scroll.vertical_scroll_mode == ScrollContainer.SCROLL_MODE_DISABLED:
+		return
+	if not vertical and scroll.horizontal_scroll_mode == ScrollContainer.SCROLL_MODE_DISABLED:
+		return
+	var speed := absf(vel.y) if vertical else absf(vel.x)
+	if speed < FLICK_SPEED:
+		return
+	var maxv: float
+	if vertical:
+		maxv = scroll.get_v_scroll_bar().max_value
+	else:
+		maxv = scroll.get_h_scroll_bar().max_value
+	var cur := float(scroll.scroll_vertical) if vertical else float(scroll.scroll_horizontal)
+	var shift := -(vel.y if vertical else vel.x) * FLICK_TIME
+	var target := clampf(cur + shift, 0.0, maxv)
+	if is_equal_approx(target, cur):
+		return
+	_inertia = scroll.create_tween()
+	_inertia.tween_property(scroll,
+		"scroll_vertical" if vertical else "scroll_horizontal",
+		target, FLICK_TIME).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+
+
+func _kill_inertia() -> void:
+	if _inertia != null and _inertia.is_valid():
+		_inertia.kill()
+	_inertia = null
 
 
 func _replay() -> void:

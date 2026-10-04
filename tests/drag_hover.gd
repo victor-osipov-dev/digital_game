@@ -47,6 +47,7 @@ func _on_frame() -> void:
 		5:
 			phase = 6
 			await _drop_checks()
+			await _pan_checks()
 			quit(0 if fails == 0 else 1)
 
 func _empty_checks() -> void:
@@ -202,3 +203,148 @@ func _drop_checks() -> void:
 		check(hover.call("_hover_slot_pos",
 			Vector2(r2.get_center().x, r2.end.y + 3.0)) == 2,
 			"gap below last row found after drop")
+
+
+## Стол листается пальцем с фишки, когда фишки двигать нельзя (чужой
+## ход): касание иначе умирало бы кликом в никуда. Свой ход — касание
+## по фишке принадлежит перетаскиванию, стол не едет.
+func _pan_checks() -> void:
+	var hover := inst as Control
+	var scroll := inst.get("table_scroll") as ScrollContainer
+	check(scroll != null, "table scroll exists")
+	if scroll == null:
+		return
+	Input.set_use_accumulated_input(false)
+	# Как в остальных тестах: телефонный вьюпорт, иначе окно 64x64 и
+	# координаты жестов — мусор на округлениях.
+	root.size = Vector2i(576, 1024)
+	await process_frame
+	await process_frame
+	# Рядов должно хватить на переполнение при любом окне: докидываем
+	# с фишками (одна и та же из руки — для прокрутки сойдёт).
+	var state = inst.get("state")
+	for i in range(12):
+		var row = state.add_row()
+		row.tiles.append(state.hand()[0])
+	inst.call("refresh")
+	await process_frame
+	await process_frame
+	scroll.scroll_vertical = 999999
+	var maxv := int(scroll.scroll_vertical)
+	check(maxv > 0, "table overflows, can scroll (max=%d)" % maxv)
+	if maxv <= 0:
+		return
+	# Пас-оверлей стартового экрана гасим штатно: иначе он держит все
+	# жесты и пан-видимость (_modal_open).
+	inst.call("_on_pass_ready")
+	await process_frame
+	var settings := root.get_node_or_null("Settings")
+	# Свой ход: жест с фишки — перетаскивание, стол стоит. Листаем вверх
+	# от верхней фишки: вниз от неё скроллить уже некуда (scroll = 0).
+	settings.call("set_bot", 0, false)
+	inst.call("refresh")
+	await process_frame
+	await process_frame
+	scroll.scroll_vertical = 0
+	await process_frame
+	var tile := _visible_table_tile(scroll)
+	check(tile != null, "table tile for pan test")
+	if tile == null:
+		return
+	var c := (tile as Control).get_global_rect().get_center()
+	_press(c)
+	_motion(c + Vector2(0, -40))
+	_motion(c + Vector2(0, -80))
+	_release(c + Vector2(0, -80))
+	await process_frame
+	await process_frame
+	check(int(scroll.scroll_vertical) == 0,
+		"own turn: drag from tile does not pan table (%d)" % scroll.scroll_vertical)
+	# Чужой ход: фишки инертны — тот же жест листает стол.
+	settings.call("set_bot", 0, true)
+	inst.call("refresh")
+	await process_frame
+	await process_frame
+	scroll.scroll_vertical = 0
+	await process_frame
+	tile = _visible_table_tile(scroll)
+	check(tile != null, "table tile still there on foreign turn")
+	if tile == null:
+		settings.call("set_bot", 0, false)
+		inst.call("refresh")
+		return
+	c = (tile as Control).get_global_rect().get_center()
+	_press(c)
+	_motion(c + Vector2(0, -40))
+	_motion(c + Vector2(0, -80))
+	_release(c + Vector2(0, -80))
+	await process_frame
+	await process_frame
+	check(int(scroll.scroll_vertical) > 0,
+		"foreign turn: pan from tile scrolls table (0 -> %d)" % scroll.scroll_vertical)
+	settings.call("set_bot", 0, false)
+	inst.call("refresh")
+
+
+## Первая видимая фишка стола с запасом сверху под жест: жест целиком
+## обязан пройти внутри вьюпорта, иначе точка уйдёт за край скролла.
+func _visible_table_tile(scroll: ScrollContainer) -> Control:
+	var vr: Rect2 = scroll.get_global_rect()
+	var rbs: Array = inst.get("row_blocks")
+	for block in rbs:
+		var flow = (block as Control).get("flow")
+		if flow == null:
+			continue
+		for view in flow.get("tile_views"):
+			var v := view as Control
+			if v == null:
+				continue
+			var vc := v.get_global_rect().get_center()
+			if vr.has_point(vc) and vc.y - vr.position.y >= 90.0:
+				return v
+	return null
+
+
+## Жесты — в координатах вьюпорта, а parse_input_event ждёт оконные.
+func _to_window(pos: Vector2) -> Vector2:
+	var base := root.content_scale_size
+	var win := Vector2(root.size)
+	if base.x <= 0 or base.y <= 0:
+		return pos
+	var k := minf(win.x / base.x, win.y / base.y)
+	return pos * k
+
+
+func _press(pos: Vector2) -> void:
+	# Курсор двигаем явно: game._input читает get_global_mouse_position(),
+	# а синтетика parse_input_event его за собой не тянет.
+	Input.warp_mouse(pos)
+	var w := _to_window(pos)
+	var ev := InputEventMouseButton.new()
+	ev.button_index = MOUSE_BUTTON_LEFT
+	ev.pressed = true
+	ev.position = w
+	ev.global_position = w
+	ev.button_mask = MOUSE_BUTTON_MASK_LEFT
+	Input.parse_input_event(ev)
+
+
+func _motion(pos: Vector2) -> void:
+	Input.warp_mouse(pos)
+	var w := _to_window(pos)
+	var ev := InputEventMouseMotion.new()
+	ev.position = w
+	ev.global_position = w
+	ev.button_mask = MOUSE_BUTTON_MASK_LEFT
+	Input.parse_input_event(ev)
+
+
+func _release(pos: Vector2) -> void:
+	Input.warp_mouse(pos)
+	var w := _to_window(pos)
+	var ev := InputEventMouseButton.new()
+	ev.button_index = MOUSE_BUTTON_LEFT
+	ev.pressed = false
+	ev.position = w
+	ev.global_position = w
+	Input.parse_input_event(ev)

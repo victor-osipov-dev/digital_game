@@ -3337,8 +3337,12 @@ func _input(event: InputEvent) -> void:
 			# Касание по карточке принадлежит перетаскиванию: пан не должен
 			# отнимать жест, даже если при быстром рывке палец сразу ушёл
 			# в щель между рядами (drag-данные создаются чуть позже — этим
-			# же событием движения, в GUI).
-			_pan_press_on_tile = _point_on_tile(_pan_pos)
+			# же событием движения, в GUI). Но когда фишки двигать нельзя
+			# (чужой ход), касание по карточке стола — тоже листание: жест
+			# иначе умирал бы кликом в никуда. Карточки руки жест держат
+			# всегда — иначе волочение по руке листало бы стол под ней.
+			_pan_press_on_tile = _point_on_hand_tile(_pan_pos) \
+				or (_point_on_table_tile(_pan_pos) and _can_act())
 		else:
 			_pan_scroll(get_global_mouse_position() - _pan_pos)
 			_pan_pressed = false
@@ -3368,8 +3372,9 @@ func _pan_scroll(delta: Vector2) -> void:
 		table_scroll.scroll_vertical - delta.y, 0.0, bar.max_value)
 	get_viewport().set_input_as_handled()
 
-## Листать можно в любом месте стола, кроме самих карточек: с карточки
-## жест принадлежит перетаскиванию.
+## Листать можно в любом месте стола, кроме двигаемых карточек: с карточки
+## жест принадлежит перетаскиванию. Карточки чужого хода инертны — палец
+## на них листает стол, как с фона.
 func _can_pan_table(p: Vector2) -> bool:
 	if _drag_view != null:
 		return false
@@ -3379,19 +3384,20 @@ func _can_pan_table(p: Vector2) -> bool:
 		return false
 	if not table_scroll.get_global_rect().has_point(p):
 		return false
-	for block in row_blocks:
-		var row := block as RowBlock
-		if row == null or row.flow == null or not row.is_visible_in_tree():
-			continue
-		for view in row.flow.tile_views:
-			var tile_view := view as TileView
-			if tile_view != null and tile_view.get_global_rect().has_point(p):
-				return false
+	if _can_act():
+		for block in row_blocks:
+			var row := block as RowBlock
+			if row == null or row.flow == null or not row.is_visible_in_tree():
+				continue
+			for view in row.flow.tile_views:
+				var tile_view := view as TileView
+				if tile_view != null and tile_view.get_global_rect().has_point(p):
+					return false
 	return true
 
-## Точка над карточкой (ряд или рука): с такого касания жест принадлежит
-## перетаскиванию, а не листанию стола.
-func _point_on_tile(p: Vector2) -> bool:
+## Точка над карточкой ряда. Жест с неё принадлежит перетаскиванию,
+## только пока фишки можно двигать (см. _can_act в вызывающих).
+func _point_on_table_tile(p: Vector2) -> bool:
 	for block in row_blocks:
 		var row := block as RowBlock
 		if row == null or row.flow == null or not row.is_visible_in_tree():
@@ -3400,11 +3406,18 @@ func _point_on_tile(p: Vector2) -> bool:
 			var t := view as TileView
 			if t != null and t.get_global_rect().has_point(p):
 				return true
-	if hand_flow != null:
-		for view in hand_flow.tile_views:
-			var t := view as TileView
-			if t != null and t.get_global_rect().has_point(p):
-				return true
+	return false
+
+
+## Точка над карточкой руки. Жест принадлежит руке всегда: даже когда
+## фишки инертны, иначе волочение по руке листало бы стол под ней.
+func _point_on_hand_tile(p: Vector2) -> bool:
+	if hand_flow == null:
+		return false
+	for view in hand_flow.tile_views:
+		var t := view as TileView
+		if t != null and t.get_global_rect().has_point(p):
+			return true
 	return false
 
 ## Модальные экраны лежат поверх стола: жест по ним партию листать не должен.
