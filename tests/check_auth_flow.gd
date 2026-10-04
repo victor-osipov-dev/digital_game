@@ -127,6 +127,9 @@ func _checks() -> void:
 	_check_password_remembered()
 	_check_auth_error_matrix()
 	_check_ya_poll_dispatch()
+	_check_web_fast_path()
+	_check_ya_benefit_modal()
+	_check_tab_padding()
 
 
 ## Матрица ошибок входа/регистрации: каждая причина — и клиентская
@@ -214,6 +217,95 @@ func _check_auth_error_matrix() -> void:
 	check(_auth_note_text() == "Wrong login or password" and _auth_note_visible(),
 		"серверная причина переведена, got: %s" % _auth_note_text())
 	Lang.set_lang("ru")
+
+
+## Web-вход без промежуточной страницы (требования Яндекс Игр 1–7):
+## маршрут, тихий профиль раньше диалога, модалка с выбором, гость.
+func _check_web_fast_path() -> void:
+	var src := _lobby_source()
+	if src.is_empty():
+		return
+	var enter_auth := _func_body(src, "func _enter_auth")
+	check(enter_auth.contains('OS.has_feature("web")')
+		and enter_auth.contains("_enter_web_fast"),
+		"на Web страница входа заменена быстрым путём")
+	var fast := _func_body(src, "func _enter_web_fast")
+	check(not fast.contains("open_auth_dialog"),
+		"быстрый путь сам диалог не открывает (только _do_ya_login по выбору)")
+	check(fast.contains("authorized") and fast.contains("_do_ya_login()"),
+		"тихий профиль без диалога ведёт к молчаливому входу")
+	check(fast.contains("_show_ya_benefit()"),
+		"без готового профиля — модалка с пользой")
+	var build := _func_body(src, "func _build_ya_benefit")
+	check(build.contains("Войти через Яндекс") and build.contains("Без входа"),
+		"в модалке обе кнопки: вход и гость")
+	var no := _func_body(src, "func _on_ya_benefit_no")
+	check(no.contains("close()"), "отказ закрывает лобби в меню, ничего не стирая")
+	var yes := _func_body(src, "func _on_ya_benefit_yes")
+	check(yes.contains("_do_ya_login()"), "согласие идёт штатным входом")
+
+
+## Модалка живьём: видна, кнопки на месте, гость закрывает лобби.
+func _check_ya_benefit_modal() -> void:
+	var lobby := inst
+	lobby.call("_show_ya_benefit")
+	var modal = inst.get("_ya_modal")
+	check(modal != null and (modal as Control).visible, "модалка пользы показывается")
+	check(_find_modal_button(modal, "Войти через Яндекс") != null,
+		"кнопка входа на месте")
+	check(_find_modal_button(modal, "Без входа") != null,
+		"кнопка гостя на месте")
+	lobby.call("_on_ya_benefit_yes")
+	check(not (modal as Control).visible, "согласие прячет модалку")
+	check(bool(inst.get("_ya_busy")), "согласие запускает вход")
+	lobby.call("_show_ya_benefit")
+	lobby.call("_on_ya_benefit_no")
+	check(not (modal as Control).visible, "отказ прячет модалку")
+	check(not inst.visible, "отказ возвращает в главное меню")
+
+
+## Вкладки комнат с широкими боковыми полями (палец попадает).
+func _check_tab_padding() -> void:
+	for name in ["_tab_create_btn", "_tab_code_btn"]:
+		var b = inst.get(name) as Button
+		if b == null:
+			check(false, "вкладка %s существует" % name)
+			continue
+		var sb := b.get_theme_stylebox("normal")
+		var left := sb.content_margin_left if sb != null else -1.0
+		check(left >= 28.0, "у %s боковые поля %.0f, надо 28" % [name, left])
+
+
+func _find_modal_button(node: Node, text: String) -> Button:
+	if node is Button and String((node as Button).text) == text:
+		return node as Button
+	for child in node.get_children():
+		var found := _find_modal_button(child, text)
+		if found != null:
+			return found
+	return null
+
+
+func _lobby_source() -> String:
+	var f := FileAccess.open("res://scripts/ui/online_lobby.gd", FileAccess.READ)
+	if f == null:
+		check(false, "online_lobby.gd читается")
+		return ""
+	var src := f.get_as_text()
+	f.close()
+	return src
+
+
+func _func_body(src: String, sig: String) -> String:
+	var start := src.find(sig)
+	if start < 0:
+		check(false, "есть " + sig)
+		return ""
+	var rest := src.substr(start + sig.length())
+	var next := rest.find("\nfunc ")
+	if next < 0:
+		return rest
+	return rest.left(next)
 
 
 ## Диспетчер опроса SDK в лобби: kind "sdk" обязан уходить в

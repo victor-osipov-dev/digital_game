@@ -58,6 +58,9 @@ var _auth_form: Array = []
 var _auth_ya_box: VBoxContainer = null
 var _ya_btn: Button = null
 var _ya_busy := false
+## Модалка пользы перед входом через Яндекс (только Web): объясняет,
+## зачем входить, и даёт честный выход гостем. Строится лениво.
+var _ya_modal: ColorRect = null
 
 var _server_label: Label = null
 var _server_box: VBoxContainer = null
@@ -292,6 +295,11 @@ func _enter() -> void:
 
 
 func _enter_auth() -> void:
+	# На Web промежуточной страницы входа нет: сразу быстрый путь —
+	# тихая проверка готового профиля, иначе модалка с пользой.
+	if OS.has_feature("web"):
+		_enter_web_fast()
+		return
 	_set_page(_page_auth)
 	_update_status()
 	_update_buttons()
@@ -482,10 +490,142 @@ func _ya_profile() -> Dictionary:
 func _ya_log(msg: String) -> void:
 	var sdk = _ysdk_script()
 	if sdk == null:
-		print("[ya-lobby] " + msg + " (sdk script missing!)")
+		print("[ya-lobby] " + msg)
 		return
 	if bool((sdk as GDScript).DEBUG_LOG):
 		print("[ya-lobby] " + msg)
+
+
+## Web-вход без промежуточной страницы (требования Яндекс Игр):
+## 1. Играть без регистрации можно: отказ («Без входа», мимо модалки)
+##    закрывает лобби назад в меню; офлайн и локальное ничто не трогаем.
+## 2. Только Yandex ID: парольная форма на Web скрыта (_sync_auth_mode),
+##    диалог — только openAuthDialog из SDK, своего ничего нет.
+## 3. Старт — лишь по явному нажатию «По сети» (открытие лобби);
+##    при запуске и в фоне авторизации нет (в _ready только ensure_sdk).
+## 4. Перед диалогом — модалка с пользой и честным выбором.
+## 5-6. Гость играет офлайн, прогресс на устройстве не пропадает:
+##    отказ ничего не стирает, просто закрывает лобби.
+## 7. Залогинен (сессия) или уже авторизован в Яндексе — входим молча:
+##    сначала тихий профиль БЕЗ диалога, модалку не показываем.
+func _enter_web_fast() -> void:
+	_set_page(_page_auth)
+	_update_status()
+	_update_buttons()
+	_set_auth_note("")
+	_ysdk_call("ensure_sdk")
+	if not await _sdk_ready_short():
+		_ya_log("sdk not ready, showing benefit")
+		_show_ya_benefit()
+		return
+	_ysdk_call("request_player")
+	if not await _ysdk_wait("player", 20):
+		_ya_log("silent profile timeout, showing benefit")
+		_show_ya_benefit()
+		return
+	var data = _ysdk_poll("player").get("data", null)
+	if data is Dictionary and not String(data.get("uid", "")).is_empty() \
+			and bool(data.get("authorized", false)):
+		_ya_log("already authorized in Yandex, silent login")
+		_do_ya_login()
+		return
+	_show_ya_benefit()
+
+
+## Короткое ожидание готовности SDK (до ~5 с). Дольше висеть нельзя:
+## при провале показываем модалку с выбором, а не крутим вечно.
+func _sdk_ready_short() -> bool:
+	for i in range(10):
+		var rs := _ysdk_poll("sdk")
+		if bool(rs.get("ready", false)) or not String(rs.get("error", "")).is_empty():
+			return bool(rs.get("ready", false))
+		await get_tree().create_timer(0.5).timeout
+		if not is_instance_valid(self) or not visible:
+			return false
+	return bool(_ysdk_poll("sdk").get("ready", false))
+
+
+## Модалка пользы: зачем входить + честный выход гостем. Строится один
+## раз, дальше только показывается. Своя, лоббийная: модалка game.gd
+## живёт в сцене игры и из меню недоступна (тот же тёмный стиль).
+func _build_ya_benefit() -> void:
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.6)
+	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	dim.visible = false
+	dim.gui_input.connect(_on_ya_benefit_backdrop)
+	add_child(dim)
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	dim.add_child(center)
+	var panel := PanelContainer.new()
+	var psb := StyleBoxFlat.new()
+	psb.bg_color = Color(0.13, 0.13, 0.16, 0.98)
+	psb.set_corner_radius_all(10)
+	psb.content_margin_left = 20.0
+	psb.content_margin_right = 20.0
+	psb.content_margin_top = 16.0
+	psb.content_margin_bottom = 16.0
+	panel.add_theme_stylebox_override("panel", psb)
+	center.add_child(panel)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 12)
+	panel.add_child(box)
+	var title := Label.new()
+	title.text = Lang.t("Игра по сети")
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", Settings.fs(20))
+	title.add_theme_color_override("font_color", Color("FFD54F"))
+	box.add_child(title)
+	var body := Label.new()
+	body.text = Lang.t("Войдите через Яндекс, чтобы играть по сети") + "\n" \
+		+ Lang.t("Без входа доступен только офлайн-режим")
+	body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	body.add_theme_font_size_override("font_size", Settings.fs(15))
+	body.add_theme_color_override("font_color", Color(1, 1, 1, 0.9))
+	box.add_child(body)
+	# Кнопки столбиком, а не в ряд: на узком экране и крупной шкале
+	# ряд «Войти через Яндекс + Без входа» не влезал бы по ширине.
+	var yes := _button(Lang.t("Войти через Яндекс"), 16)
+	yes.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_apply_accent(yes, Color("1565C0"), Color("1976D2"), Color("0D47A1"))
+	yes.pressed.connect(_on_ya_benefit_yes)
+	box.add_child(yes)
+	var no := _button(Lang.t("Без входа"), 16)
+	no.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	no.pressed.connect(_on_ya_benefit_no)
+	box.add_child(no)
+	_ya_modal = dim
+
+
+func _show_ya_benefit() -> void:
+	if _ya_modal == null:
+		_build_ya_benefit()
+	(_ya_modal as ColorRect).visible = true
+
+
+## «Войти»: модалку прячем сразу (двойное нажатие невозможно) и идём
+## обычным путём — там при нужде откроется диалог SDK.
+func _on_ya_benefit_yes() -> void:
+	if _ya_modal != null:
+		(_ya_modal as ColorRect).visible = false
+	_do_ya_login()
+
+
+## «Без входа» и мимо модалки — отказ от авторизации: закрываем лобби
+## назад в меню. Гость играет офлайн, ничего не стираем (пп. 1, 5, 6).
+func _on_ya_benefit_no() -> void:
+	if _ya_modal != null:
+		(_ya_modal as ColorRect).visible = false
+	close()
+
+
+func _on_ya_benefit_backdrop(event: InputEvent) -> void:
+	if event is InputEventMouseButton and (event as InputEventMouseButton).pressed:
+		_on_ya_benefit_no()
+		(_ya_modal as ColorRect).accept_event()
 
 
 ## Мост SDK Яндекс Игр (только Web). Один load на файл — см. константу
@@ -1425,6 +1565,27 @@ func _field(placeholder: String, secret := false) -> LineEdit:
 	return edit
 
 
+## Боковые поля вкладок «Создать комнату» / «Войти по коду»: шире
+## дефолта, чтобы по широкой кнопке было удобно попадать пальцем.
+## Цвета и форму не трогаем — дублируем эффективные стильбоксы темы
+## (все состояния, включая нажатое у тоггла) и правим только поля.
+## Вызывать после сборки в дереве: стильбоксы берутся из темы.
+const TAB_SIDE_PAD := 28.0
+
+
+func _pad_tabs() -> void:
+	for b in [_tab_create_btn, _tab_code_btn]:
+		if b == null:
+			continue
+		for state in ["normal", "hover", "pressed", "disabled", "focus"]:
+			var src := (b as Button).get_theme_stylebox(state)
+			if src is StyleBoxFlat:
+				var sb := (src as StyleBoxFlat).duplicate() as StyleBoxFlat
+				sb.content_margin_left = maxf(sb.content_margin_left, TAB_SIDE_PAD)
+				sb.content_margin_right = maxf(sb.content_margin_right, TAB_SIDE_PAD)
+				(b as Button).add_theme_stylebox_override(state, sb)
+
+
 func _button(text: String, size: int = 15) -> Button:
 	var b := Button.new()
 	b.text = text
@@ -1603,6 +1764,8 @@ func _build() -> void:
 	_set_page(_page_auth)
 	_refresh_stuck()
 	_update_buttons()
+	_pad_tabs()
+	_build_ya_benefit()
 	# Страницы лобби, строки серверов и комнат — контейнеры, а не кнопки:
 	# без этого палец упирается в них и лобби не листается.
 	ScrollFix.relax(root)
