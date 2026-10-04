@@ -205,10 +205,15 @@ class Accounts {
    * доверия парольного аккаунта: для казуальной игры хватает, секретов
    * в таких аккаунтах не держим. Подпись Yandex не проверяем (нужен ключ
    * покупок, которого нет) — фиксируем это ограничение явно.
+   * Формат UID: цифры 1–20 (настоящий Yandex ID) плюс канонический UUID
+   * 8-4-4-4-12 — так генерирует uniqueID стаб sdk-dev-proxy в dev-mode.
+   * Модель угроз от этого не меняется: подпись всё равно не проверяется,
+   * а пространство UUID не перебирается и живёт в отдельном ya:-неймспейсе.
    */
   loginYa(uidRaw, nickRaw) {
     const uid = String(uidRaw || '').trim();
-    if (!/^[0-9]{1,20}$/.test(uid)) return { ok: false, reason: 'Некорректный Yandex ID' };
+    const YA_UID_RE = /^(?:[0-9]{1,20}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$/;
+    if (!YA_UID_RE.test(uid)) return { ok: false, reason: 'Некорректный Yandex ID' };
     const login = `ya:${uid}`;
     const loginCi = login.toLowerCase();
     let acc = this.db.getAccount(loginCi);

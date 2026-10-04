@@ -523,8 +523,16 @@ test('плохой ник заменяется безопасным', () => {
   assert.strictEqual(db.getAccount('ya:987').nick, 'Игрок-987');
 });
 
+test('UUID стаба dev-proxy принимается как Yandex ID', () => {
+  const uid = '0f2737f2-dd9b-4611-843e-97406d4fd8c1';
+  const r = accounts.loginYa(uid, 'Guest');
+  assert.strictEqual(r.ok, true, r.reason);
+  assert.ok(db.getAccount('ya:' + uid), 'аккаунт ya:uuid существует');
+});
+
 test('не числовой Yandex ID отклоняется', () => {
-  for (const bad of ['', 'abc', 'ya:123', '12 34', '123456789012345678901']) {
+  for (const bad of ['', 'abc', 'ya:123', '12 34', '123456789012345678901',
+    '0f2737f2-dd9b-4611-843e-97406d4fd8c', 'zzzzzzzz-0000-0000-0000-000000000000']) {
     assert.strictEqual(accounts.loginYa(bad, 'X').ok, false, bad);
   }
 });
