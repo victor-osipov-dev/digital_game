@@ -57,6 +57,7 @@ func _boot() -> void:
 	await test_bot_draw_marked()
 	await test_bot_draw_flies_single()
 	await test_no_stagger_when_bot_anim_off()
+	await test_timeout_draw_marked()
 
 	if fails == 0:
 		print("\nВЗЯТИЕ: все %d проверок прошли" % total)
@@ -265,6 +266,33 @@ func test_no_stagger_when_bot_anim_off() -> void:
 			break
 	ok("все три сели быстро", placed == 3, "видно %d из 3" % placed)
 	settings.bot_anim = saved_anim
+	game._online = false
+
+
+## Автовзятие по дедлайну: сервер берёт за нас сам — без нашего запроса
+## diff в _mark_drawn_diff не вызывается, и номер фишки терялся: чип
+## «· взял» был, а галочки на фишке не было. Состояние чинит это само.
+func test_timeout_draw_marked() -> void:
+	section("автовзятие помечается галочкой")
+	game._clear_draft()
+	game._new_match()
+	game._online = true
+	var s0: Dictionary = view.duplicate(true)
+	s0["current"] = 0
+	game._on_state_received(s0, 0.0, false, false)
+	for i in range(20):
+		await process_frame
+	# Дедлайн вышел за нас: рука +1 при том же столе, ход уже ушёл дальше.
+	var s1: Dictionary = s0.duplicate(true)
+	(s1["hand"] as Array).append(_na)
+	(s1["players"] as Array)[0]["handCount"] = int((s1["players"] as Array)[0]["handCount"]) + 1
+	s1["lastTurn"] = []
+	s1["current"] = 1
+	game._on_state_received(s1, 0.0, false, false)
+	ok("место взятия — мы", game.get("_drew_seat") == 0)
+	ok("чип показывает взятие", _chip_has("взял"))
+	var tm: Dictionary = game.call("get_tile_marks", _na)
+	ok("автовзятая помечена", bool(tm.get("drawn", false)))
 	game._online = false
 
 

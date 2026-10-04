@@ -1645,6 +1645,7 @@ func _apply_state(view: Dictionary, grace: float, paused: bool, waiting: bool = 
 			var mover := (clampi(int(view.get("current", 0)), 0, seats - 1) - 1 + seats) % seats
 			if _seat_drew(prev, view, mover):
 				_drew_seat = mover
+				_mark_drawn_state(prev, mover)
 	# Рассылка посреди нашего хода (обрыв/возврат соперника, реджойн)
 	# пришла с тем же серверным столом — локальную раскладку возвращаем,
 	# иначе автор теряет фишки и перестаёт повторять черновик.
@@ -2104,6 +2105,27 @@ func _mark_drawn_diff(before: Array) -> void:
 		_draw_marks[state.local_seat] = fresh[0]
 		_drew_seat = state.local_seat
 		refresh()
+
+
+## Номер взятой по пришедшему состоянию: рука нашего места выросла ровно
+## на одну — так помечаем и автовзятие по дедлайну (без нашего запроса
+## diff в _mark_drawn_diff не вызывается и номер терялся: чип «· взял»
+## был, а галочки на фишке не было). Чужие руки сервер не присылает
+## (только число) — там остаётся пометка места. Успех — ровно один новый
+## id, иначе молча без метки, как в _mark_drawn_diff.
+func _mark_drawn_state(prev: GameState, mover: int) -> void:
+	if state == null or state.local_seat < 0 or mover != state.local_seat:
+		return
+	var old := {}
+	for t in prev.hand():
+		old[(t as Tile).id] = true
+	var fresh := []
+	for t in state.hand():
+		var tid := (t as Tile).id
+		if not old.has(tid) and not fresh.has(tid):
+			fresh.append(tid)
+	if fresh.size() == 1:
+		_draw_marks[state.local_seat] = fresh[0]
 
 func _on_main_pressed() -> void:
 	if not _can_act():
