@@ -648,6 +648,8 @@ class Hub {
     const room = r.room;
     // Ход закрыт своим действием — черновик автора больше не черновик.
     if (room && room._draftRows) room._draftRows.delete(r.seat);
+    // Ходил человек — цепочки ботов нет: следующий бот идёт сразу.
+    if (room) room._prevTurnByBot = false;
     // Дедлайн нового хода — до рассылки: клиенты должны получить состояние
     // с уже запущенным отсчётом, а не с погашенным таймером.
     this.maybeRunBots(room);
@@ -669,6 +671,9 @@ class Hub {
   onRoomPlay(room) {
     // Новая партия — старые черновики (места те же) недействительны.
     room._draftRows = new Map();
+    // Стартуем не из цепочки: первый бот (если ход сразу за ним) идёт
+    // без паузы «бот за ботом».
+    room._prevTurnByBot = false;
     // Старт: сначала отсчёт (и планирование ботов), потом рассылка —
     // первый кадр партии у всех клиентов уже с живым таймером.
     this.maybeRunBots(room);
@@ -678,6 +683,9 @@ class Hub {
   /**
    * Если ход за ботом — запланировать его ход. Дубли в очереди гасим
    * флагом room._botTimer; паузу (ждём переподключение человека) пропускаем.
+   * Бот за ботом ждёт паузу цепочки (botAfterBotDelayMs): клиент показывает
+   * каждый ход несколько секунд, и без неё к своему ходу игрок получал бы
+   * уже подтаявший отсчёт. После человека — обычная короткая задержка.
    */
   maybeRunBots(room) {
     if (!room) return;
@@ -696,7 +704,8 @@ class Hub {
     if (room._botTimer) return;
     const cur = room.game.currentPlayer();
     if (!cur || !cur.isBot) return;
-    const delay = config.botTurnDelayMs
+    const delay = room._prevTurnByBot === true ? config.botAfterBotDelayMs
+      : config.botTurnDelayMs
       + Math.floor(Math.random() * (config.botTurnJitterMs + 1));
     room._botTimer = setTimeout(() => {
       room._botTimer = null;
@@ -773,6 +782,8 @@ class Hub {
     // чем молча брать из колоды поверх готовой выкладки. Невалидный
     // черновик (или его отсутствие) — обычный автовзят.
     if (this._acceptDraftTurn(room, seat)) {
+      // Автовзятие за человека — цепочки ботов не было, следующий идёт сразу.
+      room._prevTurnByBot = false;
       this.maybeRunBots(room);
       this.broadcastRoom(room, null);
       return;
@@ -810,6 +821,8 @@ class Hub {
       });
     }
     log.info(`комната ${room.code}: время хода игрока ${seat} вышло — авто-взятие из колоды`);
+    // Как обычный ход человека: следующий бот идёт без цепочной паузы.
+    room._prevTurnByBot = false;
     this.maybeRunBots(room);
     this.broadcastRoom(room, null);
   }
@@ -920,6 +933,8 @@ class Hub {
   }
 
   afterBotMove(room) {
+    // Ходил бот: если дальше снова бот — ему ждать паузу цепочки.
+    room._prevTurnByBot = true;
     this.maybeRunBots(room);
     this.broadcastRoom(room, null);
   }

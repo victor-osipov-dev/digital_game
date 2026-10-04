@@ -1834,6 +1834,52 @@ test('боты не ходят, пока живых людей меньше дв
   hub.stop();
 });
 
+test('боты ждут друг друга 3 секунды, а после человека идут сразу', () => {
+  accounts.register('cb1', 'secret123', 'Цепочка1');
+  accounts.register('cb2', 'secret123', 'Цепочка2');
+  const hub = newHub();
+  const room = playingRoom('cb1', 'cb2', 4);
+  const botSeat = room.game.players.findIndex((p) => p.isBot);
+  assert.ok(botSeat >= 0, 'нужно ботье место');
+  const humanSeat = room.game.players.findIndex((p) => !p.isBot);
+  assert.ok(humanSeat >= 0, 'нужно место человека');
+  // Перехватываем setTimeout: проверяем задержку, не дожидаясь её.
+  const realSetTimeout = global.setTimeout;
+  let delays = [];
+  global.setTimeout = (fn, ms, ...rest) => {
+    delays.push(ms);
+    return realSetTimeout(fn, ms, ...rest);
+  };
+  const clearBotTimer = () => {
+    if (room._botTimer) { clearTimeout(room._botTimer); room._botTimer = null; }
+  };
+  try {
+    // Ход человека закрыт своим действием — следующий бот идёт сразу.
+    room.game.current = botSeat;
+    room._prevTurnByBot = true; // будто до этого ходил бот
+    hub.afterMove({ room, seat: humanSeat }, null);
+    assert.strictEqual(room._prevTurnByBot, false, 'после человека флаг цепочки сброшен');
+    assert.ok(room._botTimer, 'ход бота запланирован');
+    assert.ok(delays.some((d) => d >= config.botTurnDelayMs
+      && d <= config.botTurnDelayMs + config.botTurnJitterMs),
+    `первый бот идёт сразу, задержки: ${delays}`);
+    assert.ok(!delays.includes(config.botAfterBotDelayMs), 'паузы 3 с тут нет');
+    clearBotTimer();
+    // Ход бота закрыт — следующий бот ждёт полную паузу.
+    delays = [];
+    room.game.current = botSeat;
+    hub.afterBotMove(room);
+    assert.strictEqual(room._prevTurnByBot, true, 'после бота флаг цепочки стоит');
+    assert.ok(room._botTimer, 'ход бота запланирован');
+    assert.ok(delays.includes(config.botAfterBotDelayMs),
+      `бот за ботом ждёт ${config.botAfterBotDelayMs} мс, задержки: ${delays}`);
+    clearBotTimer();
+  } finally {
+    global.setTimeout = realSetTimeout;
+  }
+  hub.stop();
+});
+
 test('время хода вышло: сервер берёт фишку из колоды сам', () => {
   const hub = newHub();
   const room = playingRoom('tm9', 'tm10');

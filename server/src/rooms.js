@@ -53,6 +53,9 @@ class Room {
     // сменился без завершения хода, чужой дедлайн пересоздаётся.
     this.turnDeadlineFor = null;
     this._turnTimer = null;
+    // Кем закрыт прошлый ход: цепочка «бот за ботом» ждёт паузу
+    // (см. hub.maybeRunBots), после человека бот идёт сразу.
+    this._prevTurnByBot = false;
   }
 
   seatOfUser(userId) {
