@@ -196,7 +196,7 @@ class Hub {
 
     // Аутентифицированные команды
     const needsAuth = ![
-      C2S.REGISTER, C2S.LOGIN, C2S.RESUME, C2S.LOBBY_OPEN,
+      C2S.REGISTER, C2S.LOGIN, C2S.RESUME, C2S.LOBBY_OPEN, C2S.YA_LOGIN,
       C2S.SERVERS_LIST, C2S.PING,
     ].includes(msg.t);
     if (needsAuth && !ctx.user) {

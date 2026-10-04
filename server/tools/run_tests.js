@@ -1872,6 +1872,27 @@ test('боты не ходят, пока живых людей меньше дв
   hub.stop();
 });
 
+test('auth.ya доступен без входа (иначе им нельзя воспользоваться)', () => {
+  const hub = newHub();
+  const msgs = [];
+  const ctx = {
+    socket: { readyState: 1, send: (p) => msgs.push(JSON.parse(p)) },
+    ip: '127.0.0.1',
+    authFails: 0,
+    authWindowStart: Date.now(),
+  };
+  hub.route(ctx, { t: C2S.YA_LOGIN, uid: 'abc', nick: 'X' }, 7);
+  const bad = msgs[msgs.length - 1];
+  assert.strictEqual(bad.t, S2C.AUTH_ERR);
+  assert.strictEqual(bad.reason, 'Некорректный Yandex ID');
+  hub.route(ctx, { t: C2S.YA_LOGIN, uid: '555001', nick: 'Яндекс' }, 8);
+  const good = msgs[msgs.length - 1];
+  assert.strictEqual(good.t, S2C.AUTH_OK, JSON.stringify(good));
+  assert.ok(good.token && good.token.includes('.'));
+  assert.strictEqual(ctx.user && ctx.user.login, 'ya:555001');
+  hub.stop();
+});
+
 test('боты ждут друг друга 3 секунды, а после человека идут сразу', () => {
   accounts.register('cb1', 'secret123', 'Цепочка1');
   accounts.register('cb2', 'secret123', 'Цепочка2');
