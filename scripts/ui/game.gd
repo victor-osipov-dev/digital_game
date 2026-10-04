@@ -312,8 +312,12 @@ func _build_ui() -> void:
 
 	deck_button = Button.new()
 	deck_button.clip_text = true
-	deck_button.custom_minimum_size = Vector2(Settings.touch_w(92), Settings.touch(52))
-	deck_button.add_theme_font_size_override("font_size", Settings.fs(16))
+	# Размер и текст с потолком «Среднего»: на «Большом» колода остаётся
+	# как на среднем, а не доминирует над строкой.
+	deck_button.custom_minimum_size = Vector2(
+		mini(float(Settings.touch_capped(92, 1)), get_viewport_rect().size.x * 0.44),
+		Settings.touch_capped(52, 1))
+	deck_button.add_theme_font_size_override("font_size", Settings.fs_capped(16, 1))
 	deck_button.pressed.connect(_on_deck_pressed)
 	var deck_sb := StyleBoxFlat.new()
 	deck_sb.bg_color = Color("2F3B4C")
@@ -386,7 +390,6 @@ func _build_ui() -> void:
 	# фолбэка там же нет. Та же техника, что у рисованных иконок чекбоксов
 	# в ui_theme (PNG ради иконки не везём).
 	_burger_btn.text = ""
-	_burger_btn.icon = _burger_icon(36)
 	_burger_btn.expand_icon = false
 	# Иконка строго по центру: выравнивания задаём явно, а clip_text
 	# убираем — именно он при пустом тексте прижимал иконку к левому краю.
@@ -399,6 +402,9 @@ func _build_ui() -> void:
 	_burger_btn.pressed.connect(_toggle_burger_menu)
 	_burger_btn.visible = false
 	top.add_child(_burger_btn)
+	# Размер значка — по факту: иконка + поля стиля обязаны влезать в
+	# высоту кнопки, иначе бургер выше соседей (ловили вживую).
+	_burger_btn.icon = _fit_burger_icon()
 
 	# Ловец кликов мимо меню: закрывает бургер и съедает нажатие,
 	# чтобы оно не проваливалось в стол. Лежит под панелью, над всем
@@ -861,6 +867,16 @@ static func _fit_icon(tex: Texture2D, h: int) -> ImageTexture:
 	var w := maxi(1, int(round(float(h) * float(img.get_width()) / float(maxi(1, img.get_height())))))
 	img.resize(w, h, Image.INTERPOLATE_LANCZOS)
 	return ImageTexture.create_from_image(img)
+
+
+## Размер значка-бургера под высоту кнопки: иконка + поля стиля минус
+## небольшой зазор. Не меньше 20 px, чтобы полосы не сливались.
+func _fit_burger_icon() -> ImageTexture:
+	var vpad := 12.0
+	var sb := _burger_btn.get_theme_stylebox("normal")
+	if sb != null:
+		vpad = sb.content_margin_top + sb.content_margin_bottom
+	return _burger_icon(maxi(20, int(Settings.touch(46) - vpad - 4.0)))
 
 
 ## Значок-бургер s×s: три белые полосы со скруглёнными концами на

@@ -50,6 +50,13 @@ func fs_capped(base: int, cap_scale: int) -> int:
 	var idx := clampi(mini(text_scale, cap_scale), 0, TEXT_SCALES.size() - 1)
 	return maxi(FS_MIN, int(round(base * TEXT_SCALES[idx])))
 
+
+## Тот же потолок для размеров контролов: кнопка колоды на «Большом»
+## остаётся как на «Среднем» (иначе она доминирует над строкой).
+func touch_capped(base: int, cap_scale: int) -> int:
+	var idx := clampi(mini(text_scale, cap_scale), 0, TEXT_SCALES.size() - 1)
+	return maxi(1, int(round(base * TEXT_SCALES[idx])))
+
 ## Размер интерактивного контроля (кнопки, поля ввода, переключатели).
 ## Растёт вместе с выбранным размером текста, чтобы пальцем было легко:
 ## большой шрифт бессмыслен, если кнопки по нему остались крошечными.

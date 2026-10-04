@@ -114,6 +114,7 @@ func _after_title_checks() -> void:
 	_flow_center_checks()
 	await _burger_checks()
 	_hint_icon_checks()
+	await _deck_cap_checks()
 	await _topbar_width_checks()
 	await _topbar_capped_checks()
 	_button_radius_audit(inst)
@@ -202,6 +203,14 @@ func _burger_checks() -> void:
 		var mid := bimg.get_pixel(bimg.get_width() / 2, bimg.get_height() / 2)
 		check(mid.a > 0.5, "burger middle bar is painted")
 		check(bimg.get_pixel(0, 0).a < 0.1, "burger corners stay transparent")
+	# Значок + поля обязаны влезать в высоту кнопки: иначе бургер выше
+	# соседей (ловили вживую). Сверяем с подсказкой из того же ряда.
+	var hint2 := inst.get("hint_btn") as Button
+	if hint2 != null:
+		var bh := (burger as Button).get_combined_minimum_size().y
+		var hh := hint2.get_combined_minimum_size().y
+		check(absf(bh - hh) <= 1.0,
+			"burger same height as hint (%.0f vs %.0f)" % [bh, hh])
 	var box = inst.get("_burger_box")
 	var bar = inst.get("_top_actions")
 	var overflowed := true
@@ -277,6 +286,35 @@ func _hint_icon_checks() -> void:
 		check(need1 > need0, "need() counts icon width (%.0f -> %.0f)"
 			% [need0, need1])
 		hint.icon = null
+
+
+func _deck_cap_checks() -> void:
+	# Колода на «Большом» остаётся как на «Среднем»: размер и текст.
+	var saved_scale: int = settings.text_scale
+	settings.text_scale = 2
+	inst.call("_rebuild_ui")
+	for i in range(3):
+		await process_frame
+	var deck := inst.get("deck_button") as Button
+	check(deck != null, "deck button exists after rebuild")
+	if deck == null:
+		return
+	check(deck.get_theme_font_size("font_size") == settings.fs_capped(16, 1),
+		"deck text capped at Medium on Big (got %d)"
+			% deck.get_theme_font_size("font_size"))
+	var big_min := deck.get_combined_minimum_size()
+	settings.text_scale = 1
+	inst.call("_rebuild_ui")
+	for i in range(3):
+		await process_frame
+	var deckm := inst.get("deck_button") as Button
+	check(big_min.is_equal_approx(deckm.get_combined_minimum_size()),
+		"deck size same on Big as Medium (%.0f vs %.0f)"
+			% [big_min.x, deckm.get_combined_minimum_size().x])
+	settings.text_scale = saved_scale
+	inst.call("_rebuild_ui")
+	for i in range(3):
+		await process_frame
 
 
 func _topbar_width_checks() -> void:
