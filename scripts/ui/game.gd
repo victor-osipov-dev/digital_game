@@ -109,6 +109,12 @@ var _draw_marks := {}
 ## локальной игре могут сидеть несколько живых игроков, и общий флаг
 ## «раз за партию» отбирал бы подсказку у остальных. В сети место одно.
 var _hints_used := {}
+## Ждём rewarded за подсказку (только Web): кнопка погашена, повторные
+## нажатия глотаются, метка подсказки не тратится до сигнала награды.
+var _hint_ad_pending := false
+## Финал уже ушёл в рекламу/победу (только Web): повторный _show_win
+## не запускает отсчёт заново, а сразу показывает экран.
+var _win_ad_done := false
 var _pan_pressed: bool = false
 var _pan_pos: Vector2 = Vector2.ZERO
 var _pan_press_on_tile: bool = false
@@ -349,6 +355,10 @@ func _build_ui() -> void:
 
 	hint_btn = _make_top_button(Lang.t("Подск."), Lang.t("Подсказка - показать возможный ход"),
 		_on_hint_pressed, Lang.t("Подсказка"))
+	if OS.has_feature("web") and ResourceLoader.exists("res://assets/ui/ad_badge.png"):
+		# Web: подсказка за просмотр rewarded — иконка честно говорит,
+		# что кнопка ведёт к рекламе.
+		hint_btn.icon = load("res://assets/ui/ad_badge.png") as Texture2D
 	_top_actions.add_child(hint_btn)
 
 	var help_btn := _make_top_button("?", Lang.t("Помощь"), _open_help, Lang.t("Помощь"))
@@ -621,6 +631,7 @@ func _go_menu() -> void:
 
 func _on_leave_to_menu() -> void:
 	_ysdk(&"gameplay_stop")
+	_hint_ad_pending = false
 	# Из сетевой партии выход — это мягкий выход из комнаты на сервере:
 	# место и партия держатся за игроком, и главное меню предложит
 	# вернуться или покинуть комнату с концами. Полный выход — room.drop.
@@ -1359,6 +1370,8 @@ func _new_match() -> void:
 	_anim_load = false
 	_states_seen = 0
 	_partner_ad_shown = false
+	_hint_ad_pending = false
+	_win_ad_done = false
 	_drew_seat = -1
 	_draw_marks.clear()
 	state = GameState.create(Settings.player_count, Array(Settings.player_names), Settings.require_30)
@@ -1428,6 +1441,8 @@ func _net_begin() -> void:
 	_anim_load = false
 	_states_seen = 0
 	_partner_ad_shown = false
+	_hint_ad_pending = false
+	_win_ad_done = false
 	_drew_seat = -1
 	_draw_marks.clear()
 	# «Заново» на экране победы — это про локальную партию: сервер не умеет
@@ -1516,13 +1531,7 @@ func _on_state_received(view: Dictionary, grace: float, paused: bool, waiting: b
 	# Чужой ход — показываем, кто ходит. Наш собственный ход требует
 	# действия игрока, и подсказка с названием мешала бы.
 	if state != null and state.finished:
-		_record_stats()
-		win_title.text = Lang.t("Победитель - %s") % state.player_name(state.winner)
-		win_overlay.visible = true
-		if _inspect_btn != null:
-			_inspect_btn.visible = false
-		_ysdk(&"gameplay_stop")
-		_maybe_show_partner_ad()
+		_show_win()
 		_show_wait("")
 		_present_queue.clear()
 		_present_gen += 1
@@ -2021,13 +2030,68 @@ func _bot_resolve_row(ref: String, created: Dictionary) -> GameState.Row:
 
 
 func _show_win() -> void:
+	# Web: сначала обратный отсчёт и реклама, экран победы — после них.
+	if OS.has_feature("web") and not _win_ad_done and state != null and state.finished:
+		_win_ad_done = true
+		_start_win_countdown()
+		return
+	_show_win_screen()
+
+
+## Собственно экран победы (после рекламы — на Web; сразу — везде ещё).
+func _show_win_screen() -> void:
 	_record_stats()
 	win_title.text = Lang.t("Победитель - %s") % state.player_name(state.winner)
 	win_overlay.visible = true
 	if _inspect_btn != null:
 		_inspect_btn.visible = false
-	_ysdk(&"gameplay_stop")
 	_maybe_show_partner_ad()
+
+
+## Обратный отсчёт 2–1 на весь экран (только Web, не пропускается):
+## дальше — fullscreen от SDK. Цифры огромные, фон полупрозрачный.
+func _start_win_countdown() -> void:
+	var ov := ColorRect.new()
+	ov.color = Color(0, 0, 0, 0.72)
+	ov.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	ov.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(ov)
+	var lab := Label.new()
+	lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	lab.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	lab.add_theme_font_size_override("font_size", Settings.fs(160))
+	lab.add_theme_color_override("font_color", Color(1, 1, 1, 0.95))
+	lab.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ov.add_child(lab)
+	for n in ["2", "1"]:
+		if not is_instance_valid(ov):
+			return
+		lab.text = n
+		await get_tree().create_timer(1.0).timeout
+	if is_instance_valid(ov):
+		ov.queue_free()
+	_show_win_ad()
+
+
+## Fullscreen от SDK, затем экран победы. SDK молчит — сразу победа:
+## игрока нельзя держать на пустом экране.
+func _show_win_ad() -> void:
+	_ysdk(&"show_endgame_fullscreen")
+	for i in range(240):
+		await get_tree().create_timer(0.5).timeout
+		if state == null:
+			return
+		if bool(_poll_endgame_ad().get("closed", false)):
+			break
+	_show_win_screen()
+
+
+## Состояние post-game рекламы (по умолчанию — закрыта: вне Web её нет).
+func _poll_endgame_ad() -> Dictionary:
+	if not OS.has_feature("web") or not ResourceLoader.exists(YANDEX_SDK_SCRIPT):
+		return {"closed": true, "error": "nosdk"}
+	return (load(YANDEX_SDK_SCRIPT) as GDScript).poll_endgame_ad()
 
 
 ## Экран победы скрыт — смотрим финальный стол. Только чтение: finished
@@ -2069,8 +2133,12 @@ func _maybe_show_partner_ad() -> void:
 	if not ResourceLoader.exists(PARTNER_AD_SCRIPT) \
 			or not ResourceLoader.exists(PARTNER_AD_CARD_SCRIPT):
 		return
-	_partner_ad_shown = true
 	var pad = load(PARTNER_AD_SCRIPT)
+	if not bool(pad.ENABLED):
+		# Релиз без рекламы: код и тесты на месте, показ выключен флагом.
+		_partner_ad_shown = true
+		return
+	_partner_ad_shown = true
 	var battery := -1
 	if ResourceLoader.exists(MARKET_HELPER_SCRIPT):
 		battery = int((load(MARKET_HELPER_SCRIPT) as GDScript).battery_percent())
@@ -2325,8 +2393,17 @@ func _mark_hint_used() -> void:
 	_hints_used[_hint_key()] = true
 
 func _on_hint_pressed() -> void:
-	if not _can_act() or _is_hint_used():
+	if not _can_act() or _is_hint_used() or _hint_ad_pending:
 		return
+	if OS.has_feature("web"):
+		_request_hint_ad()
+		return
+	_give_hint()
+
+
+## Собственно подсказка: тратит разовую метку и показывает план.
+## На Web вызывается только после сигнала награды от SDK (строго).
+func _give_hint() -> void:
 	_mark_hint_used()
 	_hint_ids.clear()
 	var plan := TurnPlanner.plan(state, TurnPlanner.LEVEL_IMPOSSIBLE)
@@ -2346,6 +2423,42 @@ func _on_hint_pressed() -> void:
 		else:
 			toast(Lang.t("Подсказка: закончите перестановку на столе"), false)
 	refresh()
+
+## Rewarded за подсказку (только Web, строго): показываем видео, ждём
+## сигнал награды от SDK опросами. Награды нет (закрыл раньше, ошибка,
+## SDK молчит) — подсказки нет, метка не тратится. Ход тем временем мог
+## уйти — тогда просто гасим кнопку, без тостов задним числом.
+func _request_hint_ad() -> void:
+	if _hint_ad_pending:
+		return
+	_hint_ad_pending = true
+	_update_buttons()
+	_ysdk(&"show_hint_rewarded")
+	var rewarded := false
+	for i in range(360):
+		await get_tree().create_timer(0.5).timeout
+		if state == null or not _hint_ad_pending:
+			return
+		var st := _poll_hint_ad()
+		if bool(st.get("rewarded", false)):
+			rewarded = true
+			break
+		if bool(st.get("closed", false)):
+			break
+	_hint_ad_pending = false
+	if rewarded and _can_act() and not _is_hint_used():
+		_give_hint()
+	else:
+		if state != null:
+			toast(Lang.t("Досмотрите рекламу до конца, чтобы получить подсказку"), false)
+		_update_buttons()
+
+
+## Состояние rewarded (по умолчанию — отказ: вне Web рекламы нет).
+func _poll_hint_ad() -> Dictionary:
+	if not OS.has_feature("web") or not ResourceLoader.exists(YANDEX_SDK_SCRIPT):
+		return {"rewarded": false, "closed": true, "error": "nosdk"}
+	return (load(YANDEX_SDK_SCRIPT) as GDScript).poll_hint_ad()
 
 func _on_resized() -> void:
 	_update_hint_zone_size()
@@ -3443,7 +3556,7 @@ func _update_buttons() -> void:
 	cp_restore_btn.disabled = locked or state.checkpoint_count() == 0
 	# Подсказка — одна на игрока за партию: потраченную гасим сразу,
 	# но только для того места, которое её потратило.
-	hint_btn.disabled = locked or _is_hint_used()
+	hint_btn.disabled = locked or _is_hint_used() or _hint_ad_pending
 	if state.finished:
 		end_button.text = Lang.t("Игра окончена")
 		end_button.disabled = true

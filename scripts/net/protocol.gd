@@ -8,6 +8,7 @@ extends RefCounted
 const REGISTER := "auth.register"        # {login, password, nick} -> auth.ok
 const LOGIN := "auth.login"              # {login, password} -> auth.ok
 const RESUME := "auth.resume"            # {token} -> auth.ok
+const YA_LOGIN := "auth.ya"              # {uid, nick} -> auth.ok (только Web/Yandex ID)
 # Вход только на чтение: позволяет прочитать список комнат с чужого
 # сервера, не трогая состояние. Обычный вход для этого не годится —
 # он перехватывает сокет игрока в комнате, и закрытие такой связи
@@ -143,6 +144,6 @@ static func ok_types(command: String) -> PackedStringArray:
 			return PackedStringArray([ROOMS_LIST_S2C, GAME_ERROR])
 		SERVERS_LIST:
 			return PackedStringArray([SERVERS_LIST_S2C, GAME_ERROR])
-		REGISTER, LOGIN, RESUME, LOBBY_OPEN:
+		REGISTER, LOGIN, RESUME, LOBBY_OPEN, YA_LOGIN:
 			return PackedStringArray([AUTH_OK, AUTH_ERR])
 	return PackedStringArray([GAME_ERROR])

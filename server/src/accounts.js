@@ -197,6 +197,44 @@ class Accounts {
   }
 
   /**
+   * Вход через Yandex ID (только Web/Yandex Games): находит аккаунт
+   * ya:<uid> или создаёт его. Отдельное пространство имён — обычный
+   * register/login такой логин не примут (двоеточие вне [A-Za-z0-9_.-]),
+   * а пароль здесь случайный и никому не выдаётся: подобрать его нельзя,
+   * перехватить чужой ya-аккаунт паролем — тоже. Гостевая сущность без
+   * доверия парольного аккаунта: для казуальной игры хватает, секретов
+   * в таких аккаунтах не держим. Подпись Yandex не проверяем (нужен ключ
+   * покупок, которого нет) — фиксируем это ограничение явно.
+   */
+  loginYa(uidRaw, nickRaw) {
+    const uid = String(uidRaw || '').trim();
+    if (!/^[0-9]{1,20}$/.test(uid)) return { ok: false, reason: 'Некорректный Yandex ID' };
+    const login = `ya:${uid}`;
+    const loginCi = login.toLowerCase();
+    let acc = this.db.getAccount(loginCi);
+    if (!acc) {
+      let nick = String(nickRaw || '').trim();
+      if (checkNick(nick)) nick = `Игрок-${uid.slice(-4)}`;
+      const now = Date.now();
+      const rec = {
+        login_ci: loginCi,
+        login,
+        nick: nick.slice(0, 24),
+        pwd_hash: hashPassword(crypto.randomBytes(32).toString('base64url')),
+        origin: config.serverId,
+        created_ms: now,
+        updated_ms: now,
+      };
+      const res = this.db.createAccount(rec);
+      if (!res.ok) return { ok: false, reason: res.reason };
+      acc = res.account;
+      log.info(`вход Yandex ID: ${loginCi} (origin ${config.serverId})`);
+    }
+    this.db.touchAccount(loginCi);
+    return { ok: true, account: acc, token: this.issue(acc) };
+  }
+
+  /**
    * Вход по сохранённому токену, в том числе выданному другим сервером.
    *
    * Проверка updated_ms делается ВСЕГДА, даже для сессии, о которой мы знаем:

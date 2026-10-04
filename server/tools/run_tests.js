@@ -486,6 +486,44 @@ test('плохой логин отклоняется', () => {
   assert.strictEqual(r.ok, false);
 });
 
+test('вход через Yandex ID создаёт аккаунт ya:uid', () => {
+  const r = accounts.loginYa('123456789', 'Яндекс Игрок');
+  assert.strictEqual(r.ok, true, r.reason);
+  assert.ok(r.token && r.token.includes('.'));
+  const acc = db.getAccount('ya:123456789');
+  assert.ok(acc, 'аккаунт ya:123456789 существует');
+  assert.strictEqual(acc.nick, 'Яндекс Игрок');
+});
+
+test('повторный вход по тому же Yandex ID — тот же аккаунт', () => {
+  assert.strictEqual(accounts.loginYa('123456789', 'Другое имя').ok, true);
+  assert.strictEqual(db.getAccount('ya:123456789').nick, 'Яндекс Игрок',
+    'ник не перезаписывается');
+});
+
+test('плохой ник заменяется безопасным', () => {
+  const r = accounts.loginYa('987', 'Админ');
+  assert.strictEqual(r.ok, true, r.reason);
+  assert.strictEqual(db.getAccount('ya:987').nick, 'Игрок-987');
+});
+
+test('не числовой Yandex ID отклоняется', () => {
+  for (const bad of ['', 'abc', 'ya:123', '12 34', '123456789012345678901']) {
+    assert.strictEqual(accounts.loginYa(bad, 'X').ok, false, bad);
+  }
+});
+
+test('ya-префикс нельзя занять обычным путём', () => {
+  assert.strictEqual(accounts.register('ya:123', 'secret123', 'X').ok, false);
+  assert.strictEqual(accounts.login('ya:123456789', 'x').ok, false);
+});
+
+test('токен ya-аккаунта подходит для resume', () => {
+  const r = accounts.loginYa('123456789', 'X');
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(accounts.resume(r.token).ok, true);
+});
+
 test('служебные ники и управляющие символы отклоняются', () => {
   for (const nick of ['Админ', 'Поддержка', 'Бот 2', 'bot', 'bad\nnick']) {
     assert.strictEqual(accounts.register(`nick${nick.length}`, 'secret123', nick).ok, false, nick);

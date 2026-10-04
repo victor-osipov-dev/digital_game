@@ -327,6 +327,11 @@ func _win_checks() -> void:
 		await process_frame
 		check(ov.visible, "back returns win screen")
 		check(not back.visible, "back button hidden again")
+	# Вне Web рекламы нет по построению: опросы SDK отвечают отказом.
+	var hp: Dictionary = hover.call("_poll_hint_ad")
+	check(bool(hp.get("closed", false)), "hint ad defaults to denied off-web")
+	var ep: Dictionary = hover.call("_poll_endgame_ad")
+	check(bool(ep.get("closed", false)), "endgame ad defaults to closed off-web")
 
 
 func _find_button_text(node: Node, part: String) -> Button:

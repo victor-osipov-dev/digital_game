@@ -224,7 +224,7 @@ class Hub {
     }
 
     // Ограничение попыток входа
-    if ([C2S.REGISTER, C2S.LOGIN].includes(msg.t) && !this.allowAuth(ctx)) {
+    if ([C2S.REGISTER, C2S.LOGIN, C2S.YA_LOGIN].includes(msg.t) && !this.allowAuth(ctx)) {
       this.reply(ctx, { t: S2C.AUTH_ERR, reason: 'Слишком много попыток. Подождите минуту.' }, rid);
       return;
     }
@@ -279,6 +279,14 @@ class Hub {
         const r = this.accounts.login(msg.login, msg.password);
         if (!r.ok) { this.failAuth(ctx, r.reason, rid); break; }
         this.succeedAuth(ctx, r, null, rid);
+        break;
+      }
+      case C2S.YA_LOGIN: {
+        const r = this.accounts.loginYa(msg.uid, msg.nick);
+        if (!r.ok) { this.failAuth(ctx, r.reason, rid); break; }
+        this.succeedAuth(ctx, r, null, rid);
+        // Как новый аккаунт: сразу соседям, чтобы вход работал везде.
+        this.cluster.push().catch(() => {});
         break;
       }
       case C2S.RESUME: {

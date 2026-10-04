@@ -79,6 +79,7 @@ func test_gating(ad) -> void:
 	ok("web+финал — нельзя", not bool(ad.can_show(false, true)))
 	ok("android+игра — нельзя", not bool(ad.can_show(true, false)))
 	ok("всё выключено — нельзя", not bool(ad.can_show(false, false)))
+	ok("релиз без рекламы (флаг)", not bool(ad.ENABLED))
 
 
 func test_card(card_script) -> void:

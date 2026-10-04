@@ -19,6 +19,9 @@ const UiThemeClass := preload("res://scripts/ui/ui_theme.gd")
 # страница не резиновая — остальное листается пагинацией.
 const ROOMS_PAGE_SIZE := 5
 
+## Мост SDK Яндекс Игр (только Web). Один load на файл.
+const YA_SDK_PATH := "res://scripts/platform/yandex_sdk.gd"
+
 var _overlay: ColorRect = null
 var _page_auth: VBoxContainer = null
 var _page_rooms: VBoxContainer = null
@@ -49,6 +52,12 @@ var _nick_edit: LineEdit = null
 var _auth_note: Label = null
 var _login_btn: Button = null
 var _register_btn: Button = null
+## Контролы парольного входа (прячем на Web: авторизация только Yandex ID).
+var _auth_form: Array = []
+## Блок входа через Яндекс (только Web).
+var _auth_ya_box: VBoxContainer = null
+var _ya_btn: Button = null
+var _ya_busy := false
 
 var _server_label: Label = null
 var _server_box: VBoxContainer = null
@@ -298,6 +307,19 @@ func _enter_auth() -> void:
 	if _nick_edit.text.is_empty():
 		_nick_edit.text = Net.session_nick()
 	_login_edit.grab_focus()
+	_sync_auth_mode()
+
+
+## На Web парольный вход скрыт (требование 1.2: авторизация только через
+## Yandex ID) — вместо него кнопка Яндекса. Везде ещё — как было.
+func _sync_auth_mode() -> void:
+	if _auth_form.is_empty() and _auth_ya_box == null:
+		return
+	var web := OS.has_feature("web")
+	for c in _auth_form:
+		(c as Control).visible = not web
+	if _auth_ya_box != null:
+		_auth_ya_box.visible = web
 
 
 ## Подключается к серверу. Какой именно — неважно для входа: сессия
@@ -376,6 +398,87 @@ func _do_register() -> void:
 	_set_auth_note(Lang.t("Создаём аккаунт…"))
 	var res := await Net.register(login_name, password, nick)
 	_after_auth(res, Lang.t("Аккаунт создан"))
+
+
+## Вход через Yandex ID (только Web): сначала пробуем готовый профиль
+## (вдруг уже авторизован — тогда диалог не нужен и не показывается),
+## иначе явный диалог с объяснением выгод. Без UID дальше нельзя:
+## гость играет офлайн, онлайн закрыт.
+func _do_ya_login() -> void:
+	if _ya_busy:
+		return
+	_ya_busy = true
+	_update_buttons()
+	_set_auth_note(Lang.t("Получаем профиль Яндекс…"))
+	var profile := await _ya_profile()
+	if String(profile.get("uid", "")).is_empty() \
+			or not bool(profile.get("authorized", false)):
+		_set_auth_note(Lang.t("Открываем вход через Яндекс…"))
+		_ysdk_call("open_auth_dialog")
+		if await _ysdk_wait("auth", 600):
+			profile = await _ya_profile()
+		else:
+			profile = {}
+	if String(profile.get("uid", "")).is_empty():
+		_ya_busy = false
+		_update_buttons()
+		_set_auth_note(Lang.t("Без входа доступен только офлайн-режим"), true)
+		return
+	var res := await Net.ya_login(String(profile.get("uid", "")),
+		String(profile.get("name", "")))
+	_ya_busy = false
+	_after_auth(res, Lang.t("Вход выполнен"))
+
+
+## Профиль из SDK (пусто — не получилось). Повторный вызов после диалога.
+func _ya_profile() -> Dictionary:
+	_ysdk_call("request_player")
+	if not await _ysdk_wait("player", 40):
+		return {}
+	var st := _ysdk_poll("player")
+	var data = st.get("data", null)
+	if data is Dictionary:
+		return data
+	return {}
+
+
+## Мост SDK Яндекс Игр (только Web). Один load на файл — см. константу
+## YA_SDK_PATH вверху.
+func _ysdk_call(method: StringName) -> void:
+	var sdk = _ysdk_script()
+	if sdk == null:
+		return
+	(sdk as GDScript).call(method)
+
+
+## Загрузчик моста SDK (один load на файл — дубли rlint не любит).
+func _ysdk_script():
+	if not OS.has_feature("web"):
+		return null
+	if not ResourceLoader.exists(YA_SDK_PATH):
+		return null
+	return load(YA_SDK_PATH)
+
+
+## Опрос флага SDK: {done: bool, ...}. Вне Web — сразу «готово».
+func _ysdk_poll(kind: String) -> Dictionary:
+	var sdk = _ysdk_script()
+	if sdk == null:
+		return {"done": true}
+	if String(kind) == "auth":
+		return (sdk as GDScript).poll_auth_dialog()
+	return (sdk as GDScript).poll_player()
+
+
+## Ждём флаг SDK (полсекундными тиками). Лобби закрыли — выходим молча.
+func _ysdk_wait(kind: String, tries: int) -> bool:
+	for i in range(tries):
+		await get_tree().create_timer(0.5).timeout
+		if not is_instance_valid(self) or not visible:
+			return false
+		if bool(_ysdk_poll(kind).get("done", false)):
+			return true
+	return false
 
 
 ## Единственная точка записи в строку состояния входа: текст без
@@ -1142,6 +1245,8 @@ func _update_buttons() -> void:
 	_back_btn.disabled = false
 	_login_btn.disabled = busy or not linked
 	_register_btn.disabled = busy or not linked
+	if _ya_btn != null:
+		_ya_btn.disabled = busy or not linked or _ya_busy
 	_refresh_btn.disabled = busy or not linked
 	_create_btn.disabled = busy or not authed
 	_play_btn.disabled = busy or not authed
@@ -1516,6 +1621,33 @@ func _build_auth() -> VBoxContainer:
 	_register_btn = _button(Lang.t("Регистрация"), 15)
 	_register_btn.pressed.connect(_do_register)
 	page.add_child(_register_btn)
+	# Парольный вход целиком — одним списком: на Web прячем всё разом
+	# (требование 1.2: авторизация только через Yandex ID).
+	_auth_form = []
+	for ch in page.get_children():
+		_auth_form.append(ch)
+
+	_auth_ya_box = VBoxContainer.new()
+	_auth_ya_box.add_theme_constant_override("separation", 12)
+	_auth_ya_box.visible = false
+	_auth_ya_box.add_child(_header(Lang.t("Онлайн через Яндекс ID"), 19))
+	var ya_note := Label.new()
+	ya_note.text = Lang.t("Войдите через Яндекс, чтобы играть по сети")
+	ya_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	ya_note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	ya_note.add_theme_font_size_override("font_size", Settings.fs(15))
+	_auth_ya_box.add_child(ya_note)
+	var ya_note2 := Label.new()
+	ya_note2.text = Lang.t("Прогресс и статистика сохранятся в облаке")
+	ya_note2.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	ya_note2.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	ya_note2.add_theme_font_size_override("font_size", Settings.fs(15))
+	_auth_ya_box.add_child(ya_note2)
+	_ya_btn = _button(Lang.t("Войти через Яндекс"), 17)
+	_ya_btn.pressed.connect(_do_ya_login)
+	_apply_accent(_ya_btn, Color("1565C0"), Color("1976D2"), Color("0D47A1"))
+	_auth_ya_box.add_child(_ya_btn)
+	page.add_child(_auth_ya_box)
 
 	_auth_note = Label.new()
 	_auth_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -1527,6 +1659,7 @@ func _build_auth() -> VBoxContainer:
 	_auth_note.add_theme_font_size_override("font_size", Settings.fs(15))
 	_auth_note.visible = false
 	page.add_child(_auth_note)
+	_sync_auth_mode()
 	return page
 
 

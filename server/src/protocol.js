@@ -19,6 +19,7 @@ const C2S = {
   REGISTER: 'auth.register',      // {login, password, nick} -> auth.ok
   LOGIN: 'auth.login',            // {login, password}        -> auth.ok
   RESUME: 'auth.resume',          // {token}                  -> auth.ok
+  YA_LOGIN: 'auth.ya',           // {uid, nick} -> auth.ok (только Web/Yandex ID)
   // Наблюдатель: вход только на чтение, для чтения списка комнат с чужого
   // сервера. Обычный вход для этого не годится — он перехватывает сокет
   // игрока в комнате, и закрытие такой связи выбивает его из партии.

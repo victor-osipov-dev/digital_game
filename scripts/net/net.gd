@@ -599,6 +599,15 @@ func register(login_name: String, password: String, nick: String) -> Dictionary:
 	return _finish_auth(res)
 
 
+## Вход через Yandex ID (только Web): сервер находит/создаёт аккаунт
+## ya:<uid>, пароль не нужен и не запоминается.
+func ya_login(uid: String, nick: String) -> Dictionary:
+	if not await _await_greet():
+		return { "ok": false, "reason": Lang.t("нет связи с сервером") }
+	var res := await request(NetProtocol.YA_LOGIN, { "uid": uid, "nick": nick })
+	return _finish_auth(res)
+
+
 func _finish_auth(res: Dictionary) -> Dictionary:
 	if String(res.get("t", "")) == NetProtocol.AUTH_OK:
 		_apply_auth(res)
