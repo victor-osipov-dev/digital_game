@@ -397,7 +397,7 @@ func _build_ui() -> void:
 	_burger_btn.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_burger_btn.clip_text = false
 	_burger_btn.tooltip_text = Lang.t("Действия")
-	_burger_btn.custom_minimum_size = Vector2(60, Settings.touch(46))
+	_burger_btn.custom_minimum_size = Vector2(60, Settings.touch_capped(46, 1))
 	_burger_btn.add_theme_font_size_override("font_size", Settings.fs(18))
 	_burger_btn.pressed.connect(_toggle_burger_menu)
 	_burger_btn.visible = false
@@ -764,9 +764,11 @@ func _make_top_button(text_value: String, tip: String, handler: Callable, full_v
 	var btn := Button.new()
 	btn.text = text_value
 	btn.tooltip_text = tip
-	btn.custom_minimum_size = Vector2(60, Settings.touch(46))
+	# Высота ряда заморожена на «Среднем» (см. _sync_top_bar): на «Большом»
+	# ряд такой же, как на среднем.
+	btn.custom_minimum_size = Vector2(60, Settings.touch_capped(46, 1))
 	btn.clip_text = true
-	btn.add_theme_font_size_override("font_size", Settings.fs(15))
+	btn.add_theme_font_size_override("font_size", Settings.fs_capped(15, 1))
 	btn.set_meta("short_text", text_value)
 	btn.set_meta("full_text", full_value if not full_value.is_empty() else text_value)
 	btn.pressed.connect(handler)
@@ -805,14 +807,12 @@ func _sync_top_bar() -> void:
 	if deck_button == null or _top_actions == null or _burger_btn == null \
 			or _burger_panel == null or _burger_box == null:
 		return
+	# Весь ряд заморожен на «Среднем»: и частые, и редкие кнопки всегда
+	# со шрифтом fs_capped(15, 1) — на «Большом» ряд такой же, как
+	# на среднем (иначе он не влезал бы в телефон и прыгал в бургер).
 	for btn in _top_action_buttons:
 		(btn as Button).text = String((btn as Button).get_meta("short_text"))
-		(btn as Button).add_theme_font_size_override("font_size", Settings.fs(15))
-	# Частые кнопки растут с потолком fs_capped до «Среднего»: на большом
-	# они такие же, как на среднем (иначе ряд не влезал бы в телефон),
-	# и ряд влезает даже в телефон.
-	for b in _top_pinned:
-		(b as Button).add_theme_font_size_override("font_size", Settings.fs_capped(15, 1))
+		(btn as Button).add_theme_font_size_override("font_size", Settings.fs_capped(15, 1))
 	var have := maxf(get_viewport_rect().size.x - 20.0, 200.0)
 	var deck_need := deck_button.get_combined_minimum_size().x
 	var need := deck_need
@@ -870,13 +870,14 @@ static func _fit_icon(tex: Texture2D, h: int) -> ImageTexture:
 
 
 ## Размер значка-бургера под высоту кнопки: иконка + поля стиля минус
-## небольшой зазор. Не меньше 20 px, чтобы полосы не сливались.
+## небольшой зазор. Высота заморожена на «Среднем» (touch_capped), как
+## весь ряд. Не меньше 20 px, чтобы полосы не сливались.
 func _fit_burger_icon() -> ImageTexture:
 	var vpad := 12.0
 	var sb := _burger_btn.get_theme_stylebox("normal")
 	if sb != null:
 		vpad = sb.content_margin_top + sb.content_margin_bottom
-	return _burger_icon(maxi(20, int(Settings.touch(46) - vpad - 4.0)))
+	return _burger_icon(maxi(20, int(Settings.touch_capped(46, 1) - vpad - 4.0)))
 
 
 ## Значок-бургер s×s: три белые полосы со скруглёнными концами на
