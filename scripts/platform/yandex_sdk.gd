@@ -12,6 +12,11 @@ extends RefCounted
 
 const SDK_URL := "https://yandex.ru/games/sdk/v2"
 
+## Диагностика входа/рекламы: точки [ya-sdk]/[ya-lobby] в консоли браузера.
+## ВРЕМЕННО true — найти, где встаёт вход под dev-proxy. После починки
+## выставить false (рантайм замолчит, мост продолжит работать).
+const DEBUG_LOG := true
+
 
 static func _bridge():
 	if not OS.has_feature("web"):
@@ -37,14 +42,23 @@ static func ensure_sdk() -> void:
 	_eval("(function(){if(window.__ysdkRequested)return;window.__ysdkRequested=true;" \
 		+ "window.__ysdkInitError='';" \
 		+ "function initNow(){try{YaGames.init().then(function(ysdk){window.__ysdk=ysdk;" \
+		+ "console.log('[ya-sdk] init ok');" \
 		+ "try{ysdk.features.LoadingAPI.ready();}catch(e){}})" \
-		+ ".catch(function(e){window.__ysdkInitError=String(e&&e.message||e);});}catch(e){" \
-		+ "window.__ysdkInitError=String(e&&e.message||e);}}" \
+		+ ".catch(function(e){window.__ysdkInitError=String(e&&e.message||e);" \
+		+ "console.log('[ya-sdk] init fail: '+window.__ysdkInitError);});}catch(e){" \
+		+ "window.__ysdkInitError=String(e&&e.message||e);" \
+		+ "console.log('[ya-sdk] init throw: '+window.__ysdkInitError);}}" \
+		+ "console.log('[ya-sdk] ensure, YaGames present='+(!!window.YaGames));" \
 		+ "if(window.YaGames){initNow();return;}" \
-		+ "var s=document.createElement('script');s.src='/sdk.js';s.onload=initNow;" \
-		+ "s.onerror=function(){var c=document.createElement('script');" \
-		+ "c.src='" + SDK_URL + "';c.onload=initNow;" \
-		+ "c.onerror=function(){window.__ysdkInitError='sdk load failed'};" \
+		+ "console.log('[ya-sdk] injecting /sdk.js');" \
+		+ "var s=document.createElement('script');s.src='/sdk.js';" \
+		+ "s.onload=function(){console.log('[ya-sdk] /sdk.js loaded');initNow();};" \
+		+ "s.onerror=function(){console.log('[ya-sdk] /sdk.js failed, fallback CDN');" \
+		+ "var c=document.createElement('script');" \
+		+ "c.src='" + SDK_URL + "';c.onload=function(){" \
+		+ "console.log('[ya-sdk] CDN loaded');initNow();};" \
+		+ "c.onerror=function(){window.__ysdkInitError='sdk load failed';" \
+		+ "console.log('[ya-sdk] CDN failed');};" \
 		+ "document.head.appendChild(c);};" \
 		+ "document.head.appendChild(s);})()")
 

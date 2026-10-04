@@ -413,30 +413,40 @@ func _do_ya_login() -> void:
 	# а не только из главного меню — иначе прямой заход в лобби ждал бы
 	# SDK, который никто не попросил загрузить.
 	_ysdk_call("ensure_sdk")
+	_ya_log("click: ensure requested, sdk script present=%s" % str(_ysdk_script() != null))
 	# SDK нет (игра открыта не из Яндекс Игр) — дальше всё равно ответит
 	# отказом; объясняем сразу и честно, а не «без входа...» в конце.
 	for i in range(20):
 		var rs := _ysdk_poll("sdk")
+		if i % 5 == 0:
+			_ya_log("sdk wait tick %d: %s" % [i, str(rs)])
 		if bool(rs.get("ready", false)) or not String(rs.get("error", "")).is_empty():
 			break
 		await get_tree().create_timer(0.5).timeout
 		if not is_instance_valid(self) or not visible:
 			_ya_busy = false
+			_ya_log("lobby hidden/closed during sdk wait")
 			return
-	if not bool(_ysdk_poll("sdk").get("ready", false)):
+	var final := _ysdk_poll("sdk")
+	_ya_log("sdk poll after wait: %s" % str(final))
+	if not bool(final.get("ready", false)):
 		_ya_busy = false
 		_update_buttons()
 		_set_auth_note(Lang.t("Вход и реклама работают только внутри Яндекс Игр"), true)
 		return
 	_set_auth_note(Lang.t("Получаем профиль Яндекс…"))
 	var profile := await _ya_profile()
+	_ya_log("profile: uid_empty=%s authorized=%s" % [str(String(profile.get("uid", "")).is_empty()), str(bool(profile.get("authorized", false)))])
 	if String(profile.get("uid", "")).is_empty() \
 			or not bool(profile.get("authorized", false)):
 		_set_auth_note(Lang.t("Открываем вход через Яндекс…"))
 		_ysdk_call("open_auth_dialog")
+		_ya_log("auth dialog opened, waiting")
 		if await _ysdk_wait("auth", 600):
+			_ya_log("auth dialog done, re-reading profile")
 			profile = await _ya_profile()
 		else:
+			_ya_log("auth wait interrupted (lobby closed)")
 			profile = {}
 	if String(profile.get("uid", "")).is_empty():
 		_ya_busy = false
@@ -445,6 +455,7 @@ func _do_ya_login() -> void:
 		return
 	var res := await Net.ya_login(String(profile.get("uid", "")),
 		String(profile.get("name", "")))
+	_ya_log("ya_login: ok=%s reason='%s'" % [str(res.get("ok", "?")), str(res.get("reason", ""))])
 	_ya_busy = false
 	_after_auth(res, Lang.t("Вход выполнен"))
 
@@ -452,13 +463,29 @@ func _do_ya_login() -> void:
 ## Профиль из SDK (пусто — не получилось). Повторный вызов после диалога.
 func _ya_profile() -> Dictionary:
 	_ysdk_call("request_player")
+	_ya_log("request_player sent")
 	if not await _ysdk_wait("player", 40):
+		_ya_log("player wait TIMEOUT (20s)")
 		return {}
 	var st := _ysdk_poll("player")
+	_ya_log("player poll: done=%s has_data=%s err='%s'" % [str(st.get("done", "?")), str(st.get("data", null) != null), str(st.get("error", ""))])
 	var data = st.get("data", null)
 	if data is Dictionary:
 		return data
 	return {}
+
+
+## Диагностика входа через Яндекс: точки [ya-lobby] в консоли браузера
+## (в Web print() уходит в console.log). Флаг — DEBUG_LOG моста; мост
+## отсутствует (не Web) — печатаем всегда, иначе причину молчания,
+## включая «мост не загрузился», не увидеть.
+func _ya_log(msg: String) -> void:
+	var sdk = _ysdk_script()
+	if sdk == null:
+		print("[ya-lobby] " + msg + " (sdk script missing!)")
+		return
+	if bool((sdk as GDScript).DEBUG_LOG):
+		print("[ya-lobby] " + msg)
 
 
 ## Мост SDK Яндекс Игр (только Web). Один load на файл — см. константу
@@ -466,6 +493,7 @@ func _ya_profile() -> Dictionary:
 func _ysdk_call(method: StringName) -> void:
 	var sdk = _ysdk_script()
 	if sdk == null:
+		_ya_log("call " + String(method) + " skipped: sdk script missing")
 		return
 	(sdk as GDScript).call(method)
 
