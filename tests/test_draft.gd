@@ -113,6 +113,7 @@ func _boot() -> void:
 	await test_bot_commit_staggered()
 	await test_bot_commit_no_mid_state()
 	await test_bot_chain_queued()
+	await test_draft_keeps_scroll_on_same_rows()
 	test_draft_resend_no_rebuild()
 	test_hint_per_player()
 
@@ -930,6 +931,40 @@ func test_draft_resend_no_rebuild() -> void:
 		"видов %d" % _view_ids().size())
 	ok("черновик всё ещё активен", game._draft_active())
 	game._clear_draft()
+
+
+func test_draft_keeps_scroll_on_same_rows() -> void:
+	section("черновик не дёргает скролл при тех же рядах")
+	game._clear_draft()
+	_apply(view)
+	game._on_net_draft(2, _many_draft_rows(1200, 0))
+	for i in range(4):
+		await process_frame
+	var scroll := game.table_scroll as ScrollContainer
+	scroll.scroll_vertical = 420
+	await process_frame
+	var before := int(scroll.scroll_vertical)
+	ok("стол прокручен перед обновлением", before > 0, "scroll=%d" % before)
+	game._on_net_draft(2, _many_draft_rows(1200, 1))
+	for i in range(5):
+		await process_frame
+	var after := int(scroll.scroll_vertical)
+	ok("скролл сохранился при обновлении тех же рядов",
+		absi(after - before) <= 2, "%d -> %d" % [before, after])
+	game._clear_draft()
+
+
+func _many_draft_rows(first_id: int, offset: int) -> Array:
+	var ids := []
+	for item in catalog:
+		ids.append(int((item as Dictionary).get("id", 0)))
+	var out := []
+	for i in range(24):
+		out.append({
+			"id": first_id + i,
+			"tiles": [ids[(i + offset) % ids.size()]],
+		})
+	return out
 
 
 ## Подсказка — одна на игрока: в локальной игре за одним устройством

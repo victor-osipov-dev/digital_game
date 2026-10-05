@@ -176,6 +176,7 @@ var _anim_force: Dictionary = {}
 # протухшие (drop во время чужого показа, пересборка пришла секундами
 # позже — фишка уже стоит) не летят вовсе: см. DROP_ORIGIN_TTL_MS.
 var _drop_origins: Dictionary = {}
+var _table_scroll_restore_gen := 0
 # Ход сетевого бота анимируем поэтапно, как локального: прилёты идут
 # друг за другом, а не все разом. Метку ставит _apply_state по прошлому
 # состоянию (ходил бот), гасится в refresh вместе с остальным.
@@ -3088,6 +3089,7 @@ func refresh() -> void:
 	var shots: Array = []
 	if _anim_pending:
 		shots = _capture_tiles()
+	var scroll_snap := _capture_table_scroll()
 	_anim_pending = false
 	_drag_view = null
 	_set_drag_scroll_locked(false)
@@ -3097,6 +3099,7 @@ func refresh() -> void:
 	_update_buttons()
 	_sync_top_bar()
 	_update_hint_zone_size()
+	_maybe_restore_table_scroll(scroll_snap)
 	# Сироты: в момент их показа видов не было (стол показан из черновика
 	# соперника, ряд ещё не собран). Фишка появилась — ставим в очередь
 	# своим чередом, а не показываем мгновенно.
@@ -3457,6 +3460,56 @@ func _capture_flow(flow: FlowTiles, out: Array) -> void:
 				"gpos": tv.global_position,
 				"alpha": tv.base_alpha,
 			})
+
+
+func _capture_table_scroll() -> Dictionary:
+	if table_scroll == null or row_blocks.is_empty():
+		return {}
+	return {
+		"y": int(table_scroll.scroll_vertical),
+		"rows": _visible_table_row_ids(),
+	}
+
+
+func _visible_table_row_ids() -> Array:
+	var out := []
+	for block in row_blocks:
+		var rb := block as RowBlock
+		if rb != null:
+			out.append(rb.row_id)
+	return out
+
+
+func _maybe_restore_table_scroll(snap: Dictionary) -> void:
+	if snap.is_empty() or table_scroll == null:
+		return
+	var rows := snap.get("rows", []) as Array
+	if rows != _visible_table_row_ids():
+		return
+	_table_scroll_restore_gen += 1
+	_restore_table_scroll_later(_table_scroll_restore_gen,
+		int(snap.get("y", 0)), rows)
+
+
+func _restore_table_scroll_later(gen: int, y: int, rows: Array) -> void:
+	if not is_inside_tree():
+		return
+	await get_tree().process_frame
+	_restore_table_scroll_now(gen, y, rows)
+	if not is_inside_tree():
+		return
+	await get_tree().process_frame
+	_restore_table_scroll_now(gen, y, rows)
+
+
+func _restore_table_scroll_now(gen: int, y: int, rows: Array) -> void:
+	if gen != _table_scroll_restore_gen or table_scroll == null:
+		return
+	if rows != _visible_table_row_ids():
+		return
+	var bar := table_scroll.get_v_scroll_bar()
+	var max_v := int(bar.max_value) if bar != null else y
+	table_scroll.scroll_vertical = clampi(y, 0, max_v)
 
 ## Гасит указанные id в живых view: прилетающие, ждущие показа в очереди
 ## и сироты. После пересборки виды возвращаются видимыми — им пора быть
