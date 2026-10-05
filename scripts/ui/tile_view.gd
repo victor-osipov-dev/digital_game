@@ -250,6 +250,10 @@ func refresh_marks() -> void:
 
 
 func _modal_up() -> bool:
+	# Галочка — top_level: её давят и тост с бургером, а не только модалки
+	# (см. _badges_hidden). Старый путь оставлен для чужих контроллеров.
+	if controller != null and controller.has_method("_badges_hidden"):
+		return bool(controller.call("_badges_hidden"))
 	if controller != null and controller.has_method("_modal_open"):
 		return bool(controller.call("_modal_open"))
 	return false

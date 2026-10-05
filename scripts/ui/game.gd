@@ -3972,6 +3972,20 @@ func _modal_open() -> bool:
 			return true
 	return false
 
+
+## Бейдж-галочка — top_level и рисуется поверх всего: под всплывающими
+## экранами его надо прятать, иначе он торчит поверх уведомлений и меню.
+## Это НЕ то же, что _modal_open (тот ещё и жесты гасит): тост и бургер
+## жесты не трогают, а бейдж перекрывают.
+func _badges_hidden() -> bool:
+	if _modal_open():
+		return true
+	if _toast_panel != null and _toast_panel.visible:
+		return true
+	if _burger_panel != null and _burger_panel.visible:
+		return true
+	return false
+
 func toast(text: String, is_error: bool = false) -> void:
 	if toast_label == null or _toast_panel == null:
 		return

@@ -49,6 +49,7 @@ func _on_frame() -> void:
 			await _drop_checks()
 			await _pan_checks()
 			await _bar_checks()
+			await _badge_popup_checks()
 			await _win_checks()
 			await _slide_checks()
 			_split_own_checks()
@@ -439,8 +440,37 @@ func _bar_checks() -> void:
 		"ползунок вниз — натив крутит вниз (%d)" % scroll.scroll_vertical)
 
 
-## После победы стол можно посмотреть (только чтение): кнопка уводит
-## оверлей, плавающая возвращает обратно. Двигать ничего нельзя.
+## Галочка — top_level: под тостом и бургер-меню она прячется, а не
+## торчит поверх уведомлений. Без попапов видна как раньше.
+func _badge_popup_checks() -> void:
+	var tv_script := load("res://scripts/ui/tile_view.gd") as GDScript
+	var t := Tile.new(930, Tile.TColor.BLUE, 4, false)
+	var v: Control = tv_script.make(t, false, inst)
+	v.position = Vector2(60, 120)
+	root.add_child(v)
+	v.set("mark_drawn", true)
+	await process_frame
+	await process_frame
+	v.call("_sync_badge")
+	var bb := v.get("_badge") as Control
+	check(bb != null and bb.visible, "бейдж виден без попапов")
+	check(not bool(inst.call("_badges_hidden")), "гейт пуст без попапов")
+	inst.call("toast", "тест", false)
+	await process_frame
+	v.call("_sync_badge")
+	check(bb != null and not bb.visible, "бейдж прячется под уведомлением")
+	check(bool(inst.call("_badges_hidden")), "гейт видит уведомление")
+	inst.call("_hide_toast")
+	inst.call("_set_burger_open", true, false)
+	await process_frame
+	v.call("_sync_badge")
+	check(bb != null and not bb.visible, "бейдж прячется под бургером")
+	check(bool(inst.call("_badges_hidden")), "гейт видит бургер")
+	inst.call("_set_burger_open", false, false)
+	await process_frame
+	v.call("_sync_badge")
+	check(bb != null and bb.visible, "попапы ушли — бейдж вернулся")
+	v.free()
 func _win_checks() -> void:
 	var hover := inst as Control
 	var state = inst.get("state")
