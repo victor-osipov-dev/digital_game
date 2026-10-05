@@ -90,6 +90,19 @@ static func poll_sdk_ready() -> Dictionary:
 		"error": String(r.get("e", ""))}
 
 
+## Язык интерфейса игрока из SDK (п. 2.14 Требований: игра обязана
+## говорить на языке платформы). Синхронное свойство — доступно сразу
+## после init, ждать нечего. Нет SDK / нет поля — '' (коллер оставляет
+## как было). Значения вида 'ru', 'en', 'tr', 'uk', 'be', 'kk'...
+static func sdk_lang() -> String:
+	var raw = _eval("String((window.__ysdk&&window.__ysdk.environment" \
+		+ "&&window.__ysdk.environment.i18n" \
+		+ "&&window.__ysdk.environment.i18n.lang)||'')")
+	if raw == null:
+		return ""
+	return String(raw).to_lower().strip_edges()
+
+
 ## Игрок реально играет (ходить/партия началась).
 static func gameplay_start() -> void:
 	_eval("try{if(window.__ysdk&&window.__ysdk.features.GameplayAPI)" \

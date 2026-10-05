@@ -14,6 +14,7 @@ const Lang := preload("res://scripts/core/lang.gd")
 var fails := 0
 var total := 0
 var _saved_lang := "ru"
+var _saved_auto := true
 var _state := [false, false]
 
 func _initialize() -> void:
@@ -24,15 +25,22 @@ func _boot() -> void:
 	var settings := root.get_node_or_null("Settings")
 	if settings != null:
 		_saved_lang = String(settings.language)
+		_saved_auto = bool(settings.language_auto)
 	test_ru_identity()
 	test_en_table()
 	test_en_helpers()
 	test_en_menu()
 	test_boot_title()
+	test_sdk_language()
 	# Возвращаем язык: сьют дальше идёт на русском по умолчанию.
-	Lang.set_lang(_saved_lang)
+	# set_language помечает выбор ручным — авто-флаг возвращаем сами
+	# и пересохраняем cfg, чтобы тест не оставил следов.
 	if settings != null:
 		settings.set_language(_saved_lang)
+		settings.language_auto = _saved_auto
+		settings.save_settings()
+	else:
+		Lang.set_lang(_saved_lang)
 	if fails == 0:
 		print("\nЛОКАЛИЗАЦИЯ: все %d проверок прошли" % total)
 		quit(0)
@@ -133,6 +141,40 @@ func test_boot_title() -> void:
 	var menu_src := _read_text("res://scripts/ui/main_menu.gd")
 	ok("повтор после старта в главном меню",
 		menu_src.contains("_reapply_title_boot()"))
+
+
+## Авто-язык из SDK Яндекс Игр (п. 2.14): маппинг языка платформы,
+## применение только в авто-режиме, ручной выбор сильнее SDK.
+func test_sdk_language() -> void:
+	section("авто-язык платформы (Яндекс SDK)")
+	var settings := root.get_node_or_null("Settings")
+	ok("Settings на месте", settings != null)
+	if settings == null:
+		return
+	# Маппинг: платформа отдаёт произвольный код, игра знает ru/en.
+	ok("ru → ru", settings.map_sdk_lang("ru") == "ru")
+	ok("RU → ru (регистр)", settings.map_sdk_lang("RU") == "ru")
+	ok("en → en", settings.map_sdk_lang("en") == "en")
+	ok("непереведённый → en", settings.map_sdk_lang("tr") == "en")
+	ok("пусто → пусто", settings.map_sdk_lang("") == "")
+	ok("пробелы отрезаем", settings.map_sdk_lang(" en ") == "en")
+	# Применение: только пока язык выбран автоматически.
+	settings.language = "ru"
+	settings.language_auto = true
+	Lang.set_lang("ru")
+	ok("смена применяется",
+		settings.apply_sdk_language("en") and settings.language == "en")
+	ok("авто-флаг не сбит", settings.language_auto)
+	ok("тот же язык — no-op", not settings.apply_sdk_language("en"))
+	ok("пустой код — no-op", not settings.apply_sdk_language(""))
+	# Ручной выбор (set_language) выключает авто навсегда.
+	settings.set_language("ru")
+	ok("ручной выбор выключает авто", not settings.language_auto)
+	ok("SDK больше не указывает", not settings.apply_sdk_language("en"))
+	ok("язык остался русским", settings.language == "ru")
+	# Мост обязан читать environment.i18n — иначе пункт не закрыт.
+	var sdk_src := _read_text("res://scripts/platform/yandex_sdk.gd")
+	ok("мост читает environment.i18n", sdk_src.contains("environment.i18n"))
 
 
 func _read_text(path: String) -> String:

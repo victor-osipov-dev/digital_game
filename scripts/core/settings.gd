@@ -2,6 +2,9 @@ extends Node
 const Lang := preload("res://scripts/core/lang.gd")
 
 const CFG_PATH := "user://settings.cfg"
+## Мост SDK Яндекс Игр: в Android-сборку файл не входит (исключён из
+## пресета), поэтому везде проверяется ResourceLoader.exists.
+const YANDEX_SDK_SCRIPT := "res://scripts/platform/yandex_sdk.gd"
 const MIN_PLAYERS := 2
 const MAX_PLAYERS := 5
 
@@ -26,6 +29,11 @@ var bot_anim: bool = true
 ## Язык интерфейса: "ru" или "en". Хранится здесь (cfg), применяется
 ## через Lang.set_lang (словарь + заголовок окна).
 var language: String = "ru"
+## Язык ещё выбран автоматически (п. 2.14 Требований платформы): на Web
+## следует за environment.i18n.lang из SDK Яндекс Игр. Любой ручной выбор
+## в меню или в настройках партии выключает авто навсегда — желание
+## игрока сильнее языка платформы.
+var language_auto: bool = true
 var player_is_bot: Array = []
 var stat_games: int = 0
 var stat_wins: int = 0
@@ -35,6 +43,7 @@ func _ready() -> void:
 	load_settings()
 	if OS.get_name() == "Android":
 		DisplayServer.screen_set_orientation(DisplayServer.SCREEN_SENSOR)
+	_auto_lang_from_sdk()
 
 ## Размер шрифта: база × шкала, но не ниже читаемого минимума —
 ## на «Маленьком» fs(12)/fs(13) не превращаются в крошку.
@@ -174,10 +183,71 @@ func set_bot(index: int, value: bool) -> void:
 
 ## Смена языка: словарь + заголовок + запись в cfg. Перестройку экрана
 ## делает вызывающий (теми же путями, что смена масштаба текста).
+## Это ручной выбор — он отключает авто-язык из SDK (см. language_auto).
 func set_language(code: String) -> void:
 	language = "en" if code == "en" else "ru"
+	language_auto = false
 	Lang.set_lang(language)
 	save_settings()
+
+
+## Язык платформы из SDK → наша пара ru/en. Переведено два языка:
+## "ru" — русский, всё остальное (en и непереведённые) — английский.
+## Пусто (не Web / SDK не готов / нет поля) — "" : коллер не трогает язык.
+static func map_sdk_lang(code: String) -> String:
+	var c := code.strip_edges().to_lower()
+	if c.is_empty():
+		return ""
+	return "ru" if c == "ru" else "en"
+
+
+## Применяет язык платформы (только в авто-режиме). Возвращает true,
+## если язык реально сменился — экран надо перестроить.
+func apply_sdk_language(code: String) -> bool:
+	var mapped := map_sdk_lang(code)
+	if mapped.is_empty() or not language_auto or mapped == language:
+		return false
+	language = mapped
+	Lang.set_lang(language)
+	save_settings()
+	return true
+
+
+## Авто-язык при старте Web (п. 2.14): ждём готовности init SDK
+## (ensure_sdk зовёт главное меню), читаем environment.i18n.lang и
+## применяем. Вне Web / после ручного выбора — тихий no-op.
+## Смена дожидается главного меню: если игрок уже в партии, язык
+## применяется без перезагрузки сцены (партию не рвём, меню
+## переестроится при следующем входе).
+func _auto_lang_from_sdk() -> void:
+	if not OS.has_feature("web") or not language_auto:
+		return
+	if not ResourceLoader.exists(YANDEX_SDK_SCRIPT):
+		return
+	var sdk := load(YANDEX_SDK_SCRIPT) as GDScript
+	# ~30 с: под медленным CDN init тянется дольше, чем кажется.
+	for _attempt in 120:
+		var ready: Dictionary = sdk.poll_sdk_ready()
+		if bool(ready.get("ready", false)):
+			break
+		if String(ready.get("error", "")) != "":
+			return  # init не удался: остаёмся на сохранённом языке
+		await get_tree().create_timer(0.25).timeout
+		if not language_auto:
+			return  # пока ждали, игрок выбрал язык руками
+	if not language_auto:
+		return
+	if apply_sdk_language(sdk.sdk_lang()):
+		_reload_menu_if_visible()
+
+
+## Перестройка после смены языка: main_menu — единственная сцена, где
+## перезагрузка безопасна (это и есть стартовый экран, ради которого
+## язык и применялся).
+func _reload_menu_if_visible() -> void:
+	var scene := get_tree().current_scene
+	if scene != null and scene.scene_file_path == "res://scenes/main_menu.tscn":
+		get_tree().reload_current_scene()
 
 func set_player_count(n: int) -> void:
 	player_count = clampi(n, MIN_PLAYERS, MAX_PLAYERS)
@@ -216,6 +286,7 @@ func load_settings() -> void:
 		language = String(cf.get_value("game", "language", "ru"))
 		if language != "en":
 			language = "ru"
+		language_auto = bool(cf.get_value("game", "language_auto", true))
 		Lang.set_lang(language)
 		stat_games = maxi(0, int(cf.get_value("game", "stat_games", 0)))
 		stat_wins = maxi(0, int(cf.get_value("game", "stat_wins", 0)))
@@ -241,6 +312,7 @@ func save_settings() -> void:
 	cf.set_value("game", "bot_level", bot_level)
 	cf.set_value("game", "bot_anim", bot_anim)
 	cf.set_value("game", "language", language)
+	cf.set_value("game", "language_auto", language_auto)
 	cf.set_value("game", "player_is_bot", player_is_bot)
 	cf.set_value("game", "stat_games", stat_games)
 	cf.set_value("game", "stat_wins", stat_wins)
