@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { Database } = require('./sqlite');
 const { config } = require('./config');
 const log = require('./log');
@@ -92,6 +93,8 @@ class Db {
     this._ensureColumn('peer_state', 'rev_last_seq', 'INTEGER NOT NULL DEFAULT 0');
     this._ensureColumn('peer_state', 'rev_last_pull_ms', 'INTEGER NOT NULL DEFAULT 0');
     this._ensureColumn('accounts', 'session_epoch', 'INTEGER NOT NULL DEFAULT 0');
+    // Мягкое удаление (tombstone для репликации): 0 — жив, иначе ms удаления.
+    this._ensureColumn('accounts', 'deleted_ms', 'INTEGER NOT NULL DEFAULT 0');
     log.info(`sqlite готов: ${config.dbPath}`);
   }
 
@@ -172,10 +175,22 @@ class Db {
       .run(Date.now(), loginCi);
   }
 
+  /**
+   * Учёт сыгранной партии. Вызывается ТОЛЬКО из финиша партии на сервере
+   * (hub.recordGameResult): клиентских ручек записи статистики нет вообще,
+   * накрутить победы запросом нельзя. Удалённым (tombstone) не начисляем.
+   * Состояние уходит в outbox — статистика реплицируется как аккаунты.
+   * updated_ms НЕ двигаем, чтобы не мешать правилу владения контентом.
+   */
   addResult(loginCi, won) {
-    this.db.prepare(
-      'UPDATE accounts SET games = games + 1, wins = wins + ? WHERE login_ci = ?',
+    const info = this.db.prepare(
+      'UPDATE accounts SET games = games + 1, wins = wins + ? WHERE login_ci = ? AND deleted_ms = 0',
     ).run(won ? 1 : 0, loginCi);
+    if (info.changes > 0) {
+      this.db.prepare('INSERT INTO outbox (login_ci, created_ms) VALUES (?, ?)')
+        .run(loginCi, Date.now());
+    }
+    return info.changes > 0;
   }
 
   /**
@@ -188,26 +203,71 @@ class Db {
    * сосед, знающий логин, прислал бы «свой» хеш пароля и угнал бы чужой
    * аккаунт.
    *
+   * Статистика (games/wins) правилу владения НЕ подчиняется: это
+   * монотонные счётчики, их всегда сводим через max — иначе счёт,
+   * набранный на другом сервере, терялся бы или откатывался. Конкурентные
+   * инкременты на двух серверах max недооценивает (берёт больший, а не
+   * сумму) — для казуального топа приемлемо, зафиксировано явно.
+   *
+   * Удаление — через tombstone (deleted_ms): свежая tombstone гасит живую
+   * запись; живая запись свежее tombstone считается перерегистрацией и
+   * принимается целиком (с новым origin). Возвраты: 'inserted', 'updated',
+   * 'stale', 'not-owner' — как раньше, плюс 'deleted' (применили чужое
+   * удаление) и 'tombstone' (наша tombstone устояла).
+   *
    * Принятое кладём в outbox — иначе аккаунт, дошедший от соседа, не
    * дойдёт до третьего сервера. Сходимость обеспечивает строгое сравнение
    * updated_ms: при повторной доставке запись уже не «свежее».
    */
   mergeRemoteAccount(remote) {
     if (!remote || !remote.login_ci) return 'skip';
+    const rGames = Math.max(0, Number(remote.games) || 0);
+    const rWins = Math.max(0, Number(remote.wins) || 0);
+    const rDel = Number(remote.deleted_ms) || 0;
     const cur = this.getAccount(remote.login_ci);
     if (!cur) {
       this.db.prepare(`
-        INSERT INTO accounts (login_ci, login, nick, pwd_hash, origin, created_ms, updated_ms, session_epoch, last_seen_ms)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
+        INSERT INTO accounts (login_ci, login, nick, pwd_hash, origin, created_ms, updated_ms, session_epoch, last_seen_ms, games, wins, deleted_ms)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
       `).run(
         remote.login_ci, remote.login, remote.nick, remote.pwd_hash,
         remote.origin, remote.created_ms, remote.updated_ms, Number(remote.session_epoch) || 0,
+        rGames, rWins, rDel,
       );
       this.db.prepare('INSERT INTO outbox (login_ci, created_ms) VALUES (?, ?)')
         .run(remote.login_ci, Number(remote.updated_ms));
       return 'inserted';
     }
-    if (String(remote.origin) !== String(cur.origin)) return 'not-owner';
+    const cDel = Number(cur.deleted_ms) || 0;
+    if (rDel > 0 && rDel >= cDel && rDel > Number(cur.updated_ms)) {
+      // Свежая чужая tombstone гасит живую запись: трём PII и статистику.
+      this._applyTombstone(remote.login_ci, rDel, Math.max(rDel, Number(cur.updated_ms) + 1));
+      return 'deleted';
+    }
+    if (cDel > 0) {
+      if (rDel > 0) return 'tombstone';
+      // Живая реплика новее нашей tombstone — перерегистрация на соседе:
+      // принимаем целиком (контент, статистику, новый origin).
+      if (Number(remote.updated_ms) > cDel) {
+        this.db.prepare(
+          `UPDATE accounts SET login = ?, nick = ?, pwd_hash = ?, origin = ?,
+            updated_ms = ?, session_epoch = ?, games = ?, wins = ?, deleted_ms = 0
+           WHERE login_ci = ?`,
+        ).run(
+          remote.login, remote.nick, remote.pwd_hash, remote.origin,
+          Number(remote.updated_ms), Number(remote.session_epoch) || 0,
+          rGames, rWins, remote.login_ci,
+        );
+        this.db.prepare('INSERT INTO outbox (login_ci, created_ms) VALUES (?, ?)')
+          .run(remote.login_ci, Number(remote.updated_ms));
+        return 'updated';
+      }
+      return 'tombstone';
+    }
+    if (String(remote.origin) !== String(cur.origin)) {
+      this._mergeStatsMax(remote.login_ci, rGames, rWins);
+      return 'not-owner';
+    }
     if (Number(remote.updated_ms) > Number(cur.updated_ms)) {
       this.db.prepare(
         'UPDATE accounts SET login = ?, nick = ?, pwd_hash = ?, updated_ms = ?, session_epoch = ? WHERE login_ci = ?',
@@ -217,9 +277,86 @@ class Db {
       );
       this.db.prepare('INSERT INTO outbox (login_ci, created_ms) VALUES (?, ?)')
         .run(remote.login_ci, Number(remote.updated_ms));
+      this._mergeStatsMax(remote.login_ci, rGames, rWins);
       return 'updated';
     }
+    this._mergeStatsMax(remote.login_ci, rGames, rWins);
     return 'stale';
+  }
+
+  /** Сведение счётчиков через max (только живым записям). */
+  _mergeStatsMax(loginCi, games, wins) {
+    const info = this.db.prepare(
+      `UPDATE accounts SET games = max(games, ?), wins = max(wins, ?)
+       WHERE login_ci = ? AND deleted_ms = 0`,
+    ).run(Math.max(0, games || 0), Math.max(0, wins || 0), loginCi);
+    if (info.changes > 0) {
+      this.db.prepare('INSERT INTO outbox (login_ci, created_ms) VALUES (?, ?)')
+        .run(loginCi, Date.now());
+    }
+  }
+
+  /** Наложить tombstone: стереть PII и статистику, пометить время. */
+  _applyTombstone(loginCi, deletedMs, updatedMs) {
+    this.db.prepare(
+      `UPDATE accounts SET nick = '', pwd_hash = ?, games = 0, wins = 0,
+        updated_ms = ?, deleted_ms = ? WHERE login_ci = ?`,
+    ).run(`*deleted*${crypto.randomBytes(16).toString('base64url')}`, updatedMs, deletedMs, loginCi);
+    this.db.prepare('INSERT INTO outbox (login_ci, created_ms) VALUES (?, ?)')
+      .run(loginCi, updatedMs);
+  }
+
+  // ------------------------------------------------------------ топ и удаление
+
+  /**
+   * Топ по победам (только живые с сыгранными партиями). Удалённые и
+   * нулевые не светятся. Ранг не считаем здесь — его дocчитывает
+   * boardList по месту игрока.
+   */
+  boardTop(limit) {
+    const n = Math.max(1, Math.min(100, Number(limit) || 20));
+    return this.db.prepare(
+      `SELECT nick, games, wins FROM accounts
+       WHERE deleted_ms = 0 AND games > 0
+       ORDER BY wins DESC, games ASC, nick ASC LIMIT ?`,
+    ).all(n);
+  }
+
+  /** Место игрока в топе (1-based) либо null, если его там нет. */
+  boardRank(loginCi) {
+    const me = this.getAccount(loginCi);
+    if (!me || Number(me.deleted_ms) > 0 || Number(me.games) <= 0) return null;
+    const r = this.db.prepare(
+      `SELECT COUNT(*) AS c FROM accounts
+       WHERE deleted_ms = 0 AND games > 0
+         AND (wins > ? OR (wins = ? AND games < ?))`,
+    ).get(Number(me.wins), Number(me.wins), Number(me.games));
+    return Number(r.c) + 1;
+  }
+
+  /**
+   * Мягкое удаление: стираем PII и статистику, ставим tombstone.
+   * Строка остаётся ради репликации (соседи должны узнать и забыть тоже),
+   * сессии и их отзывы чистятся отдельно в accounts.deleteAccount.
+   */
+  deleteAccount(loginCi) {
+    const cur = this.getAccount(loginCi);
+    if (!cur || Number(cur.deleted_ms) > 0) return false;
+    const tomb = Math.max(Date.now(), Number(cur.updated_ms) + 1);
+    this._applyTombstone(loginCi, tomb, tomb);
+    return true;
+  }
+
+  /** Убрать tombstone перед перерегистрацией того же логина (свежая запись). */
+  wipeTombstone(loginCi) {
+    this.db.prepare('DELETE FROM accounts WHERE login_ci = ? AND deleted_ms > 0')
+      .run(loginCi);
+  }
+
+  /** Хеши всех сессий логина — чтобы отозвать их все при удалении. */
+  sessionsOf(loginCi) {
+    return this.db.prepare('SELECT token_hash FROM sessions WHERE login_ci = ?')
+      .all(loginCi).map((r) => r.token_hash);
   }
 
   // ------------------------------------------------------------ outbox

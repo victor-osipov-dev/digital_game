@@ -309,6 +309,11 @@ function rowToAccount(row) {
     created_ms: row.created_ms,
     updated_ms: row.updated_ms,
     session_epoch: Number(row.session_epoch) || 0,
+    // Статистика и tombstone едут тем же outbox — иначе топ
+    // расходился бы между серверами, а удаления не доходили бы.
+    games: Number(row.games) || 0,
+    wins: Number(row.wins) || 0,
+    deleted_ms: Number(row.deleted_ms) || 0,
   };
 }
 

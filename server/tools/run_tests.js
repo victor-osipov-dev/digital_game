@@ -548,6 +548,136 @@ test('токен ya-аккаунта подходит для resume', () => {
   assert.strictEqual(accounts.resume(r.token).ok, true);
 });
 
+// ================================================================ топ и удаление
+group('== Таблица лидеров и удаление аккаунта ==');
+
+test('addResult пишет игры/победы и кладёт строку в outbox', () => {
+  assert.ok(accounts.register('boarda', 'secret123', 'ТопА').ok);
+  const before = db.outboxSeq();
+  assert.strictEqual(db.addResult('boarda', true), true);
+  assert.strictEqual(db.getAccount('boarda').games, 1);
+  assert.strictEqual(db.getAccount('boarda').wins, 1);
+  assert.ok(db.outboxSeq() > before, 'состояние уехало соседям');
+  db.addResult('boarda', false);
+  assert.strictEqual(db.getAccount('boarda').games, 2);
+  assert.strictEqual(db.getAccount('boarda').wins, 1);
+});
+
+test('реплика несёт статистику, слияние — через max', () => {
+  const how = db.mergeRemoteAccount({
+    login_ci: 'boardpeer', login: 'BoardPeer', nick: 'Сосед',
+    pwd_hash: 's$h', origin: 'srv-other',
+    created_ms: 1, updated_ms: 2, session_epoch: 0, games: 5, wins: 3,
+  });
+  assert.strictEqual(how, 'inserted');
+  assert.strictEqual(db.getAccount('boardpeer').games, 5);
+  assert.strictEqual(db.getAccount('boardpeer').wins, 3);
+  // Контент старее — статистика всё равно подтягивается, ник не откатывается.
+  const how2 = db.mergeRemoteAccount({
+    login_ci: 'boardpeer', login: 'BoardPeer', nick: 'Другой',
+    pwd_hash: 's$h', origin: 'srv-other',
+    created_ms: 1, updated_ms: 1, session_epoch: 0, games: 7, wins: 4,
+  });
+  assert.strictEqual(how2, 'stale');
+  assert.strictEqual(db.getAccount('boardpeer').games, 7);
+  assert.strictEqual(db.getAccount('boardpeer').nick, 'Сосед');
+  // Свежий контент с меньшими числами: ник обновляется, счёт — max.
+  const how3 = db.mergeRemoteAccount({
+    login_ci: 'boardpeer', login: 'BoardPeer', nick: 'Новее',
+    pwd_hash: 's$h', origin: 'srv-other',
+    created_ms: 1, updated_ms: 3, session_epoch: 0, games: 1, wins: 1,
+  });
+  assert.strictEqual(how3, 'updated');
+  assert.strictEqual(db.getAccount('boardpeer').nick, 'Новее');
+  assert.strictEqual(db.getAccount('boardpeer').games, 7);
+  assert.strictEqual(db.getAccount('boardpeer').wins, 4);
+});
+
+test('чужой origin статистику подтягивает, контент — нет', () => {
+  assert.ok(accounts.register('boardown', 'secret123', 'Свой').ok);
+  const how = db.mergeRemoteAccount({
+    login_ci: 'boardown', login: 'BoardOwn', nick: 'Чужой',
+    pwd_hash: 'evil$hash', origin: 'srv-evil',
+    created_ms: 1, updated_ms: Date.now(), session_epoch: 0, games: 9, wins: 9,
+  });
+  assert.strictEqual(how, 'not-owner');
+  const acc = db.getAccount('boardown');
+  assert.strictEqual(acc.nick, 'Свой', 'ник не угнан');
+  assert.strictEqual(acc.games, 9, 'а счёт со всех серверов виден');
+  assert.strictEqual(acc.wins, 9);
+});
+
+test('boardList: топ по победам, себя и ранг, без чужих данных', () => {
+  assert.ok(accounts.register('boardme', 'secret123', 'Ясам').ok);
+  db.addResult('boardme', true);
+  db.addResult('boardme', true);
+  db.addResult('boardme', false);
+  const b = accounts.boardList('boardme', 20);
+  assert.ok(Array.isArray(b.entries) && b.entries.length >= 2);
+  assert.ok(b.entries[0].wins >= b.entries[1].wins, 'упорядочен по победам');
+  assert.ok(b.me && b.me.nick === 'Ясам' && b.me.games === 3 && b.me.wins === 2
+    && b.me.rank >= 1);
+  for (const e of b.entries) {
+    assert.ok(!('pwd_hash' in e) && !('login' in e) && !('login_ci' in e),
+      'наружу только ник и счёт');
+  }
+  assert.strictEqual(accounts.boardList('nosuchuser', 20).me, null, 'гостю места нет');
+});
+
+test('удаление: сессии мрут, вход закрыт, топ чист, ник свободен', () => {
+  assert.ok(accounts.register('delme', 'secret123', 'Сносимый').ok);
+  const token = accounts.login('delme', 'secret123').token;
+  db.addResult('delme', true);
+  assert.strictEqual(accounts.deleteAccount('delme').ok, true);
+  assert.strictEqual(accounts.resume(token).ok, false, 'старый токен мёртв');
+  assert.strictEqual(accounts.sessionAlive(token), false);
+  assert.strictEqual(accounts.login('delme', 'secret123').ok, false, 'вход закрыт');
+  assert.strictEqual(db.addResult('delme', true), false, 'мёртвым не начисляем');
+  const b = accounts.boardList('delme', 100);
+  assert.ok(!b.entries.some((e) => e.nick === 'Сносимый'), 'топа нет');
+  assert.strictEqual(b.me, null);
+  assert.ok(accounts.register('delme', 'secret123', 'Заново').ok, 'ник свободен');
+  assert.strictEqual(db.getAccount('delme').games, 0, 'статистика не воскресает');
+  assert.strictEqual(db.getAccount('delme').nick, 'Заново');
+});
+
+test('tombstone доезжает до соседа через gossip', () => {
+  assert.ok(accounts.register('delsync', 'secret123', 'Синхронный').ok);
+  const token = accounts.login('delsync', 'secret123').token;
+  const oldDbPath = config.dbPath;
+  const otherPath = path.join(TMP, 'del-gossip.sqlite3');
+  for (const suffix of ['', '-wal', '-shm', '-journal']) {
+    try { fs.rmSync(otherPath + suffix, { force: true }); } catch (_) { /* нет файла */ }
+  }
+  config.dbPath = otherPath;
+  const dbB = new Db();
+  const accountsB = new Accounts(dbB);
+  try {
+    const clusterA = new Cluster(db);
+    const clusterB = new Cluster(dbB);
+    const first = clusterA.handleGossip({ from: { server_id: 'peer-a' }, since: 0, revSince: 0 });
+    clusterB.ingest(first);
+    assert.ok(dbB.getAccount('delsync'), 'аккаунт сначала есть везде');
+    assert.strictEqual(accounts.deleteAccount('delsync').ok, true);
+    const second = clusterA.handleGossip({ from: { server_id: 'peer-a' }, since: 0, revSince: 0 });
+    clusterB.ingest(second);
+    assert.strictEqual(accountsB.login('delsync', 'secret123').ok, false, 'на соседе вход закрыт');
+    assert.strictEqual(accountsB.resume(token).ok, false, 'на соседе токен мёртв');
+    assert.ok(accountsB.register('delsync', 'secret123', 'Свежак').ok, 'перерегистрация везде');
+    const third = clusterB.handleGossip({ from: { server_id: 'peer-b' }, since: 0, revSince: 0 });
+    clusterA.ingest(third);
+    const back = db.getAccount('delsync');
+    assert.ok(back && Number(back.deleted_ms) === 0 && back.nick === 'Свежак',
+      'воскрешение принято как свежая запись');
+  } finally {
+    dbB.close();
+    config.dbPath = oldDbPath;
+    for (const suffix of ['', '-wal', '-shm', '-journal']) {
+      try { fs.rmSync(otherPath + suffix, { force: true }); } catch (_) { /* нет файла */ }
+    }
+  }
+});
+
 test('служебные ники и управляющие символы отклоняются', () => {
   for (const nick of ['Админ', 'Поддержка', 'Бот 2', 'bot', 'bad\nnick']) {
     assert.strictEqual(accounts.register(`nick${nick.length}`, 'secret123', nick).ok, false, nick);
@@ -1915,6 +2045,87 @@ test('auth.ya доступен без входа (иначе им нельзя �
   assert.ok(good.token && good.token.includes('.'));
   assert.strictEqual(ctx.user && ctx.user.login, 'ya:555001');
   hub.stop();
+});
+
+// Hub-зависимые тесты топа/удаления — только здесь: newHub и rooms
+// объявлены ниже по файлу, раньше их трогать нельзя (TDZ).
+test('финиш партии пишет статистику только людям за столом', () => {
+  assert.ok(accounts.register('wina', 'secret123', 'Победитель').ok);
+  assert.ok(accounts.register('winb', 'secret123', 'Второй').ok);
+  const hub = newHub();
+  try {
+    const room = {
+      code: 'TST', state: 'playing',
+      game: {
+        finished: true, winner: 0,
+        players: [
+          { isBot: false, name: 'Победитель' },
+          { isBot: false, name: 'Второй' },
+          { isBot: true, name: 'Бот' },
+        ],
+      },
+      players: [{ userId: 'wina' }, { userId: 'winb' }, { userId: null, isBot: true }],
+    };
+    hub.recordGameResult(room);
+    assert.strictEqual(db.getAccount('wina').wins, 1);
+    assert.strictEqual(db.getAccount('wina').games, 1);
+    assert.strictEqual(db.getAccount('winb').wins, 0);
+    assert.strictEqual(db.getAccount('winb').games, 1);
+    hub.recordGameResult(room);
+    assert.strictEqual(db.getAccount('wina').games, 1, 'повторный финиш не дублирует');
+    room._statsRecorded = false;
+    room.game.winner = -1;
+    hub.recordGameResult(room);
+    assert.strictEqual(db.getAccount('wina').games, 2, 'финиш без победителя — лишь сыгранная');
+    assert.strictEqual(db.getAccount('wina').wins, 1);
+  } finally {
+    hub.stop();
+  }
+});
+
+test('board.list по маршруту требует входа, вошедшему отвечает', () => {
+  const hub = newHub();
+  try {
+    const msgs = [];
+    const ctx = {
+      socket: { readyState: 1, send: (p) => msgs.push(JSON.parse(p)) },
+      ip: '127.0.0.1', authFails: 0, authWindowStart: Date.now(),
+    };
+    hub.onMessage(ctx, JSON.stringify({ t: C2S.BOARD_LIST }));
+    assert.strictEqual(msgs[msgs.length - 1].t, S2C.AUTH_ERR);
+    const login = accounts.login('boardme', 'secret123');
+    const ctx2 = {
+      socket: { readyState: 1, send: (p) => msgs.push(JSON.parse(p)) },
+      ip: '127.0.0.1', authFails: 0, authWindowStart: Date.now(),
+      user: { id: 'boardme', nick: 'Ясам' }, token: login.token,
+    };
+    hub.onMessage(ctx2, JSON.stringify({ t: C2S.BOARD_LIST }));
+    const good = msgs[msgs.length - 1];
+    assert.strictEqual(good.t, S2C.BOARD_LIST, JSON.stringify(good));
+    assert.ok(Array.isArray(good.entries) && good.me && good.me.nick === 'Ясам');
+  } finally {
+    hub.stop();
+  }
+});
+
+test('account.delete по маршруту рвёт сессию и чистит клиента', () => {
+  const hub = newHub();
+  try {
+    assert.ok(accounts.register('delroute', 'secret123', 'Маршрутный').ok);
+    const token = accounts.login('delroute', 'secret123').token;
+    const msgs = [];
+    const ctx = {
+      socket: { readyState: 1, send: (p) => msgs.push(JSON.parse(p)) },
+      ip: '127.0.0.1', authFails: 0, authWindowStart: Date.now(),
+      user: { id: 'delroute', nick: 'Маршрутный' }, token,
+    };
+    hub.onMessage(ctx, JSON.stringify({ t: C2S.ACCOUNT_DELETE }));
+    assert.strictEqual(msgs[msgs.length - 1].t, S2C.ACCOUNT_DELETED);
+    assert.strictEqual(ctx.user, null, 'контекст разлогинен');
+    assert.strictEqual(accounts.resume(token).ok, false);
+  } finally {
+    hub.stop();
+  }
 });
 
 test('боты ждут друг друга 3 секунды, а после человека идут сразу', () => {

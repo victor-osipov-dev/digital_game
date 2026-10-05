@@ -196,3 +196,71 @@ static func poll_player() -> Dictionary:
 		data = null
 	return {"done": bool(r.get("d", false)),
 		"data": data, "error": String(r.get("e", ""))}
+
+
+## Имя лидерборда в консоли Яндекс Игр. Создаётся один раз разработчиком
+## в консоли (иначе записи и чтение отвечают ошибкой — она видна в флагах
+## ниже, игра не падает). Очки — число побед С НАШЕГО СЕРВЕРА: клиент
+## отчитывается серверным числом, свой топ сервер считает сам.
+const LB_NAME := "wins"
+
+
+## Записи лидерборда: запускает чтение, результат — в poll_lb_entries.
+## Новый API (getEntries) с запасным старым (getLeaderboardEntries):
+## что есть в рантайме, то и едет — стаб dev-proxy логирует вызов сам.
+static func request_lb_entries() -> void:
+	_eval("(function(){window.__yaLbDone=false;window.__yaLbData=null;" \
+		+ "window.__yaLbError='';" \
+		+ "function fail(m){window.__yaLbError=String(m);window.__yaLbDone=true;}" \
+		+ "try{if(!window.__ysdk)throw 'nosdk';" \
+		+ "window.__ysdk.getLeaderboards().then(function(lbs){if(!lbs)throw 'no-lb';" \
+		+ "if(lbs.getEntries)return lbs.getEntries('" + LB_NAME + "');" \
+		+ "if(lbs.getLeaderboardEntries)return lbs.getLeaderboardEntries('" + LB_NAME + "');" \
+		+ "throw 'no-entries-api';}).then(function(res){var out={entries:[],userRank:0};" \
+		+ "try{var list=res.entries||res.leaderboardEntries||[];" \
+		+ "for(var i=0;i<list.length;i++){var e=list[i]||{};var pl=e.player||{};" \
+		+ "out.entries.push({name:String(pl.publicName||'')," \
+		+ "score:Number(e.score||0),rank:Number(e.rank||0)});}" \
+		+ "out.userRank=Number(res.userRank||0);}catch(e){}" \
+		+ "window.__yaLbData=out;window.__yaLbDone=true;})" \
+		+ ".catch(function(e){fail(e&&e.message||e);});}" \
+		+ "catch(e){fail(e&&e.message||e);}})()")
+
+
+## Состояние чтения таблицы: {done, data ({entries, userRank} или null), error}.
+static func poll_lb_entries() -> Dictionary:
+	var r := _eval_dict("({d:!!window.__yaLbDone,t:(window.__yaLbData||null)," \
+		+ "e:String(window.__yaLbError||'')})")
+	if r.is_empty():
+		return {"done": true, "data": null, "error": "nosdk"}
+	var data = r.get("t", null)
+	if data != null and not (data is Dictionary):
+		data = null
+	return {"done": bool(r.get("d", false)),
+		"data": data, "error": String(r.get("e", ""))}
+
+
+## Отчёт очков (число побед с сервера) в лидерборд. Только явный вызов
+## после партии — никакого автоспама. Флаги: __yaLbReportDone/Error.
+static func report_lb_score(score: int) -> void:
+	_eval("(function(){window.__yaLbReportDone=false;window.__yaLbReportError='';" \
+		+ "function fail(m){window.__yaLbReportError=String(m);" \
+		+ "window.__yaLbReportDone=true;}" \
+		+ "try{if(!window.__ysdk)throw 'nosdk';" \
+		+ "window.__ysdk.getLeaderboards().then(function(lbs){if(!lbs)throw 'no-lb';" \
+		+ "if(lbs.setScore)return lbs.setScore({leaderboardName:'" + LB_NAME + "'," \
+		+ "score:" + str(score) + "});" \
+		+ "if(lbs.setLeaderboardScore)return lbs.setLeaderboardScore('" + LB_NAME + "'," \
+		+ str(score) + ");" \
+		+ "throw 'no-setscore-api';}).then(function(){window.__yaLbReportDone=true;})" \
+		+ ".catch(function(e){fail(e&&e.message||e);});}" \
+		+ "catch(e){fail(e&&e.message||e);}})()")
+
+
+## Состояние отчёта: {done, error}.
+static func poll_lb_report() -> Dictionary:
+	var r := _eval_dict("({d:!!window.__yaLbReportDone," \
+		+ "e:String(window.__yaLbReportError||'')})")
+	if r.is_empty():
+		return {"done": true, "error": "nosdk"}
+	return {"done": bool(r.get("d", false)), "error": String(r.get("e", ""))}

@@ -94,6 +94,10 @@ function b64u(buf) {
   return Buffer.from(buf).toString('base64url');
 }
 
+// Время жизни токена: отзывы сессий при удалении аккаунта живут столько же,
+// иначе отозванный токен воскрес бы на соседе после чистки просроченных.
+const TOKEN_TTL_MS = 90 * 24 * 3600 * 1000;
+
 function signToken(loginCi, sessionEpoch) {
   const now = Date.now();
   const payload = {
@@ -104,7 +108,7 @@ function signToken(loginCi, sessionEpoch) {
     v: 2,
     u: Number(sessionEpoch) || 0,
     iat: now,
-    exp: now + 90 * 24 * 3600 * 1000,
+    exp: now + TOKEN_TTL_MS,
   };
   const body = b64u(JSON.stringify(payload));
   const sig = crypto.createHmac('sha256', config.clusterSecret).update(body).digest('base64url');
@@ -162,6 +166,9 @@ class Accounts {
     if (ne) return { ok: false, reason: ne };
 
     const loginCi = normalizeLogin(loginRaw);
+    // Удалённый логин можно занять заново: tombstone стираем, дальше —
+    // обычное создание свежей записи (статистика и данные не воскресают).
+    if (this._isDeleted(loginCi)) this.db.wipeTombstone(loginCi);
     const now = Date.now();
     const rec = {
       login_ci: loginCi,
@@ -181,7 +188,9 @@ class Accounts {
   login(loginRaw, password) {
     const loginCi = normalizeLogin(loginRaw);
     const acc = this.db.getAccount(loginCi);
-    if (!acc) {
+    // Удалённый — как несуществующий: та же общая ошибка и та же
+    // стоимость хеширования, чтобы не выдавать факт прошлого существования.
+    if (!acc || this._isDeleted(loginCi)) {
       // Ровно столько работы, сколько при реальном логине, чтобы по
       // времени ответа нельзя было перебором отличить несуществующий
       // логин от неверного пароля. Текст ошибки тоже общий: разные
@@ -217,6 +226,11 @@ class Accounts {
     const login = `ya:${uid}`;
     const loginCi = login.toLowerCase();
     let acc = this.db.getAccount(loginCi);
+    // Удалённый UID занимается заново свежей записью (как в register).
+    if (acc && this._isDeleted(loginCi)) {
+      this.db.wipeTombstone(loginCi);
+      acc = null;
+    }
     if (!acc) {
       let nick = String(nickRaw || '').trim();
       if (checkNick(nick)) nick = `Игрок-${uid.slice(-4)}`;
@@ -255,7 +269,9 @@ class Accounts {
     const payload = verifyToken(token);
     if (!payload) return { ok: false, reason: 'Сессия недействительна' };
     const acc = this.db.getAccount(payload.l);
-    if (!acc) return { ok: false, reason: 'Сессия недействительна' };
+    // Удалённый аккаунт старым токеном не воскрешается (сессии при
+    // удалении отзываются, но сам токен мог сохраниться у клиента).
+    if (!acc || this._isDeleted(payload.l)) return { ok: false, reason: 'Сессия недействительна' };
 
     const fresh = tokenEpochOk(payload, acc);
     const hash = tokenHash(token);
@@ -292,7 +308,7 @@ class Accounts {
     const payload = verifyToken(token);
     if (!payload || typeof payload.l !== 'string') return false;
     const acc = this.db.getAccount(payload.l);
-    if (!acc || !tokenEpochOk(payload, acc)) return false;
+    if (!acc || this._isDeleted(payload.l) || !tokenEpochOk(payload, acc)) return false;
     if (this.db.revokedSession(tokenHash(token))) return false;
     return true;
   }
@@ -322,6 +338,49 @@ class Accounts {
     if (ne) return { ok: false, reason: ne };
     const nick = String(nickRaw).trim().slice(0, 24);
     return { ok: true, account: this.db.updateAccount(account.login_ci, { nick }) };
+  }
+
+  /** Tombstone-проверка: true — аккаунт удалён (строка-пустышка для реплики). */
+  _isDeleted(loginCi) {
+    const acc = this.db.getAccount(loginCi);
+    return !!acc && Number(acc.deleted_ms) > 0;
+  }
+
+  /**
+   * Удаление аккаунта со всеми данными: все сессии отзываются (отзывы
+   * реплицируются штатным журналом), запись превращается в tombstone без
+   * PII и статистики. Возвращает ok — дальше хаб рвёт текущее соединение.
+   */
+  deleteAccount(loginCi) {
+    const acc = this.db.getAccount(loginCi);
+    if (!acc || Number(acc.deleted_ms) > 0) return { ok: false, reason: 'Аккаунт не найден' };
+    const now = Date.now();
+    for (const hash of this.db.sessionsOf(loginCi)) {
+      this.db.dropSession(hash);
+      this.db.revokeSession(hash, loginCi, now, now + TOKEN_TTL_MS);
+    }
+    this.db.deleteAccount(loginCi);
+    log.info(`удаление аккаунта: ${loginCi} (origin ${config.serverId})`);
+    return { ok: true };
+  }
+
+  /**
+   * Таблица лидеров: топ сервера (только проверенные сервером очки —
+   * ручек записи статистики у клиентов нет) плюс место вызывающего.
+   */
+  boardList(loginCi, limit) {
+    const entries = this.db.boardTop(limit).map((r) => ({
+      nick: r.nick, games: Number(r.games), wins: Number(r.wins),
+    }));
+    let me = null;
+    const acc = loginCi ? this.db.getAccount(String(loginCi)) : null;
+    if (acc && Number(acc.deleted_ms) === 0 && Number(acc.games) > 0) {
+      me = {
+        nick: acc.nick, games: Number(acc.games), wins: Number(acc.wins),
+        rank: this.db.boardRank(acc.login_ci),
+      };
+    }
+    return { entries, me };
   }
 
   /** То, что сервер отдаёт наружу. Хеш пароля наружу не уходит. */

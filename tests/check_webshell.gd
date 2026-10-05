@@ -32,6 +32,7 @@ func _boot() -> void:
 	test_preset(preset)
 	test_bridge(bridge)
 	test_bridge_reads(bridge)
+	test_report(bridge)
 	if fails == 0:
 		print("\nWEB SHELL: все %d проверок прошли" % total)
 		quit(0)
@@ -80,6 +81,35 @@ func test_bridge_reads(bridge: String) -> void:
 	ok("все пять опросов на _eval_dict",
 		bridge.count("_eval_dict(") >= 6,
 		"helper + ready/hint/endgame/auth/player")
+
+
+func test_report(bridge: String) -> void:
+	section("лидерборд Яндекс Игр")
+	ok("имя таблицы задано константой",
+		bridge.contains('const LB_NAME'), "имя должно совпадать с консолью")
+	ok("есть чтение записей", bridge.contains("request_lb_entries"),
+		"иначе нечего показать в лобби")
+	ok("есть отчёт очков", bridge.contains("report_lb_score"),
+		"иначе победы не попадут в таблицу Яндекса")
+	ok("записи идут через _eval_dict",
+		bridge.contains("poll_lb_entries") and bridge.contains("_eval_dict"),
+		"иначе opaque-объект вместо Dictionary")
+	var game := _read("res://scripts/ui/game.gd")
+	ok("экран победы отчитывается", game.contains("_report_win_to_yandex()"),
+		"иначе таблица Яндекса не узнает о партиях")
+	var at := game.find("func _report_win_to_yandex")
+	var rep := ""
+	if at >= 0:
+		rep = game.substr(at)
+		var nx := rep.find("\nfunc ", 1)
+		if nx >= 0:
+			rep = rep.left(nx)
+	ok("отчитываемся серверным числом, а не локальным",
+		rep.contains("board_list") and rep.contains("report_lb_score"),
+		"клиентское число накручивается — только me.wins с сервера")
+	ok("только онлайн и только Web",
+		rep.contains("_online") and rep.contains('OS.has_feature("web")'),
+		"офлайн и Android в таблицу Яндекса не пишут")
 
 
 func _read(path: String) -> String:

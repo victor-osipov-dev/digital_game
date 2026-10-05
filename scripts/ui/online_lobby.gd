@@ -62,6 +62,22 @@ var _ya_busy := false
 ## зачем входить, и даёт честный выход гостем. Строится лениво.
 var _ya_modal: ColorRect = null
 var _ya_panel: PanelContainer = null
+## Страница таблицы лидеров: серверный проверенный топ + (Web) Яндекс.
+var _page_board: VBoxContainer = null
+var _board_box: VBoxContainer = null
+var _board_me: Label = null
+var _board_note: Label = null
+var _ya_board_wrap: VBoxContainer = null
+var _ya_board_box: VBoxContainer = null
+var _ya_board_note: Label = null
+## Подтверждение удаления аккаунта (только Android): строится лениво,
+## служит и окном «удалено» (без кнопки отмены).
+var _del_modal: ColorRect = null
+var _del_title: Label = null
+var _del_text: Label = null
+var _del_ok: Button = null
+var _del_cancel: Button = null
+var _del_action: Callable = Callable()
 
 var _server_label: Label = null
 var _server_box: VBoxContainer = null
@@ -76,6 +92,7 @@ var _room_pass: LineEdit = null
 var _require_30: CheckBox = null
 var _create_btn: Button = null
 var _play_btn: Button = null
+var _board_btn: Button = null
 var _tabs_row: BoxContainer = null
 var _tab_group: ButtonGroup = null
 var _tab_create_btn: Button = null
@@ -665,6 +682,8 @@ func _ysdk_poll(kind: String) -> Dictionary:
 		return (sdk as GDScript).poll_auth_dialog()
 	if String(kind) == "sdk":
 		return (sdk as GDScript).poll_sdk_ready()
+	if String(kind) == "lb":
+		return (sdk as GDScript).poll_lb_entries()
 	return (sdk as GDScript).poll_player()
 
 
@@ -1401,14 +1420,14 @@ func _stack(row: BoxContainer, narrow: bool) -> void:
 # =============================================================== общие мелочи
 
 func _set_page(page: VBoxContainer) -> void:
-	for p in [_page_auth, _page_rooms, _page_lobby]:
+	for p in [_page_auth, _page_rooms, _page_lobby, _page_board]:
 		(p as Control).visible = p == page
 	_update_status()
 
 
 ## Спрятать все страницы (фон быстрого Web-входа: пустая шапка + модалка).
 func _hide_all_pages() -> void:
-	for p in [_page_auth, _page_rooms, _page_lobby]:
+	for p in [_page_auth, _page_rooms, _page_lobby, _page_board]:
 		(p as Control).visible = false
 
 
@@ -1750,9 +1769,11 @@ func _build() -> void:
 	_page_auth = _build_auth()
 	_page_rooms = _build_rooms()
 	_page_lobby = _build_lobby()
+	_page_board = _build_board()
 	root.add_child(_page_auth)
 	root.add_child(_page_rooms)
 	root.add_child(_page_lobby)
+	root.add_child(_page_board)
 
 	Net.connection_changed.connect(_on_net_connection)
 	# Приветствие — момент, когда вход на сервере становится возможен:
@@ -1953,6 +1974,11 @@ func _build_rooms() -> VBoxContainer:
 	_apply_accent(_play_btn, Color("2E7D32"), Color("388E3C"), Color("1B5E20"))
 	page.add_child(_play_btn)
 
+	# --- таблица лидеров: серверный топ + Яндекс (только Web).
+	_board_btn = _button(Lang.t("Таблица лидеров"), 16)
+	_board_btn.pressed.connect(_show_board)
+	page.add_child(_board_btn)
+
 	# --- вкладки: создать комнату или войти по коду. Видна только одна
 	# форма, а в начале — ни одной: список комнат при этом показывается
 	# всегда. Кнопки-переключатели в группе: движок сам держит нажатое
@@ -2096,6 +2122,16 @@ func _logout_row(page: VBoxContainer) -> void:
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_END
 	page.add_child(row)
+	if OS.has_feature("android"):
+		# Удаление аккаунта — только Android: красная кнопка рядом
+		# с выходом, дальше модалка с подтверждением.
+		var del := _button(Lang.t("Удалить аккаунт"), 15)
+		del.custom_minimum_size = Vector2(
+			_text_content_width(del, del.text), Settings.touch(40))
+		del.size_flags_horizontal = Control.SIZE_SHRINK_END
+		_apply_accent(del, Color("B71C1C"), Color("C62828"), Color("7F0000"))
+		del.pressed.connect(_on_delete_account)
+		row.add_child(del)
 	var out := _button(Lang.t("Выйти"), 15)
 	# Ряд не складывается (обычный HBox), и нулевой минимум кнопки
 	# с clip_text давал полоску в 8 px с полностью срезанной подписью.
@@ -2151,6 +2187,333 @@ func _build_lobby() -> VBoxContainer:
 	_leave_btn.pressed.connect(_do_leave_room)
 	page.add_child(_leave_btn)
 	return page
+
+
+# =============================================================== таблица лидеров
+
+## Страница топа: серверный проверенный блок + (Web) блок Яндекс Игр.
+## Источник истины — сервер (очки только с реальных партий); таблица
+## Яндекса — копия для платформы, в неё клиент отчитывается серверным
+## числом побед после партии (см. _report_win_to_yandex в игре).
+func _build_board() -> VBoxContainer:
+	var page := VBoxContainer.new()
+	page.add_theme_constant_override("separation", 12)
+	page.visible = false
+	var head := BoxContainer.new()
+	head.add_theme_constant_override("separation", 8)
+	page.add_child(head)
+	head.add_child(_header(Lang.t("Таблица лидеров"), 19))
+	var back := _button(Lang.t("Назад"), 16)
+	back.custom_minimum_size = Vector2(
+		_text_content_width(back, back.text), Settings.touch(44))
+	back.size_flags_horizontal = Control.SIZE_SHRINK_END
+	back.pressed.connect(_goto_rooms)
+	head.add_child(back)
+	page.add_child(_header(Lang.t("Проверенный топ"), 17))
+	var note := Label.new()
+	note.text = Lang.t("Считается только с сыгранных партий — накрутить нельзя")
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	note.add_theme_font_size_override("font_size", Settings.fs(14))
+	note.add_theme_color_override("font_color", Color(1, 1, 1, 0.6))
+	page.add_child(note)
+	_board_box = VBoxContainer.new()
+	_board_box.add_theme_constant_override("separation", 4)
+	_board_box.custom_minimum_size = Vector2(0, 190)
+	_board_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	page.add_child(_board_box)
+	_board_me = Label.new()
+	_board_me.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_board_me.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_board_me.add_theme_font_size_override("font_size", Settings.fs(15))
+	_board_me.add_theme_color_override("font_color", Color("90CAF9"))
+	page.add_child(_board_me)
+	_board_note = Label.new()
+	_board_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_board_note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_board_note.add_theme_font_size_override("font_size", Settings.fs(15))
+	_board_note.visible = false
+	page.add_child(_board_note)
+	_ya_board_wrap = VBoxContainer.new()
+	_ya_board_wrap.add_theme_constant_override("separation", 8)
+	_ya_board_wrap.visible = OS.has_feature("web")
+	page.add_child(_ya_board_wrap)
+	_ya_board_wrap.add_child(_header(Lang.t("Яндекс Игры"), 17))
+	_ya_board_box = VBoxContainer.new()
+	_ya_board_box.add_theme_constant_override("separation", 4)
+	_ya_board_box.custom_minimum_size = Vector2(0, 120)
+	_ya_board_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_ya_board_wrap.add_child(_ya_board_box)
+	_ya_board_note = Label.new()
+	_ya_board_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_ya_board_note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_ya_board_note.add_theme_font_size_override("font_size", Settings.fs(14))
+	_ya_board_note.add_theme_color_override("font_color", Color(1, 1, 1, 0.6))
+	_ya_board_wrap.add_child(_ya_board_note)
+	return page
+
+
+func _show_board() -> void:
+	_set_page(_page_board)
+	await _load_board()
+
+
+func _load_board() -> void:
+	_board_note.visible = false
+	_render_board_rows([], Lang.t("Загружаем таблицу…"))
+	_board_me.text = ""
+	var res := await Net.board_list()
+	if not is_instance_valid(self) or not visible or not _page_board.visible:
+		return
+	if String(res.get("t", "")) != NetProtocol.BOARD_LIST_S2C:
+		_render_board_rows([], "")
+		_set_board_error(_reason(res, Lang.t("Не удалось загрузить таблицу")))
+		return
+	_render_board(res.get("entries", []), res.get("me", null))
+	await _load_ya_board()
+
+
+## Строки серверного топа + своя строка. Чистая отрисовка по данным —
+## удобно тестировать без сети.
+func _render_board(entries: Array, me) -> void:
+	var rows: Array = []
+	var my_nick := ""
+	if me is Dictionary:
+		my_nick = String((me as Dictionary).get("nick", ""))
+	var i := 0
+	for e in entries:
+		i += 1
+		if not (e is Dictionary):
+			continue
+		var d := e as Dictionary
+		var line := Lang.t("%d. %s — побед %d · партий %d") % [i,
+			String(d.get("nick", "?")), maxi(0, int(d.get("wins", 0))),
+			maxi(0, int(d.get("games", 0)))]
+		rows.append({"text": line, "mine": String(d.get("nick", "")) == my_nick \
+			and not my_nick.is_empty()})
+	_render_board_rows(rows, Lang.t("Нет сыгранных партий"))
+	if me is Dictionary and not my_nick.is_empty():
+		var m := me as Dictionary
+		_board_me.text = Lang.t("Ваше место: %d · побед %d · партий %d") % [
+			maxi(1, int(m.get("rank", 1))), maxi(0, int(m.get("wins", 0))),
+			maxi(0, int(m.get("games", 0)))]
+	else:
+		_board_me.text = Lang.t("Сыграйте партию, чтобы попасть в топ")
+
+
+func _render_board_rows(rows: Array, empty_text: String) -> void:
+	for child in _board_box.get_children():
+		_board_box.remove_child(child)
+		child.free()
+	if rows.is_empty():
+		if not empty_text.is_empty():
+			var lab := Label.new()
+			lab.text = empty_text
+			lab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			lab.add_theme_font_size_override("font_size", Settings.fs(15))
+			lab.add_theme_color_override("font_color", Color(1, 1, 1, 0.6))
+			_board_box.add_child(lab)
+		return
+	for r in rows:
+		var d := r as Dictionary
+		var lab := Label.new()
+		lab.text = String(d.get("text", ""))
+		lab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		lab.add_theme_font_size_override("font_size", Settings.fs(15))
+		if bool(d.get("mine", false)):
+			lab.text = "» " + lab.text
+			lab.add_theme_color_override("font_color", Color("90CAF9"))
+		else:
+			lab.add_theme_color_override("font_color", Color(1, 1, 1, 0.85))
+		_board_box.add_child(lab)
+
+
+func _set_board_error(text: String) -> void:
+	_board_note.text = text
+	_board_note.add_theme_color_override("font_color", Color("FF8A80"))
+	_board_note.visible = true
+
+
+## Блок Яндекс-таблицы: читаем SDK-записи и показываем рядом с нашими.
+## Нет SDK/таблицы — честная строка вместо чисел, игра не падает.
+func _load_ya_board() -> void:
+	if _ya_board_wrap == null or not (_ya_board_wrap as Control).visible:
+		return
+	_ya_board_note.add_theme_color_override("font_color", Color(1, 1, 1, 0.6))
+	_ya_board_note.text = Lang.t("Загружаем таблицу…")
+	for child in _ya_board_box.get_children():
+		_ya_board_box.remove_child(child)
+		child.free()
+	_ysdk_call("request_lb_entries")
+	if not await _ysdk_wait("lb", 20):
+		_ya_board_note.text = Lang.t("Не удалось загрузить таблицу Яндекса")
+		_ya_board_note.add_theme_color_override("font_color", Color("FF8A80"))
+		return
+	var st := _ysdk_poll("lb")
+	var data = st.get("data", null)
+	if not (data is Dictionary):
+		_ya_board_note.text = _lb_reason(st)
+		_ya_board_note.add_theme_color_override("font_color", Color("FF8A80"))
+		return
+	var entries: Array = (data as Dictionary).get("entries", [])
+	if entries.is_empty():
+		_ya_board_note.text = Lang.t("Нет сыгранных партий")
+		return
+	for e in entries:
+		if not (e is Dictionary):
+			continue
+		var d := e as Dictionary
+		var lab := Label.new()
+		lab.text = "%s — %d" % [String(d.get("name", "?")),
+			maxi(0, int(d.get("score", 0)))]
+		lab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		lab.add_theme_font_size_override("font_size", Settings.fs(15))
+		lab.add_theme_color_override("font_color", Color(1, 1, 1, 0.85))
+		_ya_board_box.add_child(lab)
+	var rank := maxi(0, int((data as Dictionary).get("userRank", 0)))
+	if rank > 0:
+		_ya_board_note.text = Lang.t("Ваше место в Яндексе: %d") % rank
+	else:
+		_ya_board_note.text = ""
+
+
+func _lb_reason(st: Dictionary) -> String:
+	var err := String(st.get("error", ""))
+	if err.is_empty() or err == "nosdk":
+		return Lang.t("Не удалось загрузить таблицу Яндекса")
+	return Lang.t("Не удалось загрузить таблицу Яндекса") + ": " + err
+
+
+# =============================================================== удаление аккаунта
+
+## Кнопка «Удалить аккаунт» (только Android, рядом с «Выйти»).
+## Из партии/комнаты удаляться нельзя: место держится за игроком и
+## партия встала бы навсегда — сначала выйти, потом удалять.
+func _on_delete_account() -> void:
+	if not _current_room.is_empty() or not Net.pending_room().is_empty():
+		_set_note(_rooms_note, Lang.t("Сначала покиньте комнату"), true)
+		return
+	_show_confirm(Lang.t("Удалить аккаунт"),
+		Lang.t("Удалятся ник, статистика и все данные. Вернуть их будет нельзя."),
+		Lang.t("Удалить"), _do_delete_account, Lang.t("Отмена"))
+
+
+## Подтверждённое удаление: сервер гасит сессии и ставит tombstone,
+## клиент чистится как при выходе. Успех — окно «удалено» и уход
+## в главное меню; отказ — красная строка на странице комнат.
+func _do_delete_account() -> void:
+	_set_note(_rooms_note, Lang.t("Удаляем аккаунт…"), false)
+	var res := await Net.delete_account()
+	if not is_instance_valid(self) or not visible:
+		return
+	if String(res.get("t", "")) != NetProtocol.ACCOUNT_DELETED:
+		_set_note(_rooms_note, _reason(res, Lang.t("Не удалось удалить аккаунт")), true)
+		return
+	_show_confirm(Lang.t("Аккаунт и все данные удалены"), "",
+		Lang.t("Понятно"), _close_after_delete, "")
+
+
+func _close_after_delete() -> void:
+	close()
+
+
+## Общая модалка-подтверждение лобби (удаление; окно «удалено» — тот же
+## каркас без отмены). Своя: модалка game.gd живёт в сцене игры.
+func _show_confirm(title: String, text: String, ok_text: String,
+		action: Callable, cancel_text: String) -> void:
+	if _del_modal == null:
+		_build_confirm()
+	_del_title.text = title
+	_del_text.text = text
+	_del_text.visible = not text.is_empty()
+	_del_ok.text = ok_text
+	_del_action = action
+	_del_cancel.visible = not cancel_text.is_empty()
+	if not cancel_text.is_empty():
+		_del_cancel.text = cancel_text
+	_del_modal.visible = true
+
+
+func _build_confirm() -> void:
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.6)
+	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	dim.visible = false
+	dim.gui_input.connect(_on_confirm_backdrop)
+	add_child(dim)
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	dim.add_child(center)
+	var panel := PanelContainer.new()
+	var psb := StyleBoxFlat.new()
+	psb.bg_color = Color(0.13, 0.13, 0.16, 0.98)
+	psb.set_corner_radius_all(10)
+	psb.content_margin_left = 20.0
+	psb.content_margin_right = 20.0
+	psb.content_margin_top = 16.0
+	psb.content_margin_bottom = 16.0
+	panel.add_theme_stylebox_override("panel", psb)
+	center.add_child(panel)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 12)
+	panel.add_child(box)
+	_del_title = Label.new()
+	_del_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_del_title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_del_title.add_theme_font_size_override("font_size", Settings.fs(20))
+	_del_title.add_theme_color_override("font_color", Color("FFD54F"))
+	box.add_child(_del_title)
+	_del_text = Label.new()
+	_del_text.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_del_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_del_text.add_theme_font_size_override("font_size", Settings.fs(15))
+	_del_text.add_theme_color_override("font_color", Color(1, 1, 1, 0.9))
+	box.add_child(_del_text)
+	_del_ok = _button(Lang.t("Удалить"), 16)
+	_del_ok.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_apply_accent(_del_ok, Color("B71C1C"), Color("C62828"), Color("7F0000"))
+	_del_ok.pressed.connect(_on_confirm_ok)
+	box.add_child(_del_ok)
+	_del_cancel = _button(Lang.t("Отмена"), 16)
+	_del_cancel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_del_cancel.pressed.connect(_on_confirm_no)
+	box.add_child(_del_cancel)
+	_del_modal = dim
+	_fit_confirm_panel(panel)
+
+
+## Ширина панели — по вьюпорту, как у модалки пользы: иначе текст
+## кнопок срезается на узком экране.
+func _fit_confirm_panel(panel: PanelContainer) -> void:
+	var vw := get_viewport_rect().size.x
+	panel.custom_minimum_size = Vector2(minf(440.0, vw - 32.0), 0)
+
+
+func _on_confirm_ok() -> void:
+	var act := _del_action
+	_hide_confirm()
+	if act.is_valid():
+		act.call()
+
+
+func _on_confirm_no() -> void:
+	_hide_confirm()
+
+
+func _hide_confirm() -> void:
+	if _del_modal != null:
+		(_del_modal as ColorRect).visible = false
+	_del_action = Callable()
+
+
+func _on_confirm_backdrop(event: InputEvent) -> void:
+	if event is InputEventMouseButton and (event as InputEventMouseButton).pressed:
+		_on_confirm_no()
+		(_del_modal as ColorRect).accept_event()
 
 
 # =============================================================== общие мелочи

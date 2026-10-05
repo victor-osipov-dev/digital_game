@@ -17,9 +17,14 @@ const LOBBY_OPEN := "lobby.open"        # {token} -> auth.ok
 const LOGOUT := "auth.logout"
 const CHANGE_PASSWORD := "auth.password" # {old, new} -> auth.ok
 const CHANGE_NICK := "auth.nick"         # {nick} -> auth.ok
+# Удаление аккаунта со всеми данными (только Android): сессии гасятся,
+# запись становится tombstone и расходится по кластеру.
+const ACCOUNT_DELETE := "account.delete" # {} -> account.deleted
 
 const SERVERS_LIST := "servers.list"
 const ROOMS_LIST := "rooms.list"
+# Топ сервера (очки только с реальных партий) + своё место.
+const BOARD_LIST := "board.list"         # {} -> board.list {entries, me}
 const ROOM_CREATE := "room.create"       # {seats, require30, name, password} -> room.state
 const ROOM_JOIN := "room.join"           # {code, password} -> room.state | game.state
 const ROOM_LEAVE := "room.leave"
@@ -48,8 +53,10 @@ const PING := "ping"
 const HELLO := "hello"
 const AUTH_OK := "auth.ok"
 const AUTH_ERR := "auth.err"
+const ACCOUNT_DELETED := "account.deleted"
 const SERVERS_LIST_S2C := "servers.list"
 const ROOMS_LIST_S2C := "rooms.list"
+const BOARD_LIST_S2C := "board.list"
 const ROOM_STATE := "room.state"
 const ROOM_LEFT := "room.left"
 const QUICK_STATE := "quick.state"
@@ -142,6 +149,10 @@ static func ok_types(command: String) -> PackedStringArray:
 			return PackedStringArray([QUICK_STATE, GAME_ERROR])
 		ROOMS_LIST:
 			return PackedStringArray([ROOMS_LIST_S2C, GAME_ERROR])
+		BOARD_LIST:
+			return PackedStringArray([BOARD_LIST_S2C, GAME_ERROR])
+		ACCOUNT_DELETE:
+			return PackedStringArray([ACCOUNT_DELETED, AUTH_ERR, GAME_ERROR])
 		SERVERS_LIST:
 			return PackedStringArray([SERVERS_LIST_S2C, GAME_ERROR])
 		REGISTER, LOGIN, RESUME, LOBBY_OPEN, YA_LOGIN:

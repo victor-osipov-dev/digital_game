@@ -27,6 +27,10 @@ const C2S = {
   LOGOUT: 'auth.logout',          // {}
   CHANGE_PASSWORD: 'auth.password', // {old, new} -> auth.ok
   CHANGE_NICK: 'auth.nick',       // {nick} -> auth.ok
+  // Удаление аккаунта со всеми данными (только Android-кнопка в клиенте):
+  // сессии гасятся, запись превращается в tombstone и расходится по
+  // кластеру. Ответ — ДО разрыва сессии, дальше сокет считается гостем.
+  ACCOUNT_DELETE: 'account.delete', // {} -> account.deleted
 
   // --- кластер и комнаты ------------------------------------------------
   SERVERS_LIST: 'servers.list',   // {} -> servers.list
@@ -37,6 +41,11 @@ const C2S = {
   ROOM_DROP: 'room.drop',         // {} -> room.left  (полный выход, место освобождается сразу)
   ROOM_START: 'room.start',       // {} -> room.state | game.state
   ROOM_CHAT: 'room.chat',         // {text} -> room.chat  (зарезервировано)
+
+  // --- таблица лидеров ------------------------------------------------
+  // Сервер — источник истины: очки начисляются только с реально
+  // сыгранных партий (клиентских ручек записи статистики нет вообще).
+  BOARD_LIST: 'board.list',     // {} -> board.list {entries:[{nick,games,wins}], me}
 
   // --- быстрый матч -----------------------------------------------------
   QUICK_JOIN: 'quick.join',       // {seats, require30} -> quick.state | room.state
@@ -64,8 +73,10 @@ const S2C = {
   HELLO: 'hello',
   AUTH_OK: 'auth.ok',
   AUTH_ERR: 'auth.err',
+  ACCOUNT_DELETED: 'account.deleted',
   SERVERS_LIST: 'servers.list',
   ROOMS_LIST: 'rooms.list',
+  BOARD_LIST: 'board.list',
   ROOM_STATE: 'room.state',
   ROOM_LEFT: 'room.left',
   QUICK_STATE: 'quick.state',

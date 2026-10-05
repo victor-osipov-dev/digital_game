@@ -628,6 +628,31 @@ func logout() -> Dictionary:
 	return res
 
 
+## Удаление аккаунта со всеми данными (только Android-кнопка в лобби).
+## Сервер отвечает account.deleted и рвёт сессию; локально чистимся
+## ровно как при выходе. Дальше лобби закрывается в главное меню,
+## а игрок видит уведомление, что данные удалены.
+func delete_account() -> Dictionary:
+	var res := await request(NetProtocol.ACCOUNT_DELETE, {},
+		PackedStringArray([NetProtocol.ACCOUNT_DELETED, NetProtocol.AUTH_ERR,
+			NetProtocol.GAME_ERROR]))
+	if String(res.get("t", "")) == NetProtocol.ACCOUNT_DELETED:
+		_user = {}
+		_state = GREETED if _greeted else OFFLINE
+		_session.clear()
+		_had_session = false
+		_set_pending_room({})
+		logged_out.emit()
+	return res
+
+
+## Топ сервера + своё место. Без входа сервер отвечает отказом —
+## дальше решает вызывающий (лобби показывает причину).
+func board_list() -> Dictionary:
+	return await request(NetProtocol.BOARD_LIST, {},
+		PackedStringArray([NetProtocol.BOARD_LIST_S2C, NetProtocol.GAME_ERROR]))
+
+
 func set_nick(nick: String) -> Dictionary:
 	var res := await request(NetProtocol.CHANGE_NICK, { "nick": nick })
 	if String(res.get("t", "")) == NetProtocol.AUTH_OK:

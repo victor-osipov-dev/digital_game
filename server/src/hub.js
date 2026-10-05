@@ -17,7 +17,7 @@ const { planGame } = require('./engine/bot');
  * нужно право что-то менять. Белый список, а не чёрный: команда,
  * добавленная в сервер позже, по умолчанию наблюдателю недоступна.
  */
-const OBSERVER_ALLOWED = [C2S.ROOMS_LIST, C2S.SERVERS_LIST, C2S.PING];
+const OBSERVER_ALLOWED = [C2S.ROOMS_LIST, C2S.SERVERS_LIST, C2S.BOARD_LIST, C2S.PING];
 
 /**
  * Валидация rows черновика стола (game.draft).
@@ -325,6 +325,18 @@ class Hub {
         this.reply(ctx, { t: S2C.AUTH_ERR, reason: 'Вы вышли' }, rid);
         break;
       }
+      case C2S.ACCOUNT_DELETE: {
+        // Удаление аккаунта со всеми данными (кнопка только в Android).
+        // Отвечаем ДО разрыва: после удаления сессия уже недействительна,
+        // клиент по ответу чистится сам и уходит в главное меню.
+        const r = this.accounts.deleteAccount(ctx.user.id);
+        if (!r.ok) { this.reply(ctx, { t: S2C.GAME_ERROR, reason: r.reason }, rid); break; }
+        this.reply(ctx, { t: S2C.ACCOUNT_DELETED }, rid);
+        this.cluster.push().catch(() => {});
+        ctx.user = null;
+        ctx.token = null;
+        break;
+      }
       case C2S.CHANGE_PASSWORD: {
         const r = this.accounts.changePassword(ctx.user.account, msg.old, msg.new);
         if (!r.ok) { this.reply(ctx, { t: S2C.GAME_ERROR, reason: r.reason }, rid); break; }
@@ -351,6 +363,15 @@ class Hub {
       case C2S.ROOMS_LIST: {
         this.reply(ctx, {
           t: S2C.ROOMS_LIST, rooms: this.rooms.listRooms(), server: this.selfPublic(),
+        }, rid);
+        break;
+      }
+      case C2S.BOARD_LIST: {
+        // Топ сервера + место вызывающего. Очки только серверные
+        // (начислены с реальных партий) — накрутить запросом нельзя.
+        const board = this.accounts.boardList(ctx.user.id, msg.limit);
+        this.reply(ctx, {
+          t: S2C.BOARD_LIST, entries: board.entries, me: board.me,
         }, rid);
         break;
       }
@@ -666,7 +687,31 @@ class Hub {
     if (room.state === 'playing' && room.game.finished) {
       const w = room.game.players[room.game.winner];
       log.info(`комната ${room.code}: победа ${w ? w.name : '?'}`);
+      this.recordGameResult(room);
     }
+  }
+
+  /**
+   * Учёт финиша партии в статистику — единственный писатель games/wins.
+   * Вызывается из afterMove при первом обнаружении finished (сторожок
+   * _statsRecorded: финиш видят все последующие ходы тоже). Боты и
+   * сошедшие с мест не учитываются; финиш без победителя — всем лишь +1
+   * к сыгранным. Клиент повлиять не может: ручек записи статистики нет.
+   */
+  recordGameResult(room) {
+    if (!room || !room.game || !room.game.finished || room._statsRecorded) return;
+    room._statsRecorded = true;
+    const wseat = room.game.winner;
+    for (let seat = 0; seat < room.game.players.length; seat++) {
+      const gp = room.game.players[seat];
+      if (!gp || gp.isBot) continue;
+      const rp = room.players[seat];
+      const loginCi = rp && rp.userId ? String(rp.userId) : null;
+      if (!loginCi) continue;
+      this.db.addResult(loginCi, seat === wseat);
+    }
+    // Статистика должна разъехаться сразу, а не ждать минутный gossip.
+    this.cluster.push().catch(() => {});
   }
 
   // ------------------------------------------------------------ боты

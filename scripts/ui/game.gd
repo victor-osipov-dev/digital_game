@@ -2101,6 +2101,7 @@ func _show_win() -> void:
 ## Собственно экран победы (после рекламы — на Web; сразу — везде ещё).
 func _show_win_screen() -> void:
 	_record_stats()
+	_report_win_to_yandex()
 	win_title.text = Lang.t("Победитель - %s") % state.player_name(state.winner)
 	win_overlay.visible = true
 	if _inspect_btn != null:
@@ -2258,6 +2259,29 @@ func _record_stats() -> void:
 			won = not state.is_bot_player(state.winner)
 		lost = not won
 	Settings.record_game(won, lost)
+
+
+## Отчёт побед в лидерборд Яндекс Игр (только Web + онлайн): число берём
+## С СЕРВЕРА (board.list → me.wins), а не из локального счётчика — иначе
+## клиент мог бы заявить любое. Серверный топ при этом считается сам,
+## сюда уходит лишь копия для таблицы Яндекса. Тихо: победа показана
+## в любом случае, SDK-ошибки — только в консоль.
+func _report_win_to_yandex() -> void:
+	if not _online or not OS.has_feature("web"):
+		return
+	var sdk = _ysdk_script()
+	if sdk == null:
+		return
+	(sdk as GDScript).call("ensure_sdk")
+	var board := await Net.board_list()
+	if not is_instance_valid(self):
+		return
+	var me = board.get("me", null)
+	if not (me is Dictionary):
+		return
+	var wins := maxi(0, int((me as Dictionary).get("wins", 0)))
+	(sdk as GDScript).call("report_lb_score", wins)
+	print("[ya-game] reported wins=%d to Yandex leaderboard" % wins)
 
 func _on_deck_pressed() -> void:
 	if not _can_act():

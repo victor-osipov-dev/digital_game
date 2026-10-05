@@ -73,7 +73,7 @@ func _on_frame() -> void:
 			}])
 		1:
 			phase = 2
-			_checks()
+			await _checks()
 			quit(0 if fails == 0 else 1)
 
 
@@ -132,6 +132,9 @@ func _checks() -> void:
 	_check_ya_benefit_width()
 	_check_hidden_pages()
 	_check_tab_padding()
+	_check_board_render()
+	_check_board_page()
+	_check_delete_flow()
 
 
 ## Матрица ошибок входа/регистрации: каждая причина — и клиентская
@@ -276,6 +279,79 @@ func _check_tab_padding() -> void:
 		var sb := b.get_theme_stylebox("normal")
 		var left := sb.content_margin_left if sb != null else -1.0
 		check(left >= 28.0, "у %s боковые поля %.0f, надо 28" % [name, left])
+
+
+## Таблица лидеров: отрисовка по данным без сети, своя строка подсвечена.
+func _check_board_render() -> void:
+	var lobby := inst
+	var entries := [
+		{"nick": "Альфа", "games": 10, "wins": 7},
+		{"nick": "Бета", "games": 12, "wins": 5},
+		"мусор",
+	]
+	lobby.call("_render_board", entries,
+		{"nick": "Бета", "games": 12, "wins": 5, "rank": 2})
+	var box = inst.get("_board_box") as Control
+	check(box.get_child_count() == 2, "две строки топа, мусор пропущен")
+	var second := (box.get_child(1) as Label).text
+	check(second.begins_with("» "), "своя строка помечена")
+	var me := (inst.get("_board_me") as Label).text
+	check(me.contains("2") and me.contains("5"),
+		"своё место и победы показаны, got: %s" % me)
+	lobby.call("_render_board", [], null)
+	check((box.get_child_count()) == 1, "пустой топ — одна строка-заглушка")
+	check((inst.get("_board_me") as Label).text.contains("Сыграйте"),
+		"без игр зовём сыграть")
+
+
+## Страница таблицы открывается без сети (с ошибкой загрузки, но видна).
+func _check_board_page() -> void:
+	var lobby := inst
+	lobby.call("_show_board")
+	for i in range(30):
+		await process_frame
+		if (inst.get("_board_note") as Label).visible:
+			break
+	check(_page_visible("_page_board"), "страница таблицы открывается")
+	check((inst.get("_board_note") as Label).visible,
+		"без сети показана причина, а не пустота")
+
+
+## Удаление аккаунта: кнопка только на Android, модалка, отказ виден.
+func _check_delete_flow() -> void:
+	var lobby := inst
+	check(_find_modal_button(inst, "Удалить аккаунт") == null,
+		"вне Android кнопки удаления нет")
+	# Из комнаты удаляться нельзя — сначала выйти.
+	inst.set("_current_room", {"code": "X1"})
+	lobby.call("_on_delete_account")
+	check(_rooms_note_text().contains("покиньте"),
+		"в комнате просят выйти, got: %s" % _rooms_note_text())
+	inst.set("_current_room", {})
+	lobby.call("_on_delete_account")
+	var modal = inst.get("_del_modal")
+	check(modal != null and (modal as Control).visible, "модалка подтверждения видна")
+	lobby.call("_on_confirm_ok")
+	var want_note := ""
+	for i in range(30):
+		await process_frame
+		want_note = _rooms_note_text()
+		if not want_note.is_empty() and want_note != Lang.t("Удаляем аккаунт…"):
+			break
+	check(not (modal as Control).visible, "подтверждение закрывает модалку")
+	var rnote = inst.get("_rooms_note")
+	check(not want_note.is_empty()
+		and rnote.get_theme_color("font_color") == Color("FF8A80"),
+		"отказ без сети показан красным, got: %s" % want_note)
+	# Окно «удалено»: та же модалка без отмены.
+	lobby.call("_show_confirm", "Готово", "", "Понятно", Callable(), "")
+	check(not (inst.get("_del_cancel") as Control).visible,
+		"у итога нет кнопки отмены")
+
+
+func _rooms_note_text() -> String:
+	var note = inst.get("_rooms_note")
+	return String(note.text) if note != null else ""
 
 
 func _find_modal_button(node: Node, text: String) -> Button:
