@@ -62,13 +62,15 @@ var _ya_busy := false
 ## зачем входить, и даёт честный выход гостем. Строится лениво.
 var _ya_modal: ColorRect = null
 var _ya_panel: PanelContainer = null
-## Страница таблицы лидеров: серверный проверенный топ + (Web) Яндекс.
-var _page_board: VBoxContainer = null
-var _board_box: VBoxContainer = null
+## Таблица лидеров модалкой (не страницей): серверный проверенный топ
+## + (Web) Яндекс. Строится лениво.
+var _board_modal: ColorRect = null
+var _board_panel: PanelContainer = null
+var _board_grid: GridContainer = null
 var _board_me: Label = null
 var _board_note: Label = null
 var _ya_board_wrap: VBoxContainer = null
-var _ya_board_box: VBoxContainer = null
+var _ya_board_grid: GridContainer = null
 var _ya_board_note: Label = null
 ## Подтверждение удаления аккаунта (только Android): строится лениво,
 ## служит и окном «удалено» (без кнопки отмены).
@@ -1420,14 +1422,14 @@ func _stack(row: BoxContainer, narrow: bool) -> void:
 # =============================================================== общие мелочи
 
 func _set_page(page: VBoxContainer) -> void:
-	for p in [_page_auth, _page_rooms, _page_lobby, _page_board]:
+	for p in [_page_auth, _page_rooms, _page_lobby]:
 		(p as Control).visible = p == page
 	_update_status()
 
 
 ## Спрятать все страницы (фон быстрого Web-входа: пустая шапка + модалка).
 func _hide_all_pages() -> void:
-	for p in [_page_auth, _page_rooms, _page_lobby, _page_board]:
+	for p in [_page_auth, _page_rooms, _page_lobby]:
 		(p as Control).visible = false
 
 
@@ -1769,11 +1771,9 @@ func _build() -> void:
 	_page_auth = _build_auth()
 	_page_rooms = _build_rooms()
 	_page_lobby = _build_lobby()
-	_page_board = _build_board()
 	root.add_child(_page_auth)
 	root.add_child(_page_rooms)
 	root.add_child(_page_lobby)
-	root.add_child(_page_board)
 
 	Net.connection_changed.connect(_on_net_connection)
 	# Приветствие — момент, когда вход на сервере становится возможен:
@@ -1975,8 +1975,9 @@ func _build_rooms() -> VBoxContainer:
 	page.add_child(_play_btn)
 
 	# --- таблица лидеров: серверный топ + Яндекс (только Web).
+	# --- таблица лидеров: серверный топ + Яндекс (только Web).
 	_board_btn = _button(Lang.t("Таблица лидеров"), 16)
-	_board_btn.pressed.connect(_show_board)
+	_board_btn.pressed.connect(_show_board_modal)
 	page.add_child(_board_btn)
 
 	# --- вкладки: создать комнату или войти по коду. Видна только одна
@@ -2195,103 +2196,149 @@ func _build_lobby() -> VBoxContainer:
 ## Источник истины — сервер (очки только с реальных партий); таблица
 ## Яндекса — копия для платформы, в неё клиент отчитывается серверным
 ## числом побед после партии (см. _report_win_to_yandex в игре).
-func _build_board() -> VBoxContainer:
-	var page := VBoxContainer.new()
-	page.add_theme_constant_override("separation", 12)
-	page.visible = false
-	var head := BoxContainer.new()
-	head.add_theme_constant_override("separation", 8)
-	page.add_child(head)
-	head.add_child(_header(Lang.t("Таблица лидеров"), 19))
-	var back := _button(Lang.t("Назад"), 16)
-	back.custom_minimum_size = Vector2(
-		_text_content_width(back, back.text), Settings.touch(44))
-	back.size_flags_horizontal = Control.SIZE_SHRINK_END
-	back.pressed.connect(_goto_rooms)
-	head.add_child(back)
-	page.add_child(_header(Lang.t("Проверенный топ"), 17))
+## Модалка таблицы лидеров (вместо страницы — так опрятнее): серверный
+## топ сеткой «место · игрок · победы» + своё место; на Web ниже блок
+## Яндекс-таблицы той же сеткой. Строится один раз, дальше показывается.
+func _build_board_modal() -> void:
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.6)
+	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	dim.visible = false
+	dim.gui_input.connect(_on_board_backdrop)
+	add_child(dim)
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	dim.add_child(center)
+	var panel := PanelContainer.new()
+	var psb := StyleBoxFlat.new()
+	psb.bg_color = Color(0.13, 0.13, 0.16, 0.98)
+	psb.set_corner_radius_all(10)
+	psb.content_margin_left = 20.0
+	psb.content_margin_right = 20.0
+	psb.content_margin_top = 16.0
+	psb.content_margin_bottom = 16.0
+	panel.add_theme_stylebox_override("panel", psb)
+	center.add_child(panel)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 10)
+	panel.add_child(box)
+	var title := Label.new()
+	title.text = Lang.t("Таблица лидеров")
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", Settings.fs(20))
+	title.add_theme_color_override("font_color", Color("FFD54F"))
+	box.add_child(title)
 	var note := Label.new()
-	note.text = Lang.t("Считается только с сыгранных партий — накрутить нельзя")
-	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	note.add_theme_font_size_override("font_size", Settings.fs(14))
-	note.add_theme_color_override("font_color", Color(1, 1, 1, 0.6))
-	page.add_child(note)
-	_board_box = VBoxContainer.new()
-	_board_box.add_theme_constant_override("separation", 4)
-	_board_box.custom_minimum_size = Vector2(0, 190)
-	_board_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	page.add_child(_board_box)
+	note.text = Lang.t("Только реальные партии")
+	note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	note.add_theme_font_size_override("font_size", Settings.fs(13))
+	note.add_theme_color_override("font_color", Color(1, 1, 1, 0.55))
+	box.add_child(note)
+	_board_grid = GridContainer.new()
+	_board_grid.columns = 3
+	_board_grid.add_theme_constant_override("h_separation", 12)
+	_board_grid.add_theme_constant_override("v_separation", 4)
+	_board_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_child(_board_grid)
 	_board_me = Label.new()
+	_board_me.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_board_me.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_board_me.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_board_me.add_theme_font_size_override("font_size", Settings.fs(15))
 	_board_me.add_theme_color_override("font_color", Color("90CAF9"))
-	page.add_child(_board_me)
+	box.add_child(_board_me)
 	_board_note = Label.new()
+	_board_note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_board_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_board_note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_board_note.add_theme_font_size_override("font_size", Settings.fs(15))
+	_board_note.add_theme_font_size_override("font_size", Settings.fs(14))
 	_board_note.visible = false
-	page.add_child(_board_note)
+	box.add_child(_board_note)
 	_ya_board_wrap = VBoxContainer.new()
 	_ya_board_wrap.add_theme_constant_override("separation", 8)
 	_ya_board_wrap.visible = OS.has_feature("web")
-	page.add_child(_ya_board_wrap)
-	_ya_board_wrap.add_child(_header(Lang.t("Яндекс Игры"), 17))
-	_ya_board_box = VBoxContainer.new()
-	_ya_board_box.add_theme_constant_override("separation", 4)
-	_ya_board_box.custom_minimum_size = Vector2(0, 120)
-	_ya_board_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_ya_board_wrap.add_child(_ya_board_box)
+	box.add_child(_ya_board_wrap)
+	var ya_title := Label.new()
+	ya_title.text = Lang.t("Яндекс Игры")
+	ya_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	ya_title.add_theme_font_size_override("font_size", Settings.fs(17))
+	ya_title.add_theme_color_override("font_color", Color(1, 1, 1, 0.9))
+	_ya_board_wrap.add_child(ya_title)
+	_ya_board_grid = GridContainer.new()
+	_ya_board_grid.columns = 3
+	_ya_board_grid.add_theme_constant_override("h_separation", 12)
+	_ya_board_grid.add_theme_constant_override("v_separation", 4)
+	_ya_board_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_ya_board_wrap.add_child(_ya_board_grid)
 	_ya_board_note = Label.new()
+	_ya_board_note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_ya_board_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_ya_board_note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_ya_board_note.add_theme_font_size_override("font_size", Settings.fs(14))
 	_ya_board_note.add_theme_color_override("font_color", Color(1, 1, 1, 0.6))
 	_ya_board_wrap.add_child(_ya_board_note)
-	return page
+	var close_btn := _button(Lang.t("Закрыть"), 16)
+	close_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	close_btn.pressed.connect(_hide_board_modal)
+	box.add_child(close_btn)
+	_board_modal = dim
+	_board_panel = panel
 
 
-func _show_board() -> void:
-	_set_page(_page_board)
+func _show_board_modal() -> void:
+	if _board_modal == null:
+		_build_board_modal()
+	var vw := get_viewport_rect().size.x
+	(_board_panel as PanelContainer).custom_minimum_size = Vector2(minf(480.0, vw - 32.0), 0)
+	(_board_modal as ColorRect).visible = true
 	await _load_board()
 
 
+func _hide_board_modal() -> void:
+	if _board_modal != null:
+		(_board_modal as ColorRect).visible = false
+
+
+func _on_board_backdrop(event: InputEvent) -> void:
+	if event is InputEventMouseButton and (event as InputEventMouseButton).pressed:
+		_hide_board_modal()
+		(_board_modal as ColorRect).accept_event()
+
+
 func _load_board() -> void:
-	_board_note.visible = false
-	_render_board_rows([], Lang.t("Загружаем таблицу…"))
+	_clear_board_grid()
+	_set_board_note(Lang.t("Загружаем таблицу…"), false)
 	_board_me.text = ""
+	_clear_ya_grid()
 	var res := await Net.board_list()
-	if not is_instance_valid(self) or not visible or not _page_board.visible:
+	if not is_instance_valid(self) or not visible or not _board_modal.visible:
 		return
 	if String(res.get("t", "")) != NetProtocol.BOARD_LIST_S2C:
-		_render_board_rows([], "")
-		_set_board_error(_reason(res, Lang.t("Не удалось загрузить таблицу")))
+		_set_board_note(_reason(res, Lang.t("Не удалось загрузить таблицу")), true)
 		return
+	_set_board_note("", false)
 	_render_board(res.get("entries", []), res.get("me", null))
 	await _load_ya_board()
 
 
-## Строки серверного топа + своя строка. Чистая отрисовка по данным —
-## удобно тестировать без сети.
+## Строка сетки «место · игрок · победы». Места 1–3 — цветом медали,
+## своя строка — синим. Чистая отрисовка по данным, удобно тестировать.
 func _render_board(entries: Array, me) -> void:
-	var rows: Array = []
+	if _board_grid == null:
+		_build_board_modal()
+	_clear_board_grid()
 	var my_nick := ""
 	if me is Dictionary:
 		my_nick = String((me as Dictionary).get("nick", ""))
 	var i := 0
 	for e in entries:
-		i += 1
 		if not (e is Dictionary):
 			continue
+		i += 1
 		var d := e as Dictionary
-		var line := Lang.t("%d. %s — побед %d · партий %d") % [i,
-			String(d.get("nick", "?")), maxi(0, int(d.get("wins", 0))),
-			maxi(0, int(d.get("games", 0)))]
-		rows.append({"text": line, "mine": String(d.get("nick", "")) == my_nick \
-			and not my_nick.is_empty()})
-	_render_board_rows(rows, Lang.t("Нет сыгранных партий"))
+		_board_row(_board_grid, i, String(d.get("nick", "?")),
+			maxi(0, int(d.get("wins", 0))),
+			String(d.get("nick", "")) == my_nick and not my_nick.is_empty())
+	if i == 0:
+		_set_board_note(Lang.t("Нет сыгранных партий"), false)
 	if me is Dictionary and not my_nick.is_empty():
 		var m := me as Dictionary
 		_board_me.text = Lang.t("Ваше место: %d · побед %d · партий %d") % [
@@ -2301,39 +2348,54 @@ func _render_board(entries: Array, me) -> void:
 		_board_me.text = Lang.t("Сыграйте партию, чтобы попасть в топ")
 
 
-func _render_board_rows(rows: Array, empty_text: String) -> void:
-	for child in _board_box.get_children():
-		_board_box.remove_child(child)
+## Одна строка таблицы. Сетка сама ровняет колонки по самой широкой.
+func _board_row(grid: GridContainer, rank: int, nick: String, wins: int,
+		mine: bool) -> void:
+	var place := Label.new()
+	place.text = "%d." % rank
+	place.add_theme_font_size_override("font_size", Settings.fs(15))
+	place.add_theme_color_override("font_color", _rank_color(rank, mine))
+	grid.add_child(place)
+	var who := Label.new()
+	who.text = nick
+	who.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	who.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	who.add_theme_font_size_override("font_size", Settings.fs(15))
+	who.add_theme_color_override("font_color",
+		Color("90CAF9") if mine else Color(1, 1, 1, 0.9))
+	grid.add_child(who)
+	var score := Label.new()
+	score.text = str(wins)
+	score.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	score.add_theme_font_size_override("font_size", Settings.fs(15))
+	score.add_theme_color_override("font_color",
+		Color("90CAF9") if mine else Color(1, 1, 1, 0.9))
+	grid.add_child(score)
+
+
+func _rank_color(rank: int, mine: bool) -> Color:
+	if mine:
+		return Color("90CAF9")
+	if rank == 1:
+		return Color("FFD54F")
+	if rank == 2:
+		return Color("C0C0C0")
+	if rank == 3:
+		return Color("CD7F32")
+	return Color(1, 1, 1, 0.55)
+
+
+func _clear_board_grid() -> void:
+	for child in _board_grid.get_children():
+		_board_grid.remove_child(child)
 		child.free()
-	if rows.is_empty():
-		if not empty_text.is_empty():
-			var lab := Label.new()
-			lab.text = empty_text
-			lab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-			lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			lab.add_theme_font_size_override("font_size", Settings.fs(15))
-			lab.add_theme_color_override("font_color", Color(1, 1, 1, 0.6))
-			_board_box.add_child(lab)
-		return
-	for r in rows:
-		var d := r as Dictionary
-		var lab := Label.new()
-		lab.text = String(d.get("text", ""))
-		lab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		lab.add_theme_font_size_override("font_size", Settings.fs(15))
-		if bool(d.get("mine", false)):
-			lab.text = "» " + lab.text
-			lab.add_theme_color_override("font_color", Color("90CAF9"))
-		else:
-			lab.add_theme_color_override("font_color", Color(1, 1, 1, 0.85))
-		_board_box.add_child(lab)
 
 
-func _set_board_error(text: String) -> void:
+func _set_board_note(text: String, warn: bool) -> void:
 	_board_note.text = text
-	_board_note.add_theme_color_override("font_color", Color("FF8A80"))
-	_board_note.visible = true
+	_board_note.visible = not text.is_empty()
+	_board_note.add_theme_color_override("font_color",
+		Color("FF8A80") if warn else Color(1, 1, 1, 0.6))
 
 
 ## Блок Яндекс-таблицы: читаем SDK-записи и показываем рядом с нашими.
@@ -2341,43 +2403,47 @@ func _set_board_error(text: String) -> void:
 func _load_ya_board() -> void:
 	if _ya_board_wrap == null or not (_ya_board_wrap as Control).visible:
 		return
-	_ya_board_note.add_theme_color_override("font_color", Color(1, 1, 1, 0.6))
-	_ya_board_note.text = Lang.t("Загружаем таблицу…")
-	for child in _ya_board_box.get_children():
-		_ya_board_box.remove_child(child)
-		child.free()
+	_set_ya_note(Lang.t("Загружаем таблицу…"), false)
+	_clear_ya_grid()
 	_ysdk_call("request_lb_entries")
 	if not await _ysdk_wait("lb", 20):
-		_ya_board_note.text = Lang.t("Не удалось загрузить таблицу Яндекса")
-		_ya_board_note.add_theme_color_override("font_color", Color("FF8A80"))
+		_set_ya_note(Lang.t("Не удалось загрузить таблицу Яндекса"), true)
 		return
 	var st := _ysdk_poll("lb")
 	var data = st.get("data", null)
 	if not (data is Dictionary):
-		_ya_board_note.text = _lb_reason(st)
-		_ya_board_note.add_theme_color_override("font_color", Color("FF8A80"))
+		_set_ya_note(_lb_reason(st), true)
 		return
 	var entries: Array = (data as Dictionary).get("entries", [])
 	if entries.is_empty():
-		_ya_board_note.text = Lang.t("Нет сыгранных партий")
+		_set_ya_note(Lang.t("Нет сыгранных партий"), false)
 		return
+	_set_ya_note("", false)
+	var i := 0
 	for e in entries:
 		if not (e is Dictionary):
 			continue
+		i += 1
 		var d := e as Dictionary
-		var lab := Label.new()
-		lab.text = "%s — %d" % [String(d.get("name", "?")),
-			maxi(0, int(d.get("score", 0)))]
-		lab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		lab.add_theme_font_size_override("font_size", Settings.fs(15))
-		lab.add_theme_color_override("font_color", Color(1, 1, 1, 0.85))
-		_ya_board_box.add_child(lab)
+		var r := maxi(0, int(d.get("rank", 0)))
+		_board_row(_ya_board_grid, r if r > 0 else i,
+			String(d.get("name", "?")), maxi(0, int(d.get("score", 0))), false)
 	var rank := maxi(0, int((data as Dictionary).get("userRank", 0)))
 	if rank > 0:
-		_ya_board_note.text = Lang.t("Ваше место в Яндексе: %d") % rank
-	else:
-		_ya_board_note.text = ""
+		_set_ya_note(Lang.t("Ваше место в Яндексе: %d") % rank, false)
+
+
+func _clear_ya_grid() -> void:
+	for child in _ya_board_grid.get_children():
+		_ya_board_grid.remove_child(child)
+		child.free()
+
+
+func _set_ya_note(text: String, warn: bool) -> void:
+	_ya_board_note.text = text
+	_ya_board_note.visible = not text.is_empty()
+	_ya_board_note.add_theme_color_override("font_color",
+		Color("FF8A80") if warn else Color(1, 1, 1, 0.6))
 
 
 func _lb_reason(st: Dictionary) -> String:

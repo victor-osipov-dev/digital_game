@@ -295,6 +295,7 @@ const _EN := {
 "Таблица": "Board",
 "Таблица лидеров": "Leaderboard",
 "Текст:": "Text:",
+"Только реальные партии": "Only real games",
 "Удалить": "Delete",
 "Удалить аккаунт": "Delete account",
 "Удаляем аккаунт…": "Deleting account…",

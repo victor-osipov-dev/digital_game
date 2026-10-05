@@ -291,30 +291,42 @@ func _check_board_render() -> void:
 	]
 	lobby.call("_render_board", entries,
 		{"nick": "Бета", "games": 12, "wins": 5, "rank": 2})
-	var box = inst.get("_board_box") as Control
-	check(box.get_child_count() == 2, "две строки топа, мусор пропущен")
-	var second := (box.get_child(1) as Label).text
-	check(second.begins_with("» "), "своя строка помечена")
+	var grid = inst.get("_board_grid") as GridContainer
+	check(grid.get_child_count() == 6, "две строки по 3 ячейки, мусор пропущен")
+	var who := (grid.get_child(4) as Label).text
+	var wins := (grid.get_child(5) as Label).text
+	check(who == "Бета", "вторая строка — Бета, got: %s" % who)
+	check(wins == "5", "победы числом, got: %s" % wins)
+	check((grid.get_child(4) as Label).get_theme_color("font_color")
+		== Color("90CAF9"), "своя строка подсвечена")
+	check((grid.get_child(0) as Label).get_theme_color("font_color")
+		== Color("FFD54F"), "первое место золотом")
 	var me := (inst.get("_board_me") as Label).text
 	check(me.contains("2") and me.contains("5"),
 		"своё место и победы показаны, got: %s" % me)
 	lobby.call("_render_board", [], null)
-	check((box.get_child_count()) == 1, "пустой топ — одна строка-заглушка")
+	check(grid.get_child_count() == 0, "пустой топ — сетка пуста")
+	check((inst.get("_board_note") as Label).visible, "пустота объяснена строкой")
 	check((inst.get("_board_me") as Label).text.contains("Сыграйте"),
 		"без игр зовём сыграть")
 
 
-## Страница таблицы открывается без сети (с ошибкой загрузки, но видна).
+## Модалка таблицы открывается без сети (с ошибкой загрузки, но видна).
 func _check_board_page() -> void:
 	var lobby := inst
-	lobby.call("_show_board")
+	lobby.call("_show_board_modal")
 	for i in range(30):
 		await process_frame
 		if (inst.get("_board_note") as Label).visible:
 			break
-	check(_page_visible("_page_board"), "страница таблицы открывается")
+	check((inst.get("_board_modal") as Control).visible, "модалка таблицы видна")
 	check((inst.get("_board_note") as Label).visible,
 		"без сети показана причина, а не пустота")
+	var bpanel := inst.get("_board_panel") as PanelContainer
+	check(bpanel != null and bpanel.custom_minimum_size.x >= 400.0,
+		"панель таблицы широкая, got %.0f" % bpanel.custom_minimum_size.x)
+	lobby.call("_hide_board_modal")
+	check(not (inst.get("_board_modal") as Control).visible, "модалка закрывается")
 
 
 ## Удаление аккаунта: кнопка только на Android, модалка, отказ виден.
