@@ -396,6 +396,20 @@ static func app_name() -> String:
 static func apply_title() -> void:
 	last_title = app_name()
 	DisplayServer.window_set_title(last_title)
+	_set_web_title(last_title)
+
+
+## На Web дублируем заголовок вкладки напрямую в DOM: вызовы
+## DisplayServer.window_set_title из _ready при старте теряются
+## (движок позже выставляет название из HTML-shell «Digital Game»),
+## а прямое document.title срабатывает всегда. Вне Web — no-op.
+static func _set_web_title(title: String) -> void:
+	if not OS.has_feature("web"):
+		return
+	if not Engine.has_singleton("JavaScriptBridge"):
+		return
+	Engine.get_singleton("JavaScriptBridge").eval(
+		"document.title=" + JSON.stringify(title) + ";", true)
 
 static func has_key(s: String) -> bool:
 	return _EN.has(s)

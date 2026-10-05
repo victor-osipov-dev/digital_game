@@ -28,6 +28,7 @@ func _boot() -> void:
 	test_en_table()
 	test_en_helpers()
 	test_en_menu()
+	test_boot_title()
 	# Возвращаем язык: сьют дальше идёт на русском по умолчанию.
 	Lang.set_lang(_saved_lang)
 	if settings != null:
@@ -115,6 +116,32 @@ func test_en_menu() -> void:
 	root.remove_child(menu)
 	menu.free()
 	Lang.set_lang("ru")
+
+## Заголовок вкладки после перезагрузки: стартовые вызовы apply_title
+## из _ready в Web теряются (движок позже выставляет название из shell),
+## поэтому заголовок дублируется прямо в DOM и применяется повторно
+## после старта. Вне Web прямой записи нет — только DisplayServer.
+func test_boot_title() -> void:
+	section("заголовок вкладки переживает перезагрузку")
+	Lang.set_lang("ru")
+	ok("русское название", Lang.last_title == "Антисклероз")
+	Lang.set_lang("en")
+	ok("английское название", Lang.last_title == "Anti-Sclerosis")
+	var lang_src := _read_text("res://scripts/core/lang.gd")
+	ok("прямая запись document.title на Web",
+		lang_src.contains("document.title="))
+	var menu_src := _read_text("res://scripts/ui/main_menu.gd")
+	ok("повтор после старта в главном меню",
+		menu_src.contains("_reapply_title_boot()"))
+
+
+func _read_text(path: String) -> String:
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		return ""
+	var text := f.get_as_text()
+	f.close()
+	return text
 
 func _collect_buttons(node: Node) -> void:
 	if node is Button:

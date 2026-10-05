@@ -147,6 +147,7 @@ func _room_where(pending: Dictionary) -> String:
 
 func _ready() -> void:
 	Lang.apply_title()
+	_reapply_title_boot()
 	_build_ui()
 	_rebuild_names()
 	# Поворот экрана пересчитывает ширину: без этого меню осталось бы
@@ -159,6 +160,15 @@ func _ready() -> void:
 	Net.pending_room_changed.connect(_refresh_online_note)
 	_refresh_online_note()
 	_ysdk(&"ensure_sdk")
+
+
+## Заголовок вкладки после старта: движок при загрузке Web перезаписывает
+## document.title названием из shell, поэтому сразу после _ready применяем
+## ещё раз — apply_title идемпотентен, на текст/настройки не влияет.
+func _reapply_title_boot() -> void:
+	await get_tree().create_timer(1.0).timeout
+	if is_instance_valid(self):
+		Lang.apply_title()
 
 
 ## Вызов lifecycle API Яндекс Игр (только Web; elsewhere no-op внутри).
