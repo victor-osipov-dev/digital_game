@@ -124,6 +124,12 @@ var _win_ad_done := false
 var _pan_pressed: bool = false
 var _pan_pos: Vector2 = Vector2.ZERO
 var _pan_press_on_tile: bool = false
+## Касание началось на полосе прокрутки стола: жест целиком ведёт
+## нативный ScrollContainer (направление ползунка — противоположно
+## content-follow «контент за пальцем»: палец вверх — значение вниз).
+## Пан игры в такой жест не встаёт: иначе он гнал бы контент за пальцем,
+## т.е. ползунок ехал бы ПРОТИВ пальца, а натив голодал бы без событий.
+var _pan_press_on_bar: bool = false
 var _scroll_drag := ScrollDragClass.new()
 
 # --- сетевой режим -------------------------------------------------------
@@ -2633,6 +2639,7 @@ func _end_drag() -> void:
 	_set_drag_scroll_locked(false)
 	_pan_pressed = false
 	_pan_press_on_tile = false
+	_pan_press_on_bar = false
 
 func _set_drag_scroll_locked(locked: bool) -> void:
 	if table_scroll == null:
@@ -3850,15 +3857,23 @@ func _input(event: InputEvent) -> void:
 			# всегда — иначе волочение по руке листало бы стол под ней.
 			_pan_press_on_tile = _point_on_hand_tile(_pan_pos) \
 				or (_point_on_table_tile(_pan_pos) and _can_act())
+			# Полоса прокрутки — жест натива (см. _pan_press_on_bar):
+			# фиксируем старт, чтобы и движение, и отпускание его не трогали.
+			_pan_press_on_bar = _point_on_scrollbar(_pan_pos)
 		else:
-			_pan_scroll(get_global_mouse_position() - _pan_pos)
+			if not _pan_press_on_bar:
+				_pan_scroll(get_global_mouse_position() - _pan_pos)
 			_pan_pressed = false
 			_pan_press_on_tile = false
+			_pan_press_on_bar = false
 	elif event is InputEventMouseMotion:
 		var mm := event as InputEventMouseMotion
 		if (mm.button_mask & MOUSE_BUTTON_MASK_LEFT) == 0:
 			# Палец отпущен (или окно потеряло фокус) — жест больше не наш.
 			_pan_pressed = false
+			return
+		if _pan_press_on_bar:
+			# Жест ползунка: не встаём, не мешаем, событие до GUI дойдёт.
 			return
 		if not _pan_pressed:
 			_pan_pos = get_global_mouse_position()
@@ -3891,6 +3906,8 @@ func _can_pan_table(p: Vector2) -> bool:
 		return false
 	if not table_scroll.get_global_rect().has_point(p):
 		return false
+	if _point_on_scrollbar(p):
+		return false
 	if _can_act():
 		for block in row_blocks:
 			var row := block as RowBlock
@@ -3901,6 +3918,23 @@ func _can_pan_table(p: Vector2) -> bool:
 				if tile_view != null and tile_view.get_global_rect().has_point(p):
 					return false
 	return true
+
+## Точка над полосой прокрутки стола (вертикальной или горизонтальной).
+## Жест с неё — нативный: ScrollBar тащится в свою сторону, пан игры
+## (content-follow) в него вставать не должен.
+func _point_on_scrollbar(p: Vector2) -> bool:
+	if table_scroll == null:
+		return false
+	var vbar := table_scroll.get_v_scroll_bar()
+	if vbar != null and vbar.is_visible_in_tree() \
+			and vbar.get_global_rect().has_point(p):
+		return true
+	var hbar := table_scroll.get_h_scroll_bar()
+	if hbar != null and hbar.is_visible_in_tree() \
+			and hbar.get_global_rect().has_point(p):
+		return true
+	return false
+
 
 ## Точка над карточкой ряда. Жест с неё принадлежит перетаскиванию,
 ## только пока фишки можно двигать (см. _can_act в вызывающих).

@@ -48,6 +48,7 @@ func _on_frame() -> void:
 			phase = 6
 			await _drop_checks()
 			await _pan_checks()
+			await _bar_checks()
 			await _win_checks()
 			await _slide_checks()
 			_split_own_checks()
@@ -400,6 +401,42 @@ func _pan_checks() -> void:
 		"foreign turn: pan from tile scrolls table (0 -> %d)" % scroll.scroll_vertical)
 	settings.call("set_bot", 0, false)
 	inst.call("refresh")
+
+
+## Ползунок скролла стола ведёт натив, а не пан игры: жест с него —
+## не content-follow (иначе ползунок ехал бы ПРОТИВ пальца), направление
+## нативное: ползунок вниз — значение растёт. После отпускания натив
+## сам докатывает по импульсу, пан в жест не встаёт вообще.
+func _bar_checks() -> void:
+	var scroll := inst.get("table_scroll") as ScrollContainer
+	if scroll == null:
+		check(false, "table scroll for bar test")
+		return
+	await process_frame
+	var bar := scroll.get_v_scroll_bar()
+	if bar == null or not bar.is_visible_in_tree():
+		check(false, "table v-bar visible")
+		return
+	check(inst.call("_can_pan_table",
+		bar.get_global_rect().get_center()) == false,
+		"пан не стартует с ползунка")
+	check(inst.call("_point_on_scrollbar",
+		bar.get_global_rect().get_center()) == true,
+		"точка на ползунке опознана")
+	scroll.scroll_vertical = 0
+	await process_frame
+	var c := bar.get_global_rect().get_center()
+	_press(c)
+	_motion(c + Vector2(0, 60))
+	_motion(c + Vector2(0, 120))
+	_release(c + Vector2(0, 120))
+	await process_frame
+	await process_frame
+	check(not bool(inst.get("_pan_pressed")), "пан не вёлся с ползунка")
+	check(not bool(inst.get("_pan_press_on_bar")),
+		"флаг ползунка сброшен после жеста")
+	check(int(scroll.scroll_vertical) > 0,
+		"ползунок вниз — натив крутит вниз (%d)" % scroll.scroll_vertical)
 
 
 ## После победы стол можно посмотреть (только чтение): кнопка уводит

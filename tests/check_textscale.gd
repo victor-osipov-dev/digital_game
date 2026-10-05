@@ -492,17 +492,20 @@ func _scroll_badge_round() -> void:
 	sc.free()
 
 
-## Бейдж гаснет постепенно, а не мигает: внутри — 1, на выходе — доля
-## видимого, снаружи — 0. Тускнеет только кружок, не фишка.
+## Бейдж гаснет заранее, а не на кромке: глубже зоны — 1, в зоне —
+## линейно от расстояния, на кромке и снаружи — 0. Тускнеет только
+## кружок, не фишка.
 func _badge_fade_round() -> void:
 	var tv_script := load("res://scripts/ui/tile_view.gd") as GDScript
 	var sc := Rect2(0, 0, 200, 200)
-	if float(tv_script.badge_fade_for(Rect2(50, 50, 40, 40), sc)) != 1.0:
-		_fail("бейдж внутри: alpha 1")
-	var half := float(tv_script.badge_fade_for(Rect2(180, 50, 40, 40), sc))
-	if absf(half - 0.5 / 0.75) > 0.01:
-		_fail("бейдж наполовину снаружи: гаснет, got %.2f" % half)
-	if float(tv_script.badge_fade_for(Rect2(300, 50, 40, 40), sc)) != 0.0:
+	if float(tv_script.badge_fade_for(Rect2(50, 80, 40, 40), sc)) != 1.0:
+		_fail("бейдж в глубине: alpha 1")
+	var near := float(tv_script.badge_fade_for(Rect2(50, 150, 40, 40), sc))
+	if absf(near - 10.0 / 48.0) > 0.01:
+		_fail("бейдж в 10 px от края: почти погас, got %.2f" % near)
+	if float(tv_script.badge_fade_for(Rect2(50, 160, 40, 40), sc)) != 0.0:
+		_fail("бейдж на кромке: alpha 0")
+	if float(tv_script.badge_fade_for(Rect2(50, 300, 40, 40), sc)) != 0.0:
 		_fail("бейдж снаружи: alpha 0")
 	if float(tv_script.badge_fade_for(Rect2(50, 50, 0, 40), sc)) != 0.0:
 		_fail("нулевая фишка: alpha 0")
