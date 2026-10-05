@@ -1574,6 +1574,18 @@ func _apply_accent(button: Button, normal: Color, hover: Color, pressed: Color) 
 	button.add_theme_color_override("font_disabled_color", Color(1, 1, 1, 0.35))
 
 
+## Кнопка с акцентной подложкой и честным минимумом по тексту. Красим
+## ДО замера ширины: замер берёт поля из текущей подложки, а подложка
+## добавляет боковые 12+12 — замер по дефолтной срезал бы пару букв
+## (ловили на «Удалить аккаунт» на странице комнат).
+func _accent_button(text: String, size: int, normal: Color, hover: Color,
+		pressed: Color) -> Button:
+	var b := _button(text, size)
+	_apply_accent(b, normal, hover, pressed)
+	b.custom_minimum_size.x = _text_content_width(b, b.text)
+	return b
+
+
 ## wrap = false для коротких заголовков в один ряд (например «ИГРА ПО
 ## СЕТИ»): перенос разбивал их на отдельные слова, а сжимать шрифт до
 ## размера остальных заголовков не хочется — лучше обрезать по краю.
@@ -2126,11 +2138,10 @@ func _logout_row(page: VBoxContainer) -> void:
 	if OS.has_feature("android"):
 		# Удаление аккаунта — только Android: красная кнопка рядом
 		# с выходом, дальше модалка с подтверждением.
-		var del := _button(Lang.t("Удалить аккаунт"), 15)
-		del.custom_minimum_size = Vector2(
-			_text_content_width(del, del.text), Settings.touch(40))
+		var del := _accent_button(Lang.t("Удалить аккаунт"), 15,
+			Color("B71C1C"), Color("C62828"), Color("7F0000"))
+		del.custom_minimum_size.y = Settings.touch(40)
 		del.size_flags_horizontal = Control.SIZE_SHRINK_END
-		_apply_accent(del, Color("B71C1C"), Color("C62828"), Color("7F0000"))
 		del.pressed.connect(_on_delete_account)
 		row.add_child(del)
 	var out := _button(Lang.t("Выйти"), 15)

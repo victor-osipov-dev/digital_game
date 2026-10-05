@@ -135,6 +135,7 @@ func _checks() -> void:
 	_check_board_render()
 	_check_board_page()
 	_check_delete_flow()
+	_check_accent_button_width()
 
 
 ## Матрица ошибок входа/регистрации: каждая причина — и клиентская
@@ -359,6 +360,27 @@ func _check_delete_flow() -> void:
 	lobby.call("_show_confirm", "Готово", "", "Понятно", Callable(), "")
 	check(not (inst.get("_del_cancel") as Control).visible,
 		"у итога нет кнопки отмены")
+
+
+## Акцентная кнопка влезает целиком: минимум меряется ПОСЛЕ покраски,
+## подложка добавляет боковые поля 12+12 (ловили срезанное
+## «Удалить аккаунт» на странице комнат — замер шёл по дефолтной).
+func _check_accent_button_width() -> void:
+	var lobby := inst
+	var b := lobby.call("_accent_button", "Удалить аккаунт", 15,
+		Color("B71C1C"), Color("C62828"), Color("7F0000")) as Button
+	var need := 0.0
+	var font: Font = b.get_theme_font("font")
+	if font != null:
+		need = font.get_string_size(b.text, HORIZONTAL_ALIGNMENT_LEFT, -1,
+			b.get_theme_font_size("font_size")).x
+	var sb := b.get_theme_stylebox("normal")
+	if sb != null:
+		need += sb.content_margin_left + sb.content_margin_right
+	check(b.custom_minimum_size.x + 1.0 >= need,
+		"акцентная кнопка влезает целиком (min %.0f, need %.0f)"
+			% [b.custom_minimum_size.x, need])
+	b.free()
 
 
 func _rooms_note_text() -> String:

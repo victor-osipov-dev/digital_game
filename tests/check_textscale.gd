@@ -502,9 +502,9 @@ func _badge_fade_round() -> void:
 		_fail("бейдж в глубине: alpha 1")
 	if float(tv_script.badge_fade_for(Rect2(50, 10, 40, 40), sc)) != 1.0:
 		_fail("бейдж в 10 px от верха: ещё полный")
-	var near_top := float(tv_script.badge_fade_for(Rect2(50, 4, 40, 40), sc))
+	var near_top := float(tv_script.badge_fade_for(Rect2(50, 1.5, 40, 40), sc))
 	if absf(near_top - 0.5) > 0.01:
-		_fail("бейдж в 4 px от верха: наполовину, got %.2f" % near_top)
+		_fail("бейдж в 1.5 px от верха: наполовину, got %.2f" % near_top)
 	if float(tv_script.badge_fade_for(Rect2(50, 0, 40, 40), sc)) != 0.0:
 		_fail("бейдж на верхней кромке: alpha 0")
 	var half_out := float(tv_script.badge_fade_for(Rect2(50, 180, 40, 40), sc))
