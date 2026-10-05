@@ -593,6 +593,32 @@ test('реплика несёт статистику, слияние — чер�
   assert.strictEqual(db.getAccount('boardpeer').wins, 4);
 });
 
+test('повторное слияние тех же чисел не пухлит outbox', () => {
+  const same = {
+    login_ci: 'boardpeer', login: 'BoardPeer', nick: 'Новее',
+    pwd_hash: 's$h', origin: 'srv-other',
+    created_ms: 1, updated_ms: 3, session_epoch: 0, games: 7, wins: 4,
+  };
+  const before = db.outboxSeq();
+  assert.strictEqual(db.mergeRemoteAccount(same), 'stale');
+  assert.strictEqual(db.mergeRemoteAccount(same), 'stale');
+  assert.strictEqual(db.outboxSeq(), before, 'без изменений — без записей');
+});
+
+test('pruneOutbox жмёт дубли, свежее на логин остаётся', () => {
+  assert.ok(accounts.register('prune1', 'secret123', 'Жертва').ok);
+  const before = db.outboxSeq();
+  db.addResult('prune1', true);
+  db.addResult('prune1', false);
+  assert.ok(db.outboxSeq() > before);
+  const cut = db.pruneOutbox();
+  assert.ok(cut >= 2, `ужато хотя бы 2 строки, got ${cut}`);
+  const rows = db.db.prepare('SELECT COUNT(*) AS c FROM outbox WHERE login_ci = ?').get('prune1');
+  assert.strictEqual(rows.c, 1, 'на логин одна свежайшая строка');
+  const acc = db.getAccount('prune1');
+  assert.strictEqual(acc.games, 2, 'состояние не пострадало');
+});
+
 test('чужой origin статистику подтягивает, контент — нет', () => {
   assert.ok(accounts.register('boardown', 'secret123', 'Свой').ok);
   const how = db.mergeRemoteAccount({

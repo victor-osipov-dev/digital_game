@@ -1,6 +1,7 @@
 class_name TileView
 extends Panel
 const Lang := preload("res://scripts/core/lang.gd")
+const BadgeDot := preload("res://scripts/ui/badge_dot.gd")
 
 var tile: Tile = null
 var draggable: bool = false
@@ -12,6 +13,9 @@ var mark_draft: bool = false
 var mark_hint: bool = false
 var mark_drawn: bool = false
 var face_down: bool = false
+## Подписчик-бейдж свежей фишки (белый кружок + галочка). Живёт отдельным
+## top_level-контролом: поверх рядов, без прозрачности фишки.
+var _badge: Control = null
 ## Итоговая прозрачность по меткам: прилёт анимирует modulate, и если
 ## два прилёта наложатся, второй обязан целиться сюда, а не в текущий
 ## (уже обнулённый первым) modulate — иначе фишка гаснет навсегда.
@@ -97,25 +101,65 @@ func _build() -> void:
 		tooltip_text = "%s %d" % [Tile.color_name(tile.color), tile.value]
 	base_alpha = modulate.a
 
+	_build_badge()
+	set_process(false)
 	queue_redraw()
 
-## Галочка свежей своей фишки (взята из колоды / только что выложена) —
-## в правом верхнем углу, чуть выходя за карточку. Кольцо + галочка
-## штрихами, а не глиф «✓»: от шрифта устройства не зависит. Белый кружок
-## с тёмным ободком читается на любом цвете, зелёная галочка — в тон
-## остальным меткам. Сочетается с любой рамкой (черновик, прошлый ход,
-## подсказка).
-func _draw_badge() -> void:
+
+## Подписчик-бейдж галочки свежей своей фишки (взята из колоды / только
+## что выложена) — в правом верхнем углу, чуть выходя за карточку.
+## Отдельный top_level-контрол: рисуется поверх соседних рядов (кружок
+## не обрезается) и не берёт прозрачность фишки. Белый кружок без тёмной
+## обводки + зелёная галочка штрихами (глифа нет в шрифте Web-сборки).
+func _build_badge() -> void:
+	if _badge != null:
+		_badge.free()
 	var ts := Settings.tile_size()
 	var r := ts.y * 0.13
-	var c := Vector2(ts.x - 1.0, 1.0)
-	draw_circle(c, r, Color(0, 0, 0, 0.85))
-	draw_circle(c, r * 0.78, Color(1, 1, 1, 0.96))
-	var p1 := c + Vector2(-0.42 * r, 0.04 * r)
-	var p2 := c + Vector2(-0.08 * r, 0.32 * r)
-	var p3 := c + Vector2(0.46 * r, -0.30 * r)
-	draw_polyline(PackedVector2Array([p1, p2, p3]), Color("2E9E5B"),
-		maxf(2.5, r * 0.26), true)
+	_badge = BadgeDot.new()
+	_badge.size = Vector2(r * 2.0, r * 2.0)
+	_badge.visible = false
+	add_child(_badge)
+	_badge.queue_redraw()
+	_sync_badge()
+
+
+func _enter_tree() -> void:
+	_sync_badge()
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_VISIBILITY_CHANGED:
+		_sync_badge()
+
+
+func _process(_delta: float) -> void:
+	_sync_badge()
+
+
+## Угол фишки + видимость бейджа. _process включён, только пока бейдж
+## нужен (метки immutable после сборки — иначе сотни фишек тикали бы
+## зря). Под модалками (победа, подтверждение) бейдж прячем: он рисуется
+## поверх всего и торчал бы над диалогом.
+func _sync_badge() -> void:
+	if _badge == null or not is_inside_tree():
+		return
+	var show := (mark_drawn or mark_draft) and not face_down \
+		and is_visible_in_tree() and not _modal_up()
+	(_badge as Control).visible = show
+	set_process(show)
+	if not show:
+		return
+	var ts := Settings.tile_size()
+	var r := ts.y * 0.13
+	(_badge as Control).position = get_global_rect().position \
+		+ Vector2(size.x - 1.0 - r, 1.0 - r)
+
+
+func _modal_up() -> bool:
+	if controller != null and controller.has_method("_modal_open"):
+		return bool(controller.call("_modal_open"))
+	return false
 
 func _draw() -> void:
 	if face_down:
@@ -127,19 +171,17 @@ func _draw() -> void:
 			c + Vector2(0, r), c + Vector2(-r, 0),
 		]), Color("FFD54F"))
 		return
-	# Джокер: белая звезда с тёмной обводкой по центру (вместо цифры).
+	# Бейдж свежей фишки живёт отдельным подписчиком (_badge), а не здесь:
+	# иначе его обрезали бы соседние ряды и гасила прозрачность фишки.
 	if tile != null and tile.is_joker:
 		_draw_star()
-	# Свежие свои: взятая из колоды и только что выложенные (черновик —
-	# прозрачность и зелёная рамка при этом остаются как были).
-	if mark_drawn or mark_draft:
-		_draw_badge()
 
 
 ## Внешний радиус звезды джокера под размер фишки: с обводкой (x1.14)
-## диаметр занимает ~0.82 меньшей стороны — тот же запас, что у цифр.
+## диаметр занимает ~0.80 меньшей стороны — тот же запас 6 px, что у цифр
+## (на самых мелких фишках 32 px иначе не влезает).
 static func star_outer(ts: Vector2) -> float:
-	return minf(ts.x, ts.y) * 0.36
+	return minf(ts.x, ts.y) * 0.35
 
 
 ## Вершины пятиконечной звезды (луч вверх), 10 точек: внешний/внутренний
@@ -180,6 +222,7 @@ func _get_drag_data(pos: Vector2) -> Variant:
 	wrapper.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	wrapper.add_child(dup)
 	dup.position = -pos
+	(dup as TileView)._prepare_drag_dup(self)
 	set_drag_preview(wrapper)
 	modulate = Color(0.55, 0.55, 0.55, 0.55)
 	if controller.has_method("on_drag_started"):
@@ -190,6 +233,24 @@ func _can_drop_data(_pos: Vector2, data: Variant) -> bool:
 	if controller == null or not (data is Dictionary):
 		return false
 	return controller.gui_can_drop(data, get_global_mouse_position())
+
+
+## Чинит дубликат для превью перетаскивания. duplicate() копирует узлы
+## (подпись-цифра едет), но НЕ скриптовые поля: tile/marks дубликата —
+## null/false, поэтому у звезды в превью ничего не рисовалось. Заодно
+## выкидываем мёртвого подписчика-бейджа (его поля тоже не скопированы)
+## и строим свежего — иначе висели бы два, один frozen.
+func _prepare_drag_dup(src: TileView) -> void:
+	for ch in get_children():
+		if is_instance_valid(ch) and (ch as Node).get_script() == BadgeDot:
+			remove_child(ch)
+			ch.free()
+	tile = src.tile
+	face_down = src.face_down
+	mark_drawn = src.mark_drawn
+	mark_draft = src.mark_draft
+	_build_badge()
+	queue_redraw()
 
 func _drop_data(_pos: Vector2, data: Variant) -> void:
 	if controller != null and data is Dictionary:

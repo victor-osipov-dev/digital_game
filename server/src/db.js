@@ -95,6 +95,7 @@ class Db {
     this._ensureColumn('accounts', 'session_epoch', 'INTEGER NOT NULL DEFAULT 0');
     // Мягкое удаление (tombstone для репликации): 0 — жив, иначе ms удаления.
     this._ensureColumn('accounts', 'deleted_ms', 'INTEGER NOT NULL DEFAULT 0');
+    this.pruneOutbox();
     log.info(`sqlite готов: ${config.dbPath}`);
   }
 
@@ -284,16 +285,23 @@ class Db {
     return 'stale';
   }
 
-  /** Сведение счётчиков через max (только живым записям). */
+  /**
+   * Сведение счётчиков через max (только живым записям). В outbox пишем
+   * ТОЛЬКО когда числа реально выросли: SQLite считает changes даже при
+   * записи тех же значений, и без проверки gossip разносил бы одни и те
+   * же строки по кругу бесконечно пухнущим outbox (ловили вживую —
+   * серверы начинали захлёбываться под gossip-штормом).
+   */
   _mergeStatsMax(loginCi, games, wins) {
-    const info = this.db.prepare(
-      `UPDATE accounts SET games = max(games, ?), wins = max(wins, ?)
-       WHERE login_ci = ? AND deleted_ms = 0`,
-    ).run(Math.max(0, games || 0), Math.max(0, wins || 0), loginCi);
-    if (info.changes > 0) {
-      this.db.prepare('INSERT INTO outbox (login_ci, created_ms) VALUES (?, ?)')
-        .run(loginCi, Date.now());
-    }
+    const cur = this.getAccount(loginCi);
+    if (!cur || Number(cur.deleted_ms) > 0) return;
+    const g = Math.max(Number(cur.games) || 0, Math.max(0, Number(games) || 0));
+    const w = Math.max(Number(cur.wins) || 0, Math.max(0, Number(wins) || 0));
+    if (g === Number(cur.games) && w === Number(cur.wins)) return;
+    this.db.prepare('UPDATE accounts SET games = ?, wins = ? WHERE login_ci = ?')
+      .run(g, w, loginCi);
+    this.db.prepare('INSERT INTO outbox (login_ci, created_ms) VALUES (?, ?)')
+      .run(loginCi, Date.now());
   }
 
   /** Наложить tombstone: стереть PII и статистику, пометить время. */
@@ -360,6 +368,27 @@ class Db {
   }
 
   // ------------------------------------------------------------ outbox
+
+  /**
+   * Дедупликация журналов: на логин/токен оставляем только свежайшую
+   * строку. Безопасно для сходимости: merge идемпотентен по updated_ms
+   * (старые состояния проигрывают новым), курсоры соседей — по seq,
+   * а seq монотонны и не переиспользуются. Чинит раздутие после багов
+   * вроде «писать в outbox без изменений» — gossip иначе догонял бы
+   * backlog десятками минут.
+   */
+  pruneOutbox() {
+    const a = this.db.prepare(
+      'DELETE FROM outbox WHERE seq NOT IN (SELECT MAX(seq) FROM outbox GROUP BY login_ci)',
+    ).run();
+    const r = this.db.prepare(
+      'DELETE FROM revocation_outbox WHERE seq NOT IN (SELECT MAX(seq) FROM revocation_outbox GROUP BY token_hash)',
+    ).run();
+    if (a.changes > 0 || r.changes > 0) {
+      log.info(`outbox ужаты: аккаунты -${a.changes}, отзывы -${r.changes}`);
+    }
+    return a.changes + r.changes;
+  }
 
   outboxSince(seq, limit) {
     return this.db.prepare(

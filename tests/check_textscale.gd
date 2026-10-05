@@ -38,6 +38,7 @@ func _boot() -> void:
 	_check_fs_bounds(settings)
 
 	_check_web_glyphs()
+	await _dup_round()
 
 	for idx in range(3):
 		settings.text_scale = idx
@@ -237,14 +238,14 @@ func _tile_round(idx: int, step: int) -> void:
 	for ch in jv.get_children():
 		if ch is Label:
 			_fail("у джокера текстовая подпись вместо рисованной звезды")
-	var sdiam: float = TileView.star_outer(ts) * 1.14 * 2.0
+	var sdiam: float = tv_script.star_outer(ts) * 1.14 * 2.0
 	if sdiam > minf(ts.x, ts.y) - 6.0:
 		_fail("масштаб %d, фишка %dx%d: звезда диаметром %.0f не влезает"
 			% [idx, int(ts.x), int(ts.y), sdiam])
 	jv.free()
 	# Геометрия звезды: 10 вершин, верхний луч строго вверх, все точки
 	# в пределах внешнего радиуса (иначе обводка вылезет из запаса).
-	var pts := TileView.star_points(Vector2.ZERO, 100.0)
+	var pts: PackedVector2Array = tv_script.star_points(Vector2.ZERO, 100.0)
 	if pts.size() != 10:
 		_fail("звезда: вершин %d, надо 10" % pts.size())
 	elif not pts[0].is_equal_approx(Vector2(0, -100)):
@@ -371,6 +372,86 @@ func _strip_gd_comment(line: String) -> String:
 			return line.left(i)
 		i += 1
 	return line
+
+
+# ---------------------------------------------------------------- дубликат превью
+
+## duplicate() копирует узлы, но НЕ скриптовые поля: без чинки у дубликата
+## tile/marks пустые (звезда не рисуется) и висит мёртвый бейдж. Чинка —
+## TileView._prepare_drag_dup. Плюс белый кружок бейджа и прятки под модалками.
+func _dup_round() -> void:
+	# Без as TileView: глобальное имя в --script тянет компиляцию класса
+	# до регистрации автозагрузок, и Settings внутри не резолвится
+	# (тот же грабель, что в комментарии _tile_round выше).
+	var tv_script := load("res://scripts/ui/tile_view.gd") as GDScript
+	var bs := load("res://scripts/ui/badge_dot.gd") as GDScript
+	var jt := Tile.new(3, Tile.TColor.BLUE, 0, true)
+	var jv: Control = tv_script.make(jt, false, null)
+	root.add_child(jv)
+	await process_frame
+	var dup: Control = jv.duplicate()
+	dup.call("_prepare_drag_dup", jv)
+	if dup.get("tile") != jt:
+		_fail("чинка не вернула дубликату tile — звезда не нарисуется")
+	var labels := 0
+	var badges := 0
+	for ch in dup.get_children():
+		if ch is Label:
+			labels += 1
+		elif is_instance_valid(ch) and (ch as Node).get_script() == bs:
+			badges += 1
+	if labels != 0:
+		_fail("у джокера текстовая подпись вместо рисованной звезды")
+	if badges != 1:
+		_fail("у дубликата не один живой бейдж, got %d" % badges)
+	# Цифра едет узлом и не должна теряться при чинке.
+	var nt := Tile.new(4, Tile.TColor.RED, 88, false)
+	var nv: Control = tv_script.make(nt, false, null)
+	root.add_child(nv)
+	var ndup: Control = nv.duplicate()
+	ndup.call("_prepare_drag_dup", nv)
+	var kept := ""
+	for ch in ndup.get_children():
+		if ch is Label:
+			kept = String((ch as Label).text)
+	if kept != "88":
+		_fail("цифра не пережила дубликат, got '%s'" % kept)
+	if ndup.get("tile") != nt:
+		_fail("номерной дубликат без tile")
+	# Маркированный оригинал: бейдж top_level, клики сквозь, виден.
+	jv.set("mark_drawn", true)
+	jv.call("_sync_badge")
+	var bb := jv.get("_badge") as Control
+	if bb == null or not bb.visible:
+		_fail("бейдж не виден на свежей фишке")
+	else:
+		if not bb.top_level:
+			_fail("бейдж не поверх рядов (нет top_level)")
+		if bb.mouse_filter != Control.MOUSE_FILTER_IGNORE:
+			_fail("бейдж перехватывает тапы")
+	# Белый кружок без тёмной обводки + прятки под модалками (статикой:
+	# отрисовку _draw без дисплея не увидеть).
+	var bsrc := _read_text("res://scripts/ui/badge_dot.gd")
+	if not bsrc.contains("Color(1, 1, 1"):
+		_fail("кружок бейджа не белый")
+	if bsrc.contains("0, 0, 0, 0.85"):
+		_fail("у кружка осталась тёмная обводка")
+	var tsrc := _read_text("res://scripts/ui/tile_view.gd")
+	if not tsrc.contains("_modal_open"):
+		_fail("бейдж не прячется под модалками")
+	jv.free()
+	nv.free()
+	dup.free()
+	ndup.free()
+
+
+func _read_text(path: String) -> String:
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		return ""
+	var text := f.get_as_text()
+	f.close()
+	return text
 
 
 func _fail(msg: String) -> void:
