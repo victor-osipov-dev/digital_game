@@ -20,7 +20,8 @@ var mark_hint: bool = false
 var mark_drawn: bool = false
 var face_down: bool = false
 ## Подписчик-бейдж свежей фишки (белый кружок + галочка). Живёт отдельным
-## top_level-контролом: поверх рядов, без прозрачности фишки.
+## контролом в слое Game: поверх рядов, ниже модалок, без прозрачности
+## фишки.
 var _badge: Control = null
 ## Итоговая прозрачность по меткам: прилёт анимирует modulate, и если
 ## два прилёта наложатся, второй обязан целиться сюда, а не в текущий
@@ -114,24 +115,42 @@ func _build() -> void:
 
 ## Подписчик-бейдж галочки свежей своей фишки (взята из колоды / только
 ## что выложена) — в правом верхнем углу, чуть выходя за карточку.
-## Отдельный top_level-контрол: рисуется поверх соседних рядов (кружок
-## не обрезается) и не берёт прозрачность фишки. Белый кружок без тёмной
-## обводки + зелёная галочка штрихами (глифа нет в шрифте Web-сборки).
+## Отдельный контрол в слое бейджей: рисуется поверх соседних рядов
+## (кружок не обрезается), но ниже модалок/тостов/меню. Белый кружок без
+## тёмной обводки + зелёная галочка штрихами (глифа нет в шрифте Web-сборки).
 func _build_badge() -> void:
 	if _badge != null:
-		_badge.free()
+		_free_badge()
 	var ts := Settings.tile_size()
 	var r := ts.y * 0.13
 	_badge = BadgeDot.new()
 	_badge.size = Vector2(r * 2.0, r * 2.0)
 	_badge.visible = false
-	add_child(_badge)
+	_badge_host().add_child(_badge)
 	_badge.queue_redraw()
 	_sync_badge()
 
 
+func _badge_host() -> Control:
+	if controller != null and controller.has_method("get_badge_layer"):
+		var layer := controller.call("get_badge_layer") as Control
+		if layer != null:
+			return layer
+	return self
+
+
+func _free_badge() -> void:
+	if _badge != null and is_instance_valid(_badge):
+		_badge.free()
+	_badge = null
+
+
 func _enter_tree() -> void:
 	_sync_badge()
+
+
+func _exit_tree() -> void:
+	_free_badge()
 
 
 func _notification(what: int) -> void:
@@ -144,13 +163,10 @@ func _process(_delta: float) -> void:
 
 
 ## Угол фишки + видимость бейджа. _process включён, пока бейдж НУЖЕН
-## (есть метки и view в дереве), — а ВИДЕН он только без модалок,
-## при видимых предках и разложенном ряде. Разделять обязательно:
-## иначе оверлей в начале хода (пас/титр) гасил бы процесс и бейдж
-## не проснулся бы после закрытия — галочка появлялась бы только
-## на следующей пересборке (после выкладки). Сами метки освежает
-## refresh_marks() по вызову игры (после взятия они приходят позже
-## сборки видов).
+## (есть метки и view в дереве), — а ВИДЕН он при видимых предках и
+## разложенном ряде. Модалки его не гасят: слой бейджей сам расположен
+## ниже них. Сами метки освежает refresh_marks() по вызову игры (после
+## взятия они приходят позже сборки видов).
 func _sync_badge() -> void:
 	if _badge == null or not is_inside_tree():
 		return
@@ -162,7 +178,7 @@ func _sync_badge() -> void:
 	# Ряд ещё не разложен: свежие виды лежат в (0,0) все разом
 	# (см. FlowTiles.is_laid_out) — целиться туда нельзя, иначе все
 	# галочки на мгновение съезжаются в одну точку.
-	var show := is_visible_in_tree() and not _modal_up() and _flow_laid_out() \
+	var show := is_visible_in_tree() and _flow_laid_out() \
 		and _tile_in_scroll_view()
 	(_badge as Control).visible = show
 	if not show:
@@ -229,8 +245,12 @@ static func badge_fade_for(tile_rect: Rect2, scroll_rect: Rect2) -> float:
 func _place_badge() -> void:
 	var ts := Settings.tile_size()
 	var r := ts.y * 0.13
-	(_badge as Control).position = get_global_rect().position \
-		+ Vector2(ts.x - 1.0 - r, 1.0 - r)
+	var global := get_global_rect().position + Vector2(ts.x - 1.0 - r, 1.0 - r)
+	var host := _badge.get_parent() as Control
+	if host != null and host != self:
+		(_badge as Control).position = host.get_global_transform().affine_inverse() * global
+	else:
+		(_badge as Control).position = Vector2(ts.x - 1.0 - r, 1.0 - r)
 
 
 ## Перечитать метки у живой view: метки взятия ставятся позже сборки
@@ -248,15 +268,6 @@ func refresh_marks() -> void:
 	mark_drawn = bool(marks.get("drawn", false))
 	_sync_badge()
 
-
-func _modal_up() -> bool:
-	# Галочка — top_level: её давят и тост с бургером, а не только модалки
-	# (см. _badges_hidden). Старый путь оставлен для чужих контроллеров.
-	if controller != null and controller.has_method("_badges_hidden"):
-		return bool(controller.call("_badges_hidden"))
-	if controller != null and controller.has_method("_modal_open"):
-		return bool(controller.call("_modal_open"))
-	return false
 
 func _draw() -> void:
 	if face_down:

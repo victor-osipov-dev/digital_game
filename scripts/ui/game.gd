@@ -52,6 +52,7 @@ var hint_btn: Button = null
 var cp_save_btn: Button = null
 var cp_restore_btn: Button = null
 var chips_box: HBoxContainer = null
+var _badge_layer: Control = null
 
 var pass_overlay: ColorRect = null
 var pass_title: Label = null
@@ -325,6 +326,14 @@ func _build_ui() -> void:
 	var layout := VBoxContainer.new()
 	layout.add_theme_constant_override("separation", 8)
 	margin.add_child(layout)
+
+	# Галочки свежих фишек живут в отдельном слое: выше рядов и руки, но
+	# ниже тостов, бургера и полноэкранных окон. Так они могут немного
+	# выходить за карточку без ручного hide/show под каждую модалку.
+	_badge_layer = Control.new()
+	_badge_layer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_badge_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_badge_layer)
 
 	# Верхняя строка — в потоке, а не в одном ряду: при большом
 	# шесть кнопок с крупным текстом не влезают в 576, и строка
@@ -747,6 +756,10 @@ func _build_confirm_dialog() -> void:
 	cancel.pressed.connect(_close_confirm)
 	row.add_child(cancel)
 	_confirm_cancel = cancel
+
+
+func get_badge_layer() -> Control:
+	return _badge_layer
 
 
 func _ask_confirm(title: String, text: String, ok_text: String, action: Callable) -> void:

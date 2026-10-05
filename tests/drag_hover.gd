@@ -440,8 +440,8 @@ func _bar_checks() -> void:
 		"ползунок вниз — натив крутит вниз (%d)" % scroll.scroll_vertical)
 
 
-## Галочка — top_level: под тостом и бургер-меню она прячется, а не
-## торчит поверх уведомлений. Без попапов видна как раньше.
+## Галочка живёт в слое ниже тостов и бургер-меню: сама она не гаснет,
+## но всплывающие окна рисуются поверх неё. Без попапов видна как раньше.
 func _badge_popup_checks() -> void:
 	var tv_script := load("res://scripts/ui/tile_view.gd") as GDScript
 	var t := Tile.new(930, Tile.TColor.BLUE, 4, false)
@@ -458,13 +458,13 @@ func _badge_popup_checks() -> void:
 	inst.call("toast", "тест", false)
 	await process_frame
 	v.call("_sync_badge")
-	check(bb != null and not bb.visible, "бейдж прячется под уведомлением")
+	check(bb != null and bb.visible, "бейдж остаётся видимым под уведомлением")
 	check(bool(inst.call("_badges_hidden")), "гейт видит уведомление")
 	inst.call("_hide_toast")
 	inst.call("_set_burger_open", true, false)
 	await process_frame
 	v.call("_sync_badge")
-	check(bb != null and not bb.visible, "бейдж прячется под бургером")
+	check(bb != null and bb.visible, "бейдж остаётся видимым под бургером")
 	check(bool(inst.call("_badges_hidden")), "гейт видит бургер")
 	inst.call("_set_burger_open", false, false)
 	await process_frame
