@@ -3,11 +3,11 @@ extends Panel
 const Lang := preload("res://scripts/core/lang.gd")
 const BadgeDot := preload("res://scripts/ui/badge_dot.gd")
 ## Верхний край скролла: галочка держится полной почти до самой кромки
-## и только в последние пиксели быстро гаснет (smoothstep на 8 px).
+## и только в последние пиксели быстро гаснет (smoothstep на 3 px).
 ## Линейный спад гасил бы и первый выставленный ряд — он стоит почти
 ## у верха почти пустого скролла, и галочки выходили очень тусклыми.
 ## Низ — по доле видимого, как раньше. Бока не считаем.
-const BADGE_FADE_TOP := 8.0
+const BADGE_FADE_TOP := 3.0
 
 var tile: Tile = null
 var draggable: bool = false
