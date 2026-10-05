@@ -3447,8 +3447,12 @@ func _play_place_anim(shots: Array, force: Array = [],
 				}
 	for id in force:
 		prev.erase(int(id))
-	# Здесь только быстрые прилёты (почти разом, лишь бы не в один кадр).
+	# Здесь быстрые прилёты и каскадные переезды: новые фишки летят
+	# почти разом, а сменившие место скользят друг за другом (иначе
+	# перестановка бота на столе выглядела мгновенной кашей). Счётчики
+	# раздельные: стаггер слайдов не смеет задерживать прилёты.
 	var step := 0
+	var slide_step := 0
 	for id in cur.keys():
 		if skip.has(id):
 			continue
@@ -3457,7 +3461,8 @@ func _play_place_anim(shots: Array, force: Array = [],
 			var gpos: Vector2 = prev[id]["gpos"]
 			prev.erase(id)
 			if gpos.distance_to(tv.global_position) > 2.0:
-				_slide_tile(tv, gpos)
+				_slide_tile(tv, gpos, minf(slide_step * 0.15, 1.0))
+				slide_step += 1
 		else:
 			_fly_in_tile(tv, step, 0.05, 0.4)
 			step += 1
@@ -3504,7 +3509,8 @@ func _fly_in_tile(tv: TileView, step: int, gap: float = 0.05, cap: float = 0.4) 
 	tw.finished.connect(_rest_layout.bind(tv))
 
 ## Фишка сменила место: переезжает из старого положения в новое.
-func _slide_tile(tv: TileView, from_global: Vector2) -> void:
+## delay — стаггер каскада перестановки (по одной, а не все разом).
+func _slide_tile(tv: TileView, from_global: Vector2, delay := 0.0) -> void:
 	var parent := tv.get_parent()
 	if parent == null:
 		return
@@ -3513,7 +3519,7 @@ func _slide_tile(tv: TileView, from_global: Vector2) -> void:
 	var tw := create_tween()
 	tw.bind_node(tv)
 	tw.tween_property(tv, "position", final_local, 0.3) \
-		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT).set_delay(delay)
 	tw.finished.connect(_rest_layout.bind(tv))
 
 ## Переезд/полёт кончились — возвращаем карточку в раскладку ряда: если за

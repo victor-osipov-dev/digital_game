@@ -49,6 +49,7 @@ func _on_frame() -> void:
 			await _drop_checks()
 			await _pan_checks()
 			await _win_checks()
+			await _slide_checks()
 			quit(0 if fails == 0 else 1)
 
 func _empty_checks() -> void:
@@ -61,6 +62,47 @@ func _empty_checks() -> void:
 	var hover := inst as Control
 	check(hover.call("_hover_slot_pos", box.get_center()) == 0, "empty table: center -> slot 0")
 	check(hover.call("_hover_slot_pos", Vector2(-500, -500)) == -1, "outside table -> -1")
+
+
+## Перестановка каскадом: слайды стартуют лесенкой, а не разом.
+## Свои вьюхи (не игровые), чтобы чужой полёт не сбивал замеры.
+func _slide_checks() -> void:
+	var tv_script := load("res://scripts/ui/tile_view.gd") as GDScript
+	var holder := Control.new()
+	holder.position = Vector2.ZERO
+	root.add_child(holder)
+	var made := []
+	for i in range(2):
+		var t := Tile.new(910 + i, Tile.TColor.RED, 1 + i, false)
+		var v: Control = tv_script.make(t, false, null)
+		v.position = Vector2(100 + i * 90, 400)
+		holder.add_child(v)
+		made.append(v)
+	await process_frame
+	await process_frame
+	var a := made[0] as Control
+	var b := made[1] as Control
+	var pa: Vector2 = a.position
+	var pb: Vector2 = b.position
+	inst.call("_slide_tile", a, a.get_global_rect().position + Vector2(60, 0), 0.0)
+	inst.call("_slide_tile", b, b.get_global_rect().position + Vector2(60, 0), 0.6)
+	# Слайд сначала прыгает в точку старта и едет назад: ждём движения
+	# от неё, а не от исходной позиции.
+	var fa: Vector2 = a.position
+	var fb: Vector2 = b.position
+	await create_timer(0.15).timeout
+	check(((a.position - fa).length()) > 2.0,
+		"первая фишка уже едет, got %.0f" % (a.position - fa).length())
+	check(((b.position - fb).length()) < 5.0,
+		"вторая ждёт своей очереди, got %.0f" % (b.position - fb).length())
+	await create_timer(0.95).timeout
+	check(((a.position - pa).length()) < 5.0,
+		"первая доехала, got %.0f" % (a.position - pa).length())
+	check(((b.position - pb).length()) < 5.0,
+		"вторая доехала следом, got %.0f" % (b.position - pb).length())
+	for v in made:
+		(v as Control).queue_free()
+	holder.queue_free()
 
 func _row_checks() -> void:
 	var tb = inst.get("table_box")
