@@ -2,13 +2,12 @@ class_name TileView
 extends Panel
 const Lang := preload("res://scripts/core/lang.gd")
 const BadgeDot := preload("res://scripts/ui/badge_dot.gd")
-## За сколько пикселей до ВЕРХНЕГО края скролла бейдж начинает тускнеть:
-## кружок чуть выступает над фишкой и заезжает на имена игроков сверху,
-## поэтому здесь гаснем заранее — но поздно (20 px, а не 48: раньше
-## было слишком рано). Низ — по доле видимого, как раньше: там запас
-## есть и раннее затухание только мешало. Бока не считаем: ряды почти
-## во всю ширину.
-const BADGE_FADE_TOP := 20.0
+## Верхний край скролла: галочка держится полной почти до самой кромки
+## и только в последние пиксели быстро гаснет (smoothstep на 8 px).
+## Линейный спад гасил бы и первый выставленный ряд — он стоит почти
+## у верха почти пустого скролла, и галочки выходили очень тусклыми.
+## Низ — по доле видимого, как раньше. Бока не считаем.
+const BADGE_FADE_TOP := 8.0
 
 var tile: Tile = null
 var draggable: bool = false
@@ -197,9 +196,9 @@ func _tile_in_scroll_view() -> bool:
 	return true
 
 
-## Прозрачность бейджа у края скролла: сверху — линейно за BADGE_FADE_TOP
-## до кромки (на кромке уже ноль), снизу — по доле видимой площади, как
-## раньше (там затухание заранее только мешало). Дальше прячет
+## Прозрачность бейджа у края скролла: сверху — полка почти до кромки
+## и резкий срез в последние пиксели (иначе гас и первый ряд), снизу —
+## по доле видимой площади, как раньше. Дальше прячет
 ## _tile_in_scroll_view. Тускнеет только кружок, не фишка.
 func _badge_fade() -> float:
 	var r := get_global_rect()
@@ -217,9 +216,8 @@ func _badge_fade() -> float:
 static func badge_fade_for(tile_rect: Rect2, scroll_rect: Rect2) -> float:
 	if tile_rect.size.x <= 0.0 or tile_rect.size.y <= 0.0:
 		return 0.0
-	var top_a := clampf(
-		(tile_rect.position.y - scroll_rect.position.y) / BADGE_FADE_TOP,
-		0.0, 1.0)
+	var top_a := smoothstep(0.0, BADGE_FADE_TOP,
+		tile_rect.position.y - scroll_rect.position.y)
 	var f := 0.0
 	var inter := tile_rect.intersection(scroll_rect)
 	if inter.size.x > 0.0 and inter.size.y > 0.0:

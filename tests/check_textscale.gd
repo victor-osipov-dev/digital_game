@@ -492,17 +492,19 @@ func _scroll_badge_round() -> void:
 	sc.free()
 
 
-## Бейдж гаснет вовремя: сверху — линейно за 20 px до кромки (на кромке
-## ноль, до имён не дотягивается), снизу — по доле видимого, как раньше.
-## Тускнеет только кружок, не фишка.
+## Бейдж гаснет вовремя: сверху — полка почти до кромки и резкий срез
+## в последние пиксели (первый ряд не тускнеет), снизу — по доле
+## видимого, как раньше. Тускнеет только кружок, не фишка.
 func _badge_fade_round() -> void:
 	var tv_script := load("res://scripts/ui/tile_view.gd") as GDScript
 	var sc := Rect2(0, 0, 200, 200)
 	if float(tv_script.badge_fade_for(Rect2(50, 80, 40, 40), sc)) != 1.0:
 		_fail("бейдж в глубине: alpha 1")
-	var near_top := float(tv_script.badge_fade_for(Rect2(50, 10, 40, 40), sc))
+	if float(tv_script.badge_fade_for(Rect2(50, 10, 40, 40), sc)) != 1.0:
+		_fail("бейдж в 10 px от верха: ещё полный")
+	var near_top := float(tv_script.badge_fade_for(Rect2(50, 4, 40, 40), sc))
 	if absf(near_top - 0.5) > 0.01:
-		_fail("бейдж в 10 px от верха: наполовину, got %.2f" % near_top)
+		_fail("бейдж в 4 px от верха: наполовину, got %.2f" % near_top)
 	if float(tv_script.badge_fade_for(Rect2(50, 0, 40, 40), sc)) != 0.0:
 		_fail("бейдж на верхней кромке: alpha 0")
 	var half_out := float(tv_script.badge_fade_for(Rect2(50, 180, 40, 40), sc))
