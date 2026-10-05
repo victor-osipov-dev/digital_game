@@ -213,6 +213,20 @@ func _boot() -> void:
 			"импульс докатил дальше (%d → %d, макс %d)"
 				% [at_release, scroll.scroll_vertical, maxv])
 
+		# --- 9.6) полосу прокрутки ведёт натив, а не content-follow ----
+		# Жест, начатый на ползунке, ScrollDrag не перехватывает: иначе
+		# ползунок ехал бы ПРОТИВ пальца (палец вверх — значение вниз).
+		var sdrag = menu.get("_scroll_drag")
+		var bar := scroll.get_v_scroll_bar()
+		check(bar != null and bar.visible, "вертикальный скроллбар виден")
+		if bar != null and sdrag != null:
+			_press(bar.get_global_rect().get_center())
+			await process_frame
+			check(not bool(sdrag.get("_pressed")),
+				"пресс на ползунке не перехвачен (ведёт натив)")
+			_release(bar.get_global_rect().get_center())
+			await process_frame
+
 	# --- 10) растянутое окно: тап не уезжает в соседний контрол -----
 	# На телефоне окно 1080x2400 при базе 576x1024, коэффициент 1.875.
 	# Отыгрыш тапа отдаёт координату вьюпорта, и push_input обязан

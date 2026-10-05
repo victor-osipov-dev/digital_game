@@ -39,6 +39,7 @@ func _boot() -> void:
 
 	_check_web_glyphs()
 	await _dup_round()
+	await _scroll_badge_round()
 
 	for idx in range(3):
 		settings.text_scale = idx
@@ -443,6 +444,51 @@ func _dup_round() -> void:
 	nv.free()
 	dup.free()
 	ndup.free()
+
+
+# ---------------------------------------------------------------- бейдж и скролл
+
+## Подписчик не улетает за поле: фишка вне видимости скролла — бейдж
+## прячется (раньше долетал аж до верхних кнопок).
+func _scroll_badge_round() -> void:
+	var tv_script := load("res://scripts/ui/tile_view.gd") as GDScript
+	var sc := ScrollContainer.new()
+	sc.custom_minimum_size = Vector2(200, 200)
+	sc.size = Vector2(200, 200)
+	sc.position = Vector2(50, 50)
+	root.add_child(sc)
+	var inner := Control.new()
+	inner.custom_minimum_size = Vector2(200, 800)
+	sc.add_child(inner)
+	var jt := Tile.new(5, Tile.TColor.BLUE, 0, true)
+	var jv: Control = tv_script.make(jt, false, null)
+	jv.position = Vector2(0, 50)
+	inner.add_child(jv)
+	jv.set("mark_drawn", true)
+	await process_frame
+	await process_frame
+	sc.scroll_vertical = 0
+	jv.call("_sync_badge")
+	var bb := jv.get("_badge") as Control
+	if bb == null or not bb.visible:
+		_fail("бейдж виден, пока фишка в скролле")
+		jv.free()
+		sc.free()
+		return
+	sc.scroll_vertical = 600
+	await process_frame
+	await process_frame
+	jv.call("_sync_badge")
+	if bb.visible:
+		_fail("фишка уехала из скролла — бейдж спрятан")
+	sc.scroll_vertical = 0
+	await process_frame
+	await process_frame
+	jv.call("_sync_badge")
+	if not bb.visible:
+		_fail("вернули скролл — бейдж снова виден")
+	jv.free()
+	sc.free()
 
 
 func _read_text(path: String) -> String:

@@ -156,7 +156,8 @@ func _sync_badge() -> void:
 	# Ряд ещё не разложен: свежие виды лежат в (0,0) все разом
 	# (см. FlowTiles.is_laid_out) — целиться туда нельзя, иначе все
 	# галочки на мгновение съезжаются в одну точку.
-	var show := is_visible_in_tree() and not _modal_up() and _flow_laid_out()
+	var show := is_visible_in_tree() and not _modal_up() and _flow_laid_out() \
+		and _tile_in_scroll_view()
 	(_badge as Control).visible = show
 	if not show:
 		return
@@ -168,6 +169,21 @@ func _flow_laid_out() -> bool:
 	var flow := get_parent()
 	if flow != null and (flow as Object).has_method("is_laid_out"):
 		return bool(flow.call("is_laid_out"))
+	return true
+
+
+## Фишка в видимой части скролла: подписчик рисуется поверх всего и
+## скролл его не режет — без этой проверки он улетал бы за полем вплоть
+## до верхних кнопок. Небольшой запас (12 px) на вылет кружка за край:
+## в нём ещё видно, дальше — уже нет.
+func _tile_in_scroll_view() -> bool:
+	var r := get_global_rect()
+	var p := get_parent()
+	while p != null:
+		var sc := p as ScrollContainer
+		if sc != null:
+			return sc.get_global_rect().grow(12.0).intersects(r)
+		p = p.get_parent()
 	return true
 
 

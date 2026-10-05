@@ -128,6 +128,12 @@ func _press(host: Node, pos: Vector2, from_touch: bool) -> bool:
 	var ctrl := _hit(host.get_viewport(), p)
 	if ctrl == null or not ScrollFix.keeps(ctrl):
 		return false
+	if ctrl is ScrollBar:
+		# Полосу прокрутки ведёт нативный ScrollContainer. Наш content-follow
+		# ("контент за пальцем") гнал бы ползунок ПРОТИВ пальца: палец вверх —
+		# значение вниз, ползунок вниз. Тапы по треку (прыжок на страницу)
+		# тоже остаются нативными.
+		return false
 	var scroll := _scroll_parent(ctrl)
 	if scroll == null:
 		return false

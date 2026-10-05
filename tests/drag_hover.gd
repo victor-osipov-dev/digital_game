@@ -50,6 +50,7 @@ func _on_frame() -> void:
 			await _pan_checks()
 			await _win_checks()
 			await _slide_checks()
+			_split_own_checks()
 			quit(0 if fails == 0 else 1)
 
 func _empty_checks() -> void:
@@ -103,6 +104,38 @@ func _slide_checks() -> void:
 	for v in made:
 		(v as Control).queue_free()
 	holder.queue_free()
+
+
+## Свои выкладки — мимо очереди презентаций (тест split).
+func _split_own_checks() -> void:
+	inst.set("_anim_force", {11: 0, 22: 1, 33: 0})
+	var own = inst.call("_split_own_force")
+	check((own as Array).is_empty(), "офлайн: свои не выделяем")
+	check((inst.get("_anim_force") as Dictionary).size() == 3,
+		"офлайн: очередь цела")
+	inst.set("_online", true)
+	var st = inst.get("state")
+	var saved_ls := -1
+	var ls := -1
+	if st != null and st.get("local_seat") != null:
+		ls = int(st.get("local_seat"))
+		saved_ls = ls
+	if ls < 0:
+		ls = 0
+		if st != null:
+			st.set("local_seat", 0)
+	var other := (ls + 1) % 2
+	inst.set("_anim_force", {11: ls, 22: other, 33: ls})
+	var own2 := inst.call("_split_own_force") as Array
+	check(own2.size() == 2 and own2.has(11) and own2.has(33),
+		"свои id изъяты из очереди")
+	var rest := inst.get("_anim_force") as Dictionary
+	check(rest.size() == 1 and int(rest.get(22, -1)) == other,
+		"чужие остались в очереди")
+	inst.set("_anim_force", {})
+	inst.set("_online", false)
+	if st != null:
+		st.set("local_seat", saved_ls)
 
 func _row_checks() -> void:
 	var tb = inst.get("table_box")

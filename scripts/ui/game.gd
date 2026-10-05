@@ -3051,6 +3051,9 @@ func refresh() -> void:
 	_requeue_orphans()
 	# Словарь id→место: по месту группируем сегменты, по ключам — плоский
 	# список для немедленного полёта и списка ждущих (там место не нужно).
+	# Свои id до этого уже убраны из _anim_force (_split_own_force): они
+	# долетают обычным немедленным путём, без очереди презентаций.
+	_split_own_force()
 	var force_map: Dictionary = _anim_force
 	_anim_force = {}
 	var force: Array = []
@@ -3187,6 +3190,23 @@ func _after_present() -> void:
 ## Шаги в очередь: дубли номеров ни к чему (повторные рассылки несут
 ## те же фишки), порядок — как пришли. seat — чьи это фишки: подсветка
 ## сверху следует за показываемым местом, а не за state.current.
+## Свои выложенные id — мимо очереди презентаций: ставить фишку и секунду
+## ждать её прилёта (титры чужих ходов + стаггер) неинтуитивно. Убирает свои
+## id из _anim_force (возвращает их); дальше они долетают обычным
+## немедленным путём (слайд из снимка / быстрый прилёт). Чужие ходы идут
+## как раньше — очередью. Только онлайн: офлайн и так без очереди.
+func _split_own_force() -> Array:
+	var own: Array = []
+	if not _online or state == null or int(state.local_seat) < 0:
+		return own
+	for id in _anim_force.keys():
+		if int(_anim_force[id]) == int(state.local_seat):
+			own.append(int(id))
+	for id in own:
+		_anim_force.erase(id)
+	return own
+
+
 func _enqueue_steps(ids: Array, seat: int = -1) -> void:
 	var fresh: Array = []
 	for id in ids:
