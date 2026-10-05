@@ -2,11 +2,13 @@ class_name TileView
 extends Panel
 const Lang := preload("res://scripts/core/lang.gd")
 const BadgeDot := preload("res://scripts/ui/badge_dot.gd")
-## За сколько пикселей до края скролла бейдж начинает тускнеть (примерно
-## высота фишки): гаснуть прямо на кромке — поздно, кружок уже заезжает
-## на имена игроков сверху. Считаем только вертикаль: ряды почти во всю
-## ширину, боковые отступы ни при чём.
-const BADGE_FADE_ZONE := 48.0
+## За сколько пикселей до ВЕРХНЕГО края скролла бейдж начинает тускнеть:
+## кружок чуть выступает над фишкой и заезжает на имена игроков сверху,
+## поэтому здесь гаснем заранее — но поздно (20 px, а не 48: раньше
+## было слишком рано). Низ — по доле видимого, как раньше: там запас
+## есть и раннее затухание только мешало. Бока не считаем: ряды почти
+## во всю ширину.
+const BADGE_FADE_TOP := 20.0
 
 var tile: Tile = null
 var draggable: bool = false
@@ -195,9 +197,10 @@ func _tile_in_scroll_view() -> bool:
 	return true
 
 
-## Прозрачность бейджа у края скролла: глубже зоны — 1, в зоне линейно
-## от расстояния до края, на кромке и снаружи — 0 (дальше его прячет
-## _tile_in_scroll_view). Тускнеет только кружок, не фишка.
+## Прозрачность бейджа у края скролла: сверху — линейно за BADGE_FADE_TOP
+## до кромки (на кромке уже ноль), снизу — по доле видимой площади, как
+## раньше (там затухание заранее только мешало). Дальше прячет
+## _tile_in_scroll_view. Тускнеет только кружок, не фишка.
 func _badge_fade() -> float:
 	var r := get_global_rect()
 	var p := get_parent()
@@ -209,14 +212,20 @@ func _badge_fade() -> float:
 	return 1.0
 
 
-## Чистая доля для тестов и _badge_fade: расстояние ближнего вертикального
-## края фишки до края скролла, делённое на зону затухания.
+## Чистая доля для тестов и _badge_fade. Верх — расстояние края фишки
+## до края скролла; низ — пересечение площадей (старая формула).
 static func badge_fade_for(tile_rect: Rect2, scroll_rect: Rect2) -> float:
 	if tile_rect.size.x <= 0.0 or tile_rect.size.y <= 0.0:
 		return 0.0
-	var d := minf(tile_rect.position.y - scroll_rect.position.y,
-		scroll_rect.end.y - tile_rect.end.y)
-	return clampf(d / BADGE_FADE_ZONE, 0.0, 1.0)
+	var top_a := clampf(
+		(tile_rect.position.y - scroll_rect.position.y) / BADGE_FADE_TOP,
+		0.0, 1.0)
+	var f := 0.0
+	var inter := tile_rect.intersection(scroll_rect)
+	if inter.size.x > 0.0 and inter.size.y > 0.0:
+		f = (inter.size.x * inter.size.y) \
+			/ (tile_rect.size.x * tile_rect.size.y)
+	return minf(top_a, clampf(f / 0.75, 0.0, 1.0))
 
 
 func _place_badge() -> void:
