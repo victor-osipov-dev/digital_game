@@ -137,23 +137,57 @@ func _process(_delta: float) -> void:
 	_sync_badge()
 
 
-## Угол фишки + видимость бейджа. _process включён, только пока бейдж
-## нужен (метки immutable после сборки — иначе сотни фишек тикали бы
-## зря). Под модалками (победа, подтверждение) бейдж прячем: он рисуется
-## поверх всего и торчал бы над диалогом.
+## Угол фишки + видимость бейджа. _process включён, пока бейдж НУЖЕН
+## (а не пока виден): раскладка может закончиться, модалка закрыться,
+## предок показаться — всё это подхватываем без пересборки. Сами метки
+## освежает refresh_marks() по вызову игры (после взятия они приходят
+## позже сборки видов).
 func _sync_badge() -> void:
 	if _badge == null or not is_inside_tree():
 		return
-	var show := (mark_drawn or mark_draft) and not face_down \
+	var want := (mark_drawn or mark_draft) and not face_down \
 		and is_visible_in_tree() and not _modal_up()
+	set_process(want)
+	# Ряд ещё не разложен: свежие виды лежат в (0,0) все разом
+	# (см. FlowTiles.is_laid_out) — целиться туда нельзя, иначе все
+	# галочки на мгновение съезжаются в одну точку. Процесс при этом
+	# не гасим: раскладка догонит следующим кадром.
+	var show := want and _flow_laid_out()
 	(_badge as Control).visible = show
-	set_process(show)
 	if not show:
 		return
+	_place_badge()
+
+
+## Вне FlowTiles (превью перетаскивания) — всегда можно целиться.
+func _flow_laid_out() -> bool:
+	var flow := get_parent()
+	if flow != null and (flow as Object).has_method("is_laid_out"):
+		return bool(flow.call("is_laid_out"))
+	return true
+
+
+func _place_badge() -> void:
 	var ts := Settings.tile_size()
 	var r := ts.y * 0.13
 	(_badge as Control).position = get_global_rect().position \
-		+ Vector2(size.x - 1.0 - r, 1.0 - r)
+		+ Vector2(ts.x - 1.0 - r, 1.0 - r)
+
+
+## Перечитать метки у живой view: метки взятия ставятся позже сборки
+## (ответ сервера уже применён, виды ещё старые) — без этого галочка
+## появлялась только на следующей пересборке (после выкладки).
+func refresh_marks() -> void:
+	if tile == null:
+		return
+	var marks := {}
+	if controller != null and controller.has_method("get_tile_marks"):
+		marks = controller.get_tile_marks(tile.id)
+	mark_last = bool(marks.get("last", false))
+	mark_draft = bool(marks.get("draft", false))
+	mark_hint = bool(marks.get("hint", false))
+	mark_drawn = bool(marks.get("drawn", false))
+	_sync_badge()
 
 
 func _modal_up() -> bool:

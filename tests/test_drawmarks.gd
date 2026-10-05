@@ -98,6 +98,16 @@ func test_draw_marks_tile() -> void:
 	game.state.current = 0
 	game.refresh()
 	ok("галочка видна на фишке", _hand_badge(took))
+	# Метки приходят позже сборки (ответ сервера уже применён, виды ещё
+	# старые): refresh_marks подтягивает их живьём, без пересборки.
+	# Раньше галочка появлялась только после следующей выкладки.
+	var vv := _hand_view(took)
+	if vv == null:
+		ok("вид взятой фишки найден", false)
+	else:
+		vv.set("mark_drawn", false)
+		game.call("_refresh_badges")
+		ok("refresh подтянул метку без пересборки", bool(vv.get("mark_drawn")))
 	ok("чип показывает взятие", _chip_has("взял"))
 	# Выложил (фишка ушла из руки) — метка снялась сама.
 	var hand: Array = game.state.players[0].hand
@@ -355,8 +365,15 @@ func _all_positions() -> Array:
 	return out
 
 
-## Галочка взятой фишки: флаг вида (сам бейдж рисуется в _draw).
+## Галочка взятой фишки: флаг вида (сам бейдж — подписчик сверху).
 func _hand_badge(tile_id: int) -> bool:
+	var v := _hand_view(tile_id)
+	if v == null:
+		return false
+	return bool(v.get("mark_drawn"))
+
+
+func _hand_view(tile_id: int) -> Control:
 	var views: Array = []
 	if game.hand_flow != null and game.hand_flow.get("tile_views") != null:
 		views = game.hand_flow.get("tile_views")
@@ -367,9 +384,8 @@ func _hand_badge(tile_id: int) -> bool:
 		var tile = v.get("tile")
 		if tile == null or int(tile.get("id")) != tile_id:
 			continue
-		if bool(v.get("mark_drawn")):
-			return true
-	return false
+		return v
+	return null
 
 
 ## У имени какого-то игрока чип с подстрокой.

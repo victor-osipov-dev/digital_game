@@ -2352,6 +2352,7 @@ func _mark_drawn_diff(before: Array) -> void:
 		_draw_marks[state.local_seat] = fresh[0]
 		_drew_seat = state.local_seat
 		refresh()
+		_refresh_badges()
 
 
 ## Номер взятой по пришедшему состоянию: рука нашего места выросла ровно
@@ -2373,6 +2374,23 @@ func _mark_drawn_state(prev: GameState, mover: int) -> void:
 			fresh.append(tid)
 	if fresh.size() == 1:
 		_draw_marks[state.local_seat] = fresh[0]
+		_refresh_badges()
+
+
+## Освежить галочки у живых видов: метки взятия/выкладки могут прийти
+## позже сборки (ответ сервера применён, виды ещё старые) — без обхода
+## галочка появлялась только на следующей пересборке.
+func _refresh_badges() -> void:
+	if hand_flow != null:
+		for v in hand_flow.tile_views:
+			(v as TileView).refresh_marks()
+	for block in row_blocks:
+		var flow = (block as RowBlock).flow
+		if flow == null:
+			continue
+		for v in flow.tile_views:
+			(v as TileView).refresh_marks()
+
 
 func _on_main_pressed() -> void:
 	if not _can_act():

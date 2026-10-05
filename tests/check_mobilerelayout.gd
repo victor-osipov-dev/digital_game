@@ -76,6 +76,15 @@ func _boot() -> void:
 		printerr("FAIL  Settings autoload missing")
 		quit(1)
 		return
+	# Герметичность: тест жмёт настоящую кнопку «По сети» — лобби
+	# коннектится и молча резюмит сессию из user://session.json, после чего
+	# живые комнаты с сервера затирают подставные данные пагинации.
+	# Сессию прячем файлом И в памяти (autoload читает её раньше теста),
+	# в конце возвращаем файл как был.
+	var session_backup := _hide_session()
+	var net := root.get_node_or_null("Net")
+	if net != null and net.get("_session") != null:
+		net.get("_session").call("clear")
 	var saved: int = settings.text_scale
 	var saved_base := root.content_scale_size
 	for size in SIZES:
@@ -85,6 +94,7 @@ func _boot() -> void:
 				await _round(size, base, scale)
 	root.content_scale_size = saved_base
 	settings.text_scale = saved
+	_restore_session(session_backup)
 	if _bad.is_empty() and fails == 0:
 		print("MOBILE LAYOUT CHECK PASSED")
 		quit(0)
@@ -93,6 +103,28 @@ func _boot() -> void:
 		printerr("  " + str(line))
 	printerr("MOBILE LAYOUT CHECK: %d FAILED" % (fails + _bad.size()))
 	quit(1)
+
+
+## Прячет файл сессии, возвращает былое содержимое ("" — файла не было).
+func _hide_session() -> String:
+	var path := "user://session.json"
+	if FileAccess.file_exists(path):
+		var backup := FileAccess.get_file_as_string(path)
+		DirAccess.remove_absolute(path)
+		return backup
+	return ""
+
+
+func _restore_session(backup: String) -> void:
+	var path := "user://session.json"
+	if backup.is_empty():
+		if FileAccess.file_exists(path):
+			DirAccess.remove_absolute(path)
+	else:
+		var f := FileAccess.open(path, FileAccess.WRITE)
+		if f != null:
+			f.store_string(backup)
+			f.close()
 
 
 # ---------------------------------------------------------------- один прогон
