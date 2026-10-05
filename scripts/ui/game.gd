@@ -2108,7 +2108,14 @@ func _bot_apply_op(op: Dictionary, created: Dictionary) -> bool:
 		var row := _bot_resolve_row(String(op.get("to", "")), created)
 		if row == null:
 			return false
-		return state.place_from_hand(int(op.get("tile", -1)), row.id, int(op.get("index", 99)))
+		var tile_id := int(op.get("tile", -1))
+		var ok := state.place_from_hand(tile_id, row.id, int(op.get("index", 99)))
+		if ok:
+			# В локальной игре бот не тащит фишку пальцем. Стартуем её
+			# от чипа игрока, чтобы было понятно, кто именно выложился.
+			_drop_origins[tile_id] = {"pos": _seat_spawn_global(state.current),
+				"ms": Time.get_ticks_msec()}
+		return ok
 	if kind == "move":
 		var src := _bot_resolve_row(String(op.get("from", "")), created)
 		var dst := _bot_resolve_row(String(op.get("to", "")), created)
