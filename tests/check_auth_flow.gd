@@ -135,8 +135,10 @@ func _checks() -> void:
 	_check_board_render()
 	_check_board_page()
 	_check_board_order()
+	_check_board_blue()
 	_check_delete_flow()
 	_check_accent_button_width()
+	_check_busy_carveouts()
 
 
 ## Матрица ошибок входа/регистрации: каждая причина — и клиентская
@@ -413,6 +415,50 @@ func _check_accent_button_width() -> void:
 		"акцентная кнопка влезает целиком (min %.0f, need %.0f)"
 			% [b.custom_minimum_size.x, need])
 	b.free()
+
+
+## Кнопка таблицы — синяя, как сетевая на главном экране.
+func _check_board_blue() -> void:
+	var bb := inst.get("_board_btn") as Button
+	var bsb := bb.get_theme_stylebox("normal") as StyleBoxFlat \
+		if bb != null else null
+	check(bsb != null and bsb.bg_color == Color("1F4E79"),
+		"таблица лидеров синяя")
+
+
+## Во время запроса гаснут только меняющие состояние: чтение, выходы
+## и локальные переключения (вкладки, открыть/закрыть таблицу, отмена,
+## пагинация, «Назад») живут. Иначе в момент каждого фонового обновления
+## списка нельзя нажать вообще ничего.
+func _check_busy_carveouts() -> void:
+	var lobby := inst
+	if inst.get("_board_close_btn") == null:
+		lobby.call("_build_board_modal")
+	# Две страницы комнат: пагинации есть что листать (границы поверх
+	# любых гашений проверяем именно на ней).
+	var seed: Array = []
+	for i in range(7):
+		seed.append({"code": "T%d" % i, "name": "R%d" % i,
+			"filled": 1, "seats": 2})
+	inst.set("_rooms", seed)
+	inst.set("_rooms_page", 0)
+	lobby.call("_render_rooms")
+	lobby.call("_set_busy", "Собираем список комнат…")
+	for name in ["_tab_create_btn", "_tab_code_btn", "_board_btn",
+			"_board_close_btn", "_del_cancel", "_back_btn"]:
+		var b := inst.get(name) as Button
+		check(b != null and not b.disabled, "%s жива во время запроса" % name)
+	for name in ["_create_btn", "_play_btn", "_join_btn", "_start_btn",
+			"_leave_btn", "_refresh_btn", "_login_btn", "_register_btn"]:
+		var b := inst.get(name) as Button
+		if b == null:
+			continue
+		check(b.disabled, "%s погасла во время запроса" % name)
+	check(not (inst.get("_page_next") as Button).disabled,
+		"пагинация листает во время запроса")
+	check((inst.get("_page_prev") as Button).disabled,
+		"граница пагинации держится во время запроса")
+	lobby.call("_set_busy", "")
 
 
 func _rooms_note_text() -> String:

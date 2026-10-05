@@ -121,6 +121,12 @@ var _lobby_note: Label = null
 
 var _rooms: Array = []
 var _busy_flag := false
+## Фоновое обновление списка уже летит: повторный тик таймера и кнопка
+## «Обновить» новых запросов не плодят — тихо пропускают.
+var _rooms_loading := false
+## Закрытие модалки таблицы: живое и во время запроса (закрытие состояние
+## не меняет — в отличие от кнопок, которые его меняют).
+var _board_close_btn: Button = null
 var _started := false
 var _tick: Timer = null
 var _rooms_timer: Timer = null
@@ -747,15 +753,22 @@ func _goto_rooms() -> void:
 ## Проверка живости — здесь же: она нужна ровно для этого запроса. Если
 ## живых серверов нет, список всё равно не придёт, а сообщение об этом
 ## должно быть предметным, а не «ничего не нашлось».
-func _load_rooms() -> void:
-	_set_busy(Lang.t("Собираем список комнат…"))
+## quiet — фоновый тик раз в 10 секунд: кнопки не гаснут и надпись
+## «Собираем…» не мигает — иначе в момент обновления нельзя нажать
+## вообще ничего. Данные (список, счётчик, пагинация) обновляются так же.
+func _load_rooms(quiet := false) -> void:
+	_rooms_loading = true
+	if not quiet:
+		_set_busy(Lang.t("Собираем список комнат…"))
 	await Net.servers.probe(true)
 	_update_presence()
 	if not Net.servers.any_online():
 		_rooms = []
 		_rooms_note.text = Net.servers.offline_hint()
 		_render_rooms()
-		_set_busy("")
+		_rooms_loading = false
+		if not quiet:
+			_set_busy("")
 		return
 	# Список комнат сервер отдаёт только вошедшим, поэтому вход нужен и тут.
 	# Сессия общая для всего кластера: токен, выданный на одном сервере,
@@ -772,7 +785,9 @@ func _load_rooms() -> void:
 		_rooms_note.text = Lang.t("Показаны комнаты без %s. Остальные серверы не ответили.") % \
 			", ".join(_failed_names(failed))
 	_render_rooms()
-	_set_busy("")
+	_rooms_loading = false
+	if not quiet:
+		_set_busy("")
 
 
 func _failed_names(ids: Array) -> PackedStringArray:
@@ -783,8 +798,12 @@ func _failed_names(ids: Array) -> PackedStringArray:
 	return out
 
 
-func _refresh_rooms() -> void:
-	await _load_rooms()
+func _refresh_rooms(quiet := false) -> void:
+	# Обновление уже летит (фоновый тик или кнопка): второе вдогонку
+	# не запускаем — ответы перетёрли бы друг друга.
+	if _rooms_loading:
+		return
+	await _load_rooms(quiet)
 
 
 func _render_rooms() -> void:
@@ -813,8 +832,7 @@ func _render_rooms() -> void:
 	# лишние кнопки ни к чему.
 	_page_row.visible = pages > 1
 	_page_label.text = Lang.t("Стр. %d из %d") % [_rooms_page + 1, pages]
-	_page_prev.disabled = _rooms_page <= 0
-	_page_next.disabled = _rooms_page >= pages - 1
+	_update_pagination()
 	ScrollFix.relax(_rooms_box)
 
 
@@ -1459,6 +1477,15 @@ func _walk_buttons(node: Node, out: Array) -> void:
 ## списка комнат), после первого же запроса оставались мёртвыми навсегда.
 ## Списка тут принципиально нет: сначала гасим всё, потом точечно
 ## разрешаем то, что сейчас имеет смысл.
+##
+## Что живёт даже во время запроса (busy), а что нет:
+##  - «Назад», закрытие модалки таблицы, отмена подтверждения, вкладки
+##    «Создать/по коду» и пагинация — живут: они состояние не меняют
+##    (страницы, закрытия, локальный перелист), и гасить их — значит
+##    запирать игрока на время каждого обновления списка;
+##  - вход/регистрация, создать/быстрая/по коду/старт/покинуть, выйти,
+##    удалить, вернуться/покинуть зависшее, обновить список — гаснут:
+##    это запросы и смена сессий, второй вдогонку всё бы испортил.
 func _update_buttons() -> void:
 	var busy := _busy_flag
 	# Для входа нужен не просто открытый сокет, а приветствие сервера:
@@ -1472,11 +1499,30 @@ func _update_buttons() -> void:
 	# «Назад» остаётся живым даже во время запроса: из экрана, который
 	# ждёт ответа сервера, должен быть выход.
 	_back_btn.disabled = false
+	# Закрытия и отмена — тоже выходы, а не запросы: модалку должно
+	# быть можно закрыть всегда (фон по клику и так закрывается).
+	if _board_close_btn != null:
+		_board_close_btn.disabled = false
+	if _del_cancel != null:
+		_del_cancel.disabled = false
+	# Вкладки — переключение форм без сети: во время обновления списка
+	# (и любого запроса) им гаснуть не с чего.
+	if _tab_create_btn != null:
+		_tab_create_btn.disabled = false
+	if _tab_code_btn != null:
+		_tab_code_btn.disabled = false
+	# Открытие таблицы — тоже чтение: модалка грузит свои данные сама,
+	# закрытие — рядом в том же списке.
+	if _board_btn != null:
+		_board_btn.disabled = false
+	_update_pagination()
 	_login_btn.disabled = busy or not linked
 	_register_btn.disabled = busy or not linked
 	if _ya_btn != null:
 		_ya_btn.disabled = busy or not linked or _ya_busy
-	_refresh_btn.disabled = busy or not linked
+	# Обновить во время обновления — бессмысленный дубль: следующее
+	# нажатие подождёт конца летящего запроса.
+	_refresh_btn.disabled = busy or _rooms_loading or not linked
 	_create_btn.disabled = busy or not authed
 	_play_btn.disabled = busy or not authed
 	_join_btn.disabled = busy or not authed
@@ -1489,6 +1535,16 @@ func _update_buttons() -> void:
 	_drop_btn.disabled = busy or not stuck
 	_join_code.editable = authed and not busy
 	_join_pass.editable = authed and not busy
+
+
+## Пагинация — локальный перелист, запросом не является: границы
+## применяем поверх любых гашений (и спокойных, и busy).
+func _update_pagination() -> void:
+	if _page_prev == null or _page_next == null:
+		return
+	var pages := maxi(1, int(ceil(float(_rooms.size()) / float(ROOMS_PAGE_SIZE))))
+	_page_prev.disabled = _rooms_page <= 0
+	_page_next.disabled = _rooms_page >= pages - 1
 
 
 func _update_status() -> void:
@@ -1837,13 +1893,14 @@ func _on_tick() -> void:
 
 ## Раз в 10 секунд молча освежаем список комнат, пока на него смотрим.
 ## Только чтение и только в покое: посреди запроса, на чужой странице,
-## без входа или без связи сеть не дёргаем.
+## без входа или без связи сеть не дёргаем. Тихо (quiet): кнопки при
+## этом не гаснут.
 func _on_rooms_tick() -> void:
 	if not visible or _page_rooms == null or not _page_rooms.visible:
 		return
-	if _busy_flag or not Net.is_logged_in():
+	if _busy_flag or _rooms_loading or not Net.is_logged_in():
 		return
-	await _refresh_rooms()
+	await _refresh_rooms(true)
 
 
 ## Проверяет живость серверов и перерисовывает строку статуса.
@@ -1987,8 +2044,8 @@ func _build_rooms() -> VBoxContainer:
 	page.add_child(_play_btn)
 
 	# --- таблица лидеров: серверный топ + Яндекс (только Web).
-	# --- таблица лидеров: серверный топ + Яндекс (только Web).
 	_board_btn = _button(Lang.t("Таблица лидеров"), 16)
+	_apply_accent(_board_btn, Color("1F4E79"), Color("2A6CA8"), Color("163A5C"))
 	_board_btn.pressed.connect(_show_board_modal)
 	page.add_child(_board_btn)
 
@@ -2303,6 +2360,7 @@ func _build_board_modal() -> void:
 	close_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	close_btn.pressed.connect(_hide_board_modal)
 	box.add_child(close_btn)
+	_board_close_btn = close_btn
 	_board_modal = dim
 	_board_panel = panel
 
