@@ -138,21 +138,25 @@ func _process(_delta: float) -> void:
 
 
 ## Угол фишки + видимость бейджа. _process включён, пока бейдж НУЖЕН
-## (а не пока виден): раскладка может закончиться, модалка закрыться,
-## предок показаться — всё это подхватываем без пересборки. Сами метки
-## освежает refresh_marks() по вызову игры (после взятия они приходят
-## позже сборки видов).
+## (есть метки и view в дереве), — а ВИДЕН он только без модалок,
+## при видимых предках и разложенном ряде. Разделять обязательно:
+## иначе оверлей в начале хода (пас/титр) гасил бы процесс и бейдж
+## не проснулся бы после закрытия — галочка появлялась бы только
+## на следующей пересборке (после выкладки). Сами метки освежает
+## refresh_marks() по вызову игры (после взятия они приходят позже
+## сборки видов).
 func _sync_badge() -> void:
 	if _badge == null or not is_inside_tree():
 		return
-	var want := (mark_drawn or mark_draft) and not face_down \
-		and is_visible_in_tree() and not _modal_up()
+	var want := (mark_drawn or mark_draft) and not face_down
 	set_process(want)
+	if not want:
+		(_badge as Control).visible = false
+		return
 	# Ряд ещё не разложен: свежие виды лежат в (0,0) все разом
 	# (см. FlowTiles.is_laid_out) — целиться туда нельзя, иначе все
-	# галочки на мгновение съезжаются в одну точку. Процесс при этом
-	# не гасим: раскладка догонит следующим кадром.
-	var show := want and _flow_laid_out()
+	# галочки на мгновение съезжаются в одну точку.
+	var show := is_visible_in_tree() and not _modal_up() and _flow_laid_out()
 	(_badge as Control).visible = show
 	if not show:
 		return

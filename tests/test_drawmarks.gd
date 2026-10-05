@@ -98,6 +98,28 @@ func test_draw_marks_tile() -> void:
 	game.state.current = 0
 	game.refresh()
 	ok("галочка видна на фишке", _hand_badge(took))
+	# Оверлей в начале хода (пас/титр) прячет бейдж, но процесс живёт:
+	# после закрытия галочка возвращается сама, а не на пересборке.
+	var vv2 := _hand_view(took)
+	if vv2 == null:
+		ok("вид взятой фишки найден (модалка)", false)
+	else:
+		var pass_ov := game.get("pass_overlay") as Control
+		var was_pass := pass_ov.visible
+		pass_ov.visible = true
+		vv2.call("_sync_badge")
+		var bb2 = vv2.get("_badge") as Control
+		ok("под оверлеем бейдж прячется", not bb2.visible)
+		ok("процесс при этом жив", vv2.is_processing())
+		pass_ov.visible = false
+		var title_ov := game.get("turn_title_overlay") as Control
+		var was_title := title_ov.visible
+		title_ov.visible = false
+		vv2.call("_sync_badge")
+		ok("после оверлея бейдж сам возвращается", bb2.visible)
+		pass_ov.visible = was_pass
+		title_ov.visible = was_title
+		vv2.call("_sync_badge")
 	# Метки приходят позже сборки (ответ сервера уже применён, виды ещё
 	# старые): refresh_marks подтягивает их живьём, без пересборки.
 	# Раньше галочка появлялась только после следующей выкладки.
