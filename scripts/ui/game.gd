@@ -33,6 +33,9 @@ const DRAFT_EXPIRE_MS := 15000
 # долгая анимация. Обычный deferred долетает за кадр-два, отложенный во
 # время полёта — за секунды: всё старше этого и гасится.
 const DROP_ORIGIN_TTL_MS := 800
+const TILE_FLY_DUR := 0.34
+const TILE_SLIDE_DUR := 0.22
+const TILE_LAYOUT_RESTORE_PAD := 0.04
 
 var state: GameState = null
 var row_blocks: Array = []
@@ -3385,13 +3388,17 @@ func _play_queued_steps(ids: Array, tree: SceneTree, gen: int,
 	if gen != _present_gen:
 		return
 	var step := 0
+	var flows: Array = []
+	var restore_after := 0.0
 	for tv in views:
 		if gen != _present_gen:
 			return
 		if is_instance_valid(tv):
-			_fly_in_tile(tv, step, 0.45, 2.0)
+			_remember_flow(tv, flows)
+			restore_after = maxf(restore_after, _fly_in_tile(tv, step, 0.18, 1.2))
 			step += 1
-	await tree.create_timer(minf(float(maxi(views.size() - 1, 0)) * 0.45, 2.0) + 0.8).timeout
+	_restore_flows_later(flows, restore_after)
+	await tree.create_timer(restore_after + 0.36).timeout
 
 ## Все карточки уже разложены своими рядами? Свежий ряд ширины ещё не
 ## получил (см. FlowTiles.is_laid_out) — до этого целиться нельзя.
@@ -3516,11 +3523,13 @@ func _play_place_anim(shots: Array, force: Array = [],
 	for id in force:
 		prev.erase(int(id))
 	# Здесь быстрые прилёты и каскадные переезды: новые фишки летят
-	# почти разом, а сменившие место скользят друг за другом (иначе
-	# перестановка бота на столе выглядела мгновенной кашей). Счётчики
-	# раздельные: стаггер слайдов не смеет задерживать прилёты.
+	# почти разом, а сменившие место скользят параллельно и быстро.
+	# Задерживать уже лежащие фишки нельзя: первая закончившая карточка
+	# раньше пересчитывала ряд, пока соседние ещё ждали своего delay, и
+	# получались наезды. Поэтапность нужна только новым прилётам.
 	var step := 0
-	var slide_step := 0
+	var flows: Array = []
+	var restore_after := 0.0
 	for id in origins.keys():
 		var iid := int(id)
 		if skip.has(iid):
@@ -3530,7 +3539,9 @@ func _play_place_anim(shots: Array, force: Array = [],
 			continue
 		var otv: TileView = cur[iid]
 		prev.erase(iid)
-		_slide_tile(otv, origins[id] as Vector2, 0.0, true)
+		_remember_flow(otv, flows)
+		restore_after = maxf(restore_after,
+			_slide_tile(otv, origins[id] as Vector2, 0.0, true))
 	for id in cur.keys():
 		if skip.has(id) or origins.has(int(id)):
 			continue
@@ -3539,15 +3550,17 @@ func _play_place_anim(shots: Array, force: Array = [],
 			var gpos: Vector2 = prev[id]["gpos"]
 			prev.erase(id)
 			if gpos.distance_to(tv.global_position) > 2.0:
-				_slide_tile(tv, gpos, minf(slide_step * 0.15, 1.0))
-				slide_step += 1
+				_remember_flow(tv, flows)
+				restore_after = maxf(restore_after, _slide_tile(tv, gpos))
 		else:
-			_fly_in_tile(tv, step, 0.05, 0.4)
+			_remember_flow(tv, flows)
+			restore_after = maxf(restore_after, _fly_in_tile(tv, step, 0.06, 0.45))
 			step += 1
 	# Остались только ушедшие фишки.
 	for id in prev.keys():
 		var s: Dictionary = prev[id]
 		_fly_out_tile(s["tile"], s["gpos"], float(s.get("alpha", 1.0)))
+	_restore_flows_later(flows, restore_after)
 
 ## Верхний правый угол экрана — общая точка появления/ухода карточек.
 func _corner_spawn_global() -> Vector2:
@@ -3557,10 +3570,10 @@ func _corner_spawn_global() -> Vector2:
 
 
 ## Новая фишка: прилетает из верхнего правого угла в свой слот.
-func _fly_in_tile(tv: TileView, step: int, gap: float = 0.05, cap: float = 0.4) -> void:
+func _fly_in_tile(tv: TileView, step: int, gap: float = 0.05, cap: float = 0.4) -> float:
 	var parent := tv.get_parent()
 	if parent == null:
-		return
+		return 0.0
 	var final_local := tv.position
 	# Целимся в alpha по меткам, а не в текущий modulate: его уже мог
 	# обнулить соседний прилёт той же фишки — тогда твин 0→0 гасил бы
@@ -3575,26 +3588,23 @@ func _fly_in_tile(tv: TileView, step: int, gap: float = 0.05, cap: float = 0.4) 
 	var tw := create_tween()
 	tw.bind_node(tv)
 	tw.set_parallel(true)
-	tw.tween_property(tv, "position", final_local, 0.38) \
-		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT).set_delay(delay)
-	tw.tween_property(tv, "modulate:a", final_alpha, 0.28) \
-		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT).set_delay(delay)
-	tw.tween_property(tv, "scale", Vector2.ONE, 0.32) \
-		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT).set_delay(delay)
-	# Раскладка — истина в последней инстанции: пока карточка летела, ряд
-	# мог пересчитаться (ширина ряда меняется от полосы прокрутки), и цель
-	# полёта устарела бы — карточка осталась бы мимо своего места.
-	tw.finished.connect(_rest_layout.bind(tv))
+	tw.tween_property(tv, "position", final_local, TILE_FLY_DUR) \
+		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT).set_delay(delay)
+	tw.tween_property(tv, "modulate:a", final_alpha, TILE_FLY_DUR * 0.76) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT).set_delay(delay)
+	tw.tween_property(tv, "scale", Vector2.ONE, TILE_FLY_DUR * 0.88) \
+		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT).set_delay(delay)
+	return delay + TILE_FLY_DUR
 
 ## Фишка сменила место: переезжает из старого положения в новое.
 ## delay — стаггер каскада перестановки (по одной, а не все разом).
 ## fade_in — проявление из невидимости (своя только что отпущенная: вид
 ## заранее спрятан в refresh, стартует от точки отпускания).
 func _slide_tile(tv: TileView, from_global: Vector2, delay := 0.0,
-		fade_in := false) -> void:
+		fade_in := false) -> float:
 	var parent := tv.get_parent()
 	if parent == null:
-		return
+		return 0.0
 	var final_local := tv.position
 	tv.position = parent.get_global_transform().affine_inverse() * from_global
 	var tw := create_tween()
@@ -3603,22 +3613,34 @@ func _slide_tile(tv: TileView, from_global: Vector2, delay := 0.0,
 		var final_alpha := tv.base_alpha
 		tv.modulate.a = 0.0
 		tw.set_parallel(true)
-		tw.tween_property(tv, "modulate:a", final_alpha, 0.3) \
-			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	tw.tween_property(tv, "position", final_local, 0.3) \
+		tw.tween_property(tv, "modulate:a", final_alpha, TILE_SLIDE_DUR) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.tween_property(tv, "position", final_local, TILE_SLIDE_DUR) \
 		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT).set_delay(delay)
-	tw.finished.connect(_rest_layout.bind(tv))
+	return delay + TILE_SLIDE_DUR
 
-## Переезд/полёт кончились — возвращаем карточку в раскладку ряда: если за
-## время анимации ряд пересчитался (другая ширина — от полосы
-## прокрутки), цель устарела, и карточка осталась бы стоять мимо своего
-## места. Пока тянем карточку — не трогаем: раскладка увела бы её из руки.
-func _rest_layout(tv: TileView) -> void:
-	if not is_instance_valid(tv) or _drag_view != null:
-		return
+## Переезд/полёт кончились — возвращаем затронутые ряды в раскладку одной
+## пачкой. Важно не делать это из finished каждой фишки: один ранний твин
+## иначе принудительно переставляет соседей, которые ещё летят или ждут.
+func _remember_flow(tv: TileView, flows: Array) -> void:
 	var p := tv.get_parent()
-	if p is FlowTiles:
-		(p as FlowTiles).force_relayout()
+	if p is FlowTiles and not flows.has(p):
+		flows.append(p)
+
+func _restore_flows_later(flows: Array, after: float) -> void:
+	if flows.is_empty():
+		return
+	var tw := create_tween()
+	tw.bind_node(self)
+	tw.tween_interval(maxf(after + TILE_LAYOUT_RESTORE_PAD, 0.0))
+	tw.tween_callback(_restore_flows.bind(flows))
+
+func _restore_flows(flows: Array) -> void:
+	if _drag_view != null:
+		return
+	for f in flows:
+		if is_instance_valid(f) and f is FlowTiles:
+			(f as FlowTiles).force_relayout()
 
 ## Ушедшая фишка: призрак улетает в верхний правый угол и уменьшается —
 ## под ней уже пусто.
