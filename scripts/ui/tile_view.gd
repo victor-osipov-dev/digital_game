@@ -161,6 +161,9 @@ func _sync_badge() -> void:
 	(_badge as Control).visible = show
 	if not show:
 		return
+	# У края — сначала прозрачность, потом исчезновение: резкое гашение
+	# выглядело как мигание. Тускнеет только кружок, не фишка.
+	(_badge as Control).modulate.a = _badge_fade()
 	_place_badge()
 
 
@@ -185,6 +188,33 @@ func _tile_in_scroll_view() -> bool:
 			return sc.get_global_rect().grow(12.0).intersects(r)
 		p = p.get_parent()
 	return true
+
+
+## Прозрачность бейджа у края скролла: внутри — 1, на выходе начинает
+## гаснуть, снаружи — 0 (там его уже прячет _tile_in_scroll_view).
+## Доля видимой площади в 0.75 → ещё полная: гаснет только реально
+## уходящий кружок, а не каждый чихнувший на край.
+func _badge_fade() -> float:
+	var r := get_global_rect()
+	var p := get_parent()
+	while p != null:
+		var sc := p as ScrollContainer
+		if sc != null:
+			return badge_fade_for(r, sc.get_global_rect())
+		p = p.get_parent()
+	return 1.0
+
+
+## Чистая доля для тестов и _badge_fade: пересечение фишки со скроллом.
+static func badge_fade_for(tile_rect: Rect2, scroll_rect: Rect2) -> float:
+	if tile_rect.size.x <= 0.0 or tile_rect.size.y <= 0.0:
+		return 0.0
+	var inter := tile_rect.intersection(scroll_rect)
+	if inter.size.x <= 0.0 or inter.size.y <= 0.0:
+		return 0.0
+	var f := (inter.size.x * inter.size.y) \
+		/ (tile_rect.size.x * tile_rect.size.y)
+	return clampf(f / 0.75, 0.0, 1.0)
 
 
 func _place_badge() -> void:

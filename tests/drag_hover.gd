@@ -51,6 +51,7 @@ func _on_frame() -> void:
 			await _win_checks()
 			await _slide_checks()
 			_split_own_checks()
+			_drop_origin_checks()
 			quit(0 if fails == 0 else 1)
 
 func _empty_checks() -> void:
@@ -136,6 +137,45 @@ func _split_own_checks() -> void:
 	inst.set("_online", false)
 	if st != null:
 		st.set("local_seat", saved_ls)
+
+
+## Своя отпущенная летит от пальца, без кадра «уже стоит»: свежая точка —
+## вид прячется до слайда; протухшая (drop во время чужого показа,
+## пересборка пришла секундами позже) — фишка просто стоит, вдогонку
+## не летит. Иначе «то быстро, то долго» в зависимости от того, летел
+## ли в момент дропа чужой показ.
+func _drop_origin_checks() -> void:
+	var st = inst.get("state")
+	if st == null or (st.get("table") as Array).is_empty():
+		check(false, "есть стол для проверки точек отпускания")
+		return
+	var tiles = ((st.get("table") as Array)[0] as Object).get("tiles")
+	if not (tiles is Array) or (tiles as Array).is_empty():
+		check(false, "в ряду есть фишка")
+		return
+	var tid := int(((tiles as Array)[0] as Object).get("id"))
+	inst.set("_drop_origins", {tid: {"pos": Vector2(100, 500),
+		"ms": Time.get_ticks_msec()}})
+	inst.set("_anim_pending", true)
+	inst.call("refresh")
+	check((inst.get("_drop_origins") as Dictionary).is_empty(),
+		"точки отпускания потреблены")
+	var cur := {}
+	inst.call("_collect_live", cur)
+	var tv = cur.get(tid)
+	check(tv != null, "отпущенная фишка на столе")
+	check(tv != null and (tv as Control).modulate.a == 0.0,
+		"своя отпущенная спрятана до слайда от пальца")
+	(tv as Control).modulate.a = 1.0
+	inst.set("_drop_origins", {tid: {"pos": Vector2(100, 500),
+		"ms": Time.get_ticks_msec() - 5000}})
+	inst.set("_anim_pending", true)
+	inst.call("refresh")
+	var cur2 := {}
+	inst.call("_collect_live", cur2)
+	var tv2 = cur2.get(tid)
+	check(tv2 != null and (tv2 as Control).modulate.a > 0.0,
+		"протухшая точка: фишка стоит, вдогонку не летит")
 
 func _row_checks() -> void:
 	var tb = inst.get("table_box")

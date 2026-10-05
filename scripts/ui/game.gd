@@ -27,6 +27,12 @@ const DRAFT_RESEND_MS := 3000
 # Страховка: черновик не должен пережить упавшего/молчащего автора —
 # завершение хода приходит game.state и гасит его и так.
 const DRAFT_EXPIRE_MS := 15000
+# Точка отпускания живёт только до ближайшей пересборки: drop во время
+# чужого показа откладывается (пересборка убила бы летящие твины), и к её
+# концу фишка уже давно стоит — слайд «вдогонку» выглядел бы как вторая,
+# долгая анимация. Обычный deferred долетает за кадр-два, отложенный во
+# время полёта — за секунды: всё старше этого и гасится.
+const DROP_ORIGIN_TTL_MS := 800
 
 var state: GameState = null
 var row_blocks: Array = []
@@ -149,6 +155,15 @@ var _anim_pending: bool = false
 # несёт своё место (mover коммита) — сегменты очереди показывают шаги
 # строго «своего» игрока, а не слипаются в одну кучу с чужим именем.
 var _anim_force: Dictionary = {}
+# Точка отпускания своей фишки (id → {pos, ms}: глобальные координаты
+# пальца/курсора в момент drop и время). Снимок помнит только старый слот
+# (рука внизу), и слайд летел бы «снизу», а не от пальца. Плюс пересборка
+# на один кадр ставит фишку на место ДО начала слайда — отсюда
+# «дёрнулась, пропала, полетела». Виды этих id прячем сразу после
+# пересборки, а слайд стартует от точки отпускания. Потребляется в refresh;
+# протухшие (drop во время чужого показа, пересборка пришла секундами
+# позже — фишка уже стоит) не летят вовсе: см. DROP_ORIGIN_TTL_MS.
+var _drop_origins: Dictionary = {}
 # Ход сетевого бота анимируем поэтапно, как локального: прилёты идут
 # друг за другом, а не все разом. Метку ставит _apply_state по прошлому
 # состоянию (ходил бот), гасится в refresh вместе с остальным.
@@ -2946,6 +2961,11 @@ func gui_do_drop(data: Dictionary, global_pos: Vector2) -> void:
 	_reset_slot_hover()
 	_clear_row_slots()
 	invalid_row_ids.clear()
+	# Точка отпускания — старт слайда (см. _drop_origins): иначе полёт
+	# шёл бы от старого слота в руке, а не от пальца. Невалидный drop
+	# сюда не доходит (gui_can_drop выше) — там всё как было.
+	_drop_origins[tile_id] = {"pos": global_pos,
+		"ms": Time.get_ticks_msec()}
 	# Локальная постановка/возврат — тоже событие для анимации: refresh
 	# снимет позиции до пересборки и проиграет появление/уход карточки.
 	_anim_pending = true
@@ -3086,6 +3106,23 @@ func refresh() -> void:
 			if not waiting.has(int(id)):
 				waiting.append(int(id))
 		force = []
+	# Свои только что отпущенные фишки прячем сразу после пересборки:
+	# пересборка ставит их на место видимыми, а слайд от точки отпускания
+	# стартует лишь следующим кадром — этот кадр и был виден как
+	# «дёрнулась, пропала, полетела». Слайд вернёт прозрачность сам.
+	# Протухшие точки (drop во время чужого показа) в слайд не идут:
+	# фишка уже давно стоит, лететь «вдогонку» нечему.
+	var origins: Dictionary = {}
+	var now_ms := Time.get_ticks_msec()
+	for oid in _drop_origins.keys():
+		var oe = _drop_origins[oid]
+		if oe is Dictionary \
+				and now_ms - int((oe as Dictionary).get("ms", 0)) \
+					<= DROP_ORIGIN_TTL_MS:
+			origins[int(oid)] = (oe as Dictionary).get("pos", Vector2.ZERO)
+	_drop_origins = {}
+	if not origins.is_empty():
+		_hide_force_tiles(origins.keys())
 	# Гасим всё, что ждёт показа (очередь + сироты + вставшие в эту
 	# перерисовку шаги) — безусловно, после пересборки: пересборка
 	# воскрешает виды видимыми, а их полёт ещё впереди. Пропущенный здесь
@@ -3093,7 +3130,7 @@ func refresh() -> void:
 	# разом».
 	if not waiting.is_empty():
 		_hide_force_tiles(waiting)
-	if not shots.is_empty() or not force.is_empty():
+	if not shots.is_empty() or not force.is_empty() or not origins.is_empty():
 		# Прилетающие прячем сразу: иначе они стоят видимыми, а к началу
 		# полёта прыгают в угол и летят — со стороны «поставились,
 		# убрались, полетели». Полёты вернут прозрачность сами; game over
@@ -3105,7 +3142,7 @@ func refresh() -> void:
 		# прошлые шаги в очереди ещё не показаны, и немедленный полёт увёл
 		# бы их минуя очередь (erase из снимка их не убирает — новых в
 		# снимке и так нет).
-		_play_place_anim(shots, force, _anim_gen, waiting)
+		_play_place_anim(shots, force, _anim_gen, waiting, origins)
 
 
 ## Все id, которых показ ещё ждёт: очередь шагов и сироты.
@@ -3438,8 +3475,11 @@ func _fresh_committed_ids(view: Dictionary) -> Array:
 ## Прилёты здесь всегда быстрые (почти разом): пошаговые идут очередью
 ## презентаций (_pump_present) после своего титра, а не здесь. Id из
 ## skip не трогаем вообще (ни полёт, ни слайд) — их полёт впереди.
+## origins — свои только что отпущенные (id → точка отпускания): слайд
+## стартует от пальца, а не от старого слота, с проявлением (вид заранее
+## спрятан в refresh — иначе кадр «уже стоит» перед слайдом).
 func _play_place_anim(shots: Array, force: Array = [],
-		gen: int = -1, skip: Array = []) -> void:
+		gen: int = -1, skip: Array = [], origins: Dictionary = {}) -> void:
 	# Рассылка могла застать сцену уже за бортом (смена сцены ещё/уже
 	# едет): вне дерева ждать кадр не на чем — просто не анимируем.
 	if not is_inside_tree():
@@ -3447,7 +3487,8 @@ func _play_place_anim(shots: Array, force: Array = [],
 	await get_tree().process_frame
 	if gen >= 0 and gen != _anim_gen:
 		return
-	if not is_inside_tree() or (shots.is_empty() and force.is_empty()):
+	if not is_inside_tree() or (shots.is_empty() and force.is_empty() \
+			and origins.is_empty()):
 		return
 	var prev := {}
 	for s in shots:
@@ -3473,8 +3514,18 @@ func _play_place_anim(shots: Array, force: Array = [],
 	# раздельные: стаггер слайдов не смеет задерживать прилёты.
 	var step := 0
 	var slide_step := 0
+	for id in origins.keys():
+		var iid := int(id)
+		if skip.has(iid):
+			# Вид уже спрятан (как ждущий показа) — его покажет очередь.
+			continue
+		if not cur.has(iid):
+			continue
+		var otv: TileView = cur[iid]
+		prev.erase(iid)
+		_slide_tile(otv, origins[id] as Vector2, 0.0, true)
 	for id in cur.keys():
-		if skip.has(id):
+		if skip.has(id) or origins.has(int(id)):
 			continue
 		var tv: TileView = cur[id]
 		if prev.has(id):
@@ -3530,7 +3581,10 @@ func _fly_in_tile(tv: TileView, step: int, gap: float = 0.05, cap: float = 0.4) 
 
 ## Фишка сменила место: переезжает из старого положения в новое.
 ## delay — стаггер каскада перестановки (по одной, а не все разом).
-func _slide_tile(tv: TileView, from_global: Vector2, delay := 0.0) -> void:
+## fade_in — проявление из невидимости (своя только что отпущенная: вид
+## заранее спрятан в refresh, стартует от точки отпускания).
+func _slide_tile(tv: TileView, from_global: Vector2, delay := 0.0,
+		fade_in := false) -> void:
 	var parent := tv.get_parent()
 	if parent == null:
 		return
@@ -3538,6 +3592,12 @@ func _slide_tile(tv: TileView, from_global: Vector2, delay := 0.0) -> void:
 	tv.position = parent.get_global_transform().affine_inverse() * from_global
 	var tw := create_tween()
 	tw.bind_node(tv)
+	if fade_in:
+		var final_alpha := tv.base_alpha
+		tv.modulate.a = 0.0
+		tw.set_parallel(true)
+		tw.tween_property(tv, "modulate:a", final_alpha, 0.3) \
+			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	tw.tween_property(tv, "position", final_local, 0.3) \
 		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT).set_delay(delay)
 	tw.finished.connect(_rest_layout.bind(tv))
