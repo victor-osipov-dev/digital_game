@@ -521,7 +521,7 @@ func _ya_log(msg: String) -> void:
 ##    закрывает лобби назад в меню; офлайн и локальное ничто не трогаем.
 ## 2. Только Yandex ID: парольная форма на Web скрыта (_sync_auth_mode),
 ##    диалог — только openAuthDialog из SDK, своего ничего нет.
-## 3. Старт — лишь по явному нажатию «По сети» (открытие лобби);
+## 3. Старт — лишь по явному нажатию «Играть с другими» (открытие лобби);
 ##    при запуске и в фоне авторизации нет (в _ready только ensure_sdk).
 ## 4. Перед диалогом — модалка с пользой и честным выбором.
 ## 5-6. Гость играет офлайн, прогресс на устройстве не пропадает:
@@ -2203,12 +2203,13 @@ func _build_lobby() -> VBoxContainer:
 
 # =============================================================== таблица лидеров
 
-## Страница топа: серверный проверенный блок + (Web) блок Яндекс Игр.
-## Источник истины — сервер (очки только с реальных партий); таблица
-## Яндекса — копия для платформы, в неё клиент отчитывается серверным
-## числом побед после партии (см. _report_win_to_yandex в игре).
+## Страница топа: подпись «Количество побед», дальше (Web) блок Яндекс
+## Игр и только потом наш общий топ со всех платформ. Источник истины —
+## сервер (очки только с реальных партий); таблица Яндекса — копия для
+## платформы, в неё клиент отчитывается серверным числом побед после
+## партии (см. _report_win_to_yandex в игре).
 ## Модалка таблицы лидеров (вместо страницы — так опрятнее): серверный
-## топ сеткой «место · игрок · победы» + своё место; на Web ниже блок
+## топ сеткой «место · игрок · победы» + своё место; на Web выше блок
 ## Яндекс-таблицы той же сеткой. Строится один раз, дальше показывается.
 func _build_board_modal() -> void:
 	var dim := ColorRect.new()
@@ -2241,29 +2242,15 @@ func _build_board_modal() -> void:
 	title.add_theme_color_override("font_color", Color("FFD54F"))
 	box.add_child(title)
 	var note := Label.new()
-	note.text = Lang.t("Только реальные партии")
+	note.text = Lang.t("Количество побед")
 	note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	note.add_theme_font_size_override("font_size", Settings.fs(13))
 	note.add_theme_color_override("font_color", Color(1, 1, 1, 0.55))
 	box.add_child(note)
-	_board_grid = GridContainer.new()
-	_board_grid.columns = 3
-	_board_grid.add_theme_constant_override("h_separation", 12)
-	_board_grid.add_theme_constant_override("v_separation", 4)
-	_board_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	box.add_child(_board_grid)
-	_board_me = Label.new()
-	_board_me.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_board_me.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_board_me.add_theme_font_size_override("font_size", Settings.fs(15))
-	_board_me.add_theme_color_override("font_color", Color("90CAF9"))
-	box.add_child(_board_me)
-	_board_note = Label.new()
-	_board_note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_board_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_board_note.add_theme_font_size_override("font_size", Settings.fs(14))
-	_board_note.visible = false
-	box.add_child(_board_note)
+	# На Web таблица Яндекс Игр — ВЫШЕ нашей: она про текущий заход
+	# игрока, а наша — общий топ со всех платформ (там же сидят игроки
+	# с Android и других мест). На Android яндекс-блок и пометка скрыты —
+	# там меняется только подпись выше.
 	_ya_board_wrap = VBoxContainer.new()
 	_ya_board_wrap.add_theme_constant_override("separation", 8)
 	_ya_board_wrap.visible = OS.has_feature("web")
@@ -2286,6 +2273,32 @@ func _build_board_modal() -> void:
 	_ya_board_note.add_theme_font_size_override("font_size", Settings.fs(14))
 	_ya_board_note.add_theme_color_override("font_color", Color(1, 1, 1, 0.6))
 	_ya_board_wrap.add_child(_ya_board_note)
+	var global_note := Label.new()
+	global_note.text = Lang.t("Общий топ со всех платформ")
+	global_note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	global_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	global_note.add_theme_font_size_override("font_size", Settings.fs(13))
+	global_note.add_theme_color_override("font_color", Color(1, 1, 1, 0.55))
+	global_note.visible = OS.has_feature("web")
+	box.add_child(global_note)
+	_board_grid = GridContainer.new()
+	_board_grid.columns = 3
+	_board_grid.add_theme_constant_override("h_separation", 12)
+	_board_grid.add_theme_constant_override("v_separation", 4)
+	_board_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_child(_board_grid)
+	_board_me = Label.new()
+	_board_me.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_board_me.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_board_me.add_theme_font_size_override("font_size", Settings.fs(15))
+	_board_me.add_theme_color_override("font_color", Color("90CAF9"))
+	box.add_child(_board_me)
+	_board_note = Label.new()
+	_board_note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_board_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_board_note.add_theme_font_size_override("font_size", Settings.fs(14))
+	_board_note.visible = false
+	box.add_child(_board_note)
 	var close_btn := _button(Lang.t("Закрыть"), 16)
 	close_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	close_btn.pressed.connect(_hide_board_modal)

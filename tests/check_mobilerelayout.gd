@@ -76,7 +76,7 @@ func _boot() -> void:
 		printerr("FAIL  Settings autoload missing")
 		quit(1)
 		return
-	# Герметичность: тест жмёт настоящую кнопку «По сети» — лобби
+	# Герметичность: тест жмёт настоящую кнопку «Играть с другими» — лобби
 	# коннектится и молча резюмит сессию из user://session.json, после чего
 	# живые комнаты с сервера затирают подставные данные пагинации.
 	# Сессию прячем файлом И в памяти (autoload читает её раньше теста),
@@ -199,9 +199,9 @@ func _menu() -> Node:
 	var menu_box: Node = menu.get("menu_box")
 	if menu_box != null:
 		_edge(menu_box, "main_menu")
-	var btn := _find_button(menu, "По сети")
+	var btn := _find_button(menu, "Играть с другими")
 	if btn == null:
-		_fail("нет кнопки «По сети»")
+		_fail("нет кнопки «Играть с другими»")
 		return null
 	btn.pressed.emit()
 	await process_frame

@@ -27,6 +27,10 @@ var _room_actions: BoxContainer = null
 var _return_room_btn: Button = null
 var _drop_room_btn: Button = null
 var _menu_title: Label = null
+## Сетевая кнопка с длинной подписью («Играть с другими»): на узком
+## экране с крупным текстом строка шире окна — шрифт ужимается тем же
+## приёмом, что заголовок (см. _relayout).
+var _online_btn: Button = null
 var _bottom_row: BoxContainer = null
 var _count_row: BoxContainer = null
 var _name_rows: Array = []
@@ -70,6 +74,23 @@ func _relayout() -> void:
 					break
 				size -= 1
 		_menu_title.add_theme_font_size_override("font_size", size)
+	# Длинная подпись сетевой кнопки («Играть с другими») на узком
+	# экране с крупным текстом шире окна — ужимаем тем же циклом,
+	# иначе колонка уезжает вправо целиком (ловил аудит на 320 px).
+	if _online_btn != null:
+		var bsize := Settings.fs(17)
+		var bfont: Font = _online_btn.get_theme_font("font")
+		if bfont != null:
+			while bsize > Settings.FS_MIN:
+				var bw := bfont.get_string_size(_online_btn.text,
+					HORIZONTAL_ALIGNMENT_LEFT, -1, bsize).x
+				var bsb := _online_btn.get_theme_stylebox("normal")
+				if bsb != null:
+					bw += bsb.content_margin_left + bsb.content_margin_right
+				if bw <= _avail_w:
+					break
+				bsize -= 1
+		_online_btn.add_theme_font_size_override("font_size", bsize)
 	var rows: Array = [_count_row, _bottom_row, _room_actions]
 	for row in _name_rows + _option_rows + rows:
 		var box := row as BoxContainer
@@ -348,12 +369,13 @@ func _build_ui() -> void:
 	# отдельный режим, и человек, который хочет поиграть с соседом за
 	# одним столом, не должен промахиваться мимо привычной кнопки.
 	var online_btn := Button.new()
-	online_btn.text = Lang.t("По сети")
+	online_btn.text = Lang.t("Играть с другими")
 	online_btn.custom_minimum_size = Vector2(0, Settings.touch(50))
 	online_btn.add_theme_font_size_override("font_size", Settings.fs(17))
 	online_btn.pressed.connect(_on_online_pressed)
 	_apply_accent_style(online_btn, Color("1F4E79"), Color("2A6CA8"), Color("163A5C"))
 	box.add_child(online_btn)
+	_online_btn = online_btn
 
 	# Статистика — отдельной строкой, а не в нижнем ряду: там уже две
 	# кнопки по 200px, третья при большом тексте не помещается по ширине.

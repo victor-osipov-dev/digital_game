@@ -134,6 +134,7 @@ func _checks() -> void:
 	_check_tab_padding()
 	_check_board_render()
 	_check_board_page()
+	_check_board_order()
 	_check_delete_flow()
 	_check_accent_button_width()
 
@@ -328,6 +329,37 @@ func _check_board_page() -> void:
 		"панель таблицы широкая, got %.0f" % bpanel.custom_minimum_size.x)
 	lobby.call("_hide_board_modal")
 	check(not (inst.get("_board_modal") as Control).visible, "модалка закрывается")
+
+
+## Порядок блоков топа: подпись «Количество побед», на Web выше нашего
+## топа — таблица Яндекс Игр, перед нашим — пометка про общий топ со
+## всех платформ. На Android яндекс-блок и пометка скрыты, подпись одна.
+func _check_board_order() -> void:
+	var panel := inst.get("_board_panel") as PanelContainer
+	if panel == null or panel.get_child_count() == 0:
+		check(false, "панель таблицы есть")
+		return
+	var order: Array = (panel.get_child(0) as Node).get_children()
+	var ya := inst.get("_ya_board_wrap") as Control
+	var grid := inst.get("_board_grid") as Control
+	check(ya != null and grid != null and order.find(ya) >= 0
+		and order.find(ya) < order.find(grid),
+		"яндекс-блок выше нашего топа")
+	var sub := false
+	var gnote: Label = null
+	for c in order:
+		if c is Label and String((c as Label).text).contains("Количество побед"):
+			sub = true
+		if c is Label and String((c as Label).text).contains("со всех платформ"):
+			gnote = c as Label
+	check(sub, "подпись про количество побед")
+	check(gnote != null, "пометка про общий топ есть")
+	if gnote != null:
+		check(gnote.visible == OS.has_feature("web"),
+			"пометка видна только на Web")
+		check(order.find(gnote) > order.find(ya)
+			and order.find(gnote) < order.find(grid),
+			"пометка перед нашим топом")
 
 
 ## Удаление аккаунта: кнопка только на Android, модалка, отказ виден.

@@ -104,9 +104,9 @@ func _menu_round(idx: int) -> void:
 	await process_frame
 	_walk(menu, "меню (масштаб %d)" % idx)
 
-	var btn := _find_button(menu, "По сети")
+	var btn := _find_button(menu, "Играть с другими")
 	if btn == null:
-		_fail("нет кнопки «По сети»")
+		_fail("нет кнопки «Играть с другими»")
 		return
 	btn.pressed.emit()
 	await process_frame
