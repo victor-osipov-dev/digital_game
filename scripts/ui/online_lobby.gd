@@ -2189,6 +2189,12 @@ func _build_rooms() -> VBoxContainer:
 
 
 func _logout_row(page: VBoxContainer) -> void:
+	# Web: кнопки «Выйти» нет. Выйти из Yandex ID нельзя в принципе —
+	# в SDK нет такого метода, авторизация живёт в браузере. А рвать
+	# только нашу сессию и делать вид, что вышли (следующий клик молча
+	# вернёт тот же аккаунт), — враньё игроку.
+	if OS.has_feature("web"):
+		return
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_END
 	page.add_child(row)
@@ -2330,6 +2336,15 @@ func _build_board_modal() -> void:
 	_ya_board_note.add_theme_font_size_override("font_size", Settings.fs(14))
 	_ya_board_note.add_theme_color_override("font_color", Color(1, 1, 1, 0.6))
 	_ya_board_wrap.add_child(_ya_board_note)
+	# Разделитель между таблицами: два топа подряд сливались в одну
+	# простыню текста. Линия + отступы вокруг (свои 10 даёт бокс).
+	var sep := HSeparator.new()
+	var sepline := StyleBoxLine.new()
+	sepline.color = Color(1, 1, 1, 0.22)
+	sepline.thickness = 1
+	sep.add_theme_stylebox_override("separator", sepline)
+	sep.visible = OS.has_feature("web")
+	box.add_child(sep)
 	var global_note := Label.new()
 	global_note.text = Lang.t("Общий топ со всех платформ")
 	global_note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
