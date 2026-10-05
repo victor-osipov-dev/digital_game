@@ -34,7 +34,9 @@ const DRAFT_EXPIRE_MS := 15000
 # время полёта — за секунды: всё старше этого и гасится.
 const DROP_ORIGIN_TTL_MS := 800
 const TILE_FLY_DUR := 0.34
-const TILE_SLIDE_DUR := 0.22
+const TILE_SLIDE_MIN_DUR := 0.24
+const TILE_SLIDE_MAX_DUR := 0.46
+const TILE_SLIDE_SPEED := 900.0
 const TILE_LAYOUT_RESTORE_PAD := 0.04
 
 var state: GameState = null
@@ -3403,12 +3405,14 @@ func _play_queued_steps(ids: Array, tree: SceneTree, gen: int,
 	var step := 0
 	var flows: Array = []
 	var restore_after := 0.0
+	var start_global := _seat_spawn_global(seat)
 	for tv in views:
 		if gen != _present_gen:
 			return
 		if is_instance_valid(tv):
 			_remember_flow(tv, flows)
-			restore_after = maxf(restore_after, _fly_in_tile(tv, step, 0.18, 1.2))
+			restore_after = maxf(restore_after,
+				_fly_in_tile(tv, step, 0.18, 1.2, start_global))
 			step += 1
 	_restore_flows_later(flows, restore_after)
 	await tree.create_timer(restore_after + 0.36).timeout
@@ -3567,7 +3571,11 @@ func _play_place_anim(shots: Array, force: Array = [],
 				restore_after = maxf(restore_after, _slide_tile(tv, gpos))
 		else:
 			_remember_flow(tv, flows)
-			restore_after = maxf(restore_after, _fly_in_tile(tv, step, 0.06, 0.45))
+			var start := _corner_spawn_global()
+			if _draft_active() and _draft_new_ids.has(int(id)):
+				start = _seat_spawn_global(_draft_from)
+			restore_after = maxf(restore_after,
+				_fly_in_tile(tv, step, 0.06, 0.45, start))
 			step += 1
 	# Остались только ушедшие фишки.
 	for id in prev.keys():
@@ -3582,9 +3590,31 @@ func _corner_spawn_global() -> Vector2:
 	return Vector2(vp.end.x - ts.x * 1.2, vp.position.y - ts.y * 1.5)
 
 
+## Старт показа чужого хода: из чипа игрока с именем и счётчиком карт.
+## Так видно, кто именно выставил новые карточки. Если чипа нет
+## (первичная загрузка, тестовый вид без игроков) — остаётся общий угол.
+func _seat_spawn_global(seat: int) -> Vector2:
+	if chips_box == null or seat < 0 or seat >= chips_box.get_child_count():
+		return _corner_spawn_global()
+	var chip := chips_box.get_child(seat) as Control
+	if chip == null or not chip.is_inside_tree():
+		return _corner_spawn_global()
+	var rect := chip.get_global_rect()
+	if rect.size.x <= 1.0 or rect.size.y <= 1.0:
+		return _corner_spawn_global()
+	var ts := Settings.tile_size()
+	return rect.position + (rect.size - ts) * 0.5
+
+
+func _slide_duration(from_global: Vector2, to_global: Vector2) -> float:
+	var dist := from_global.distance_to(to_global)
+	return clampf(dist / TILE_SLIDE_SPEED, TILE_SLIDE_MIN_DUR, TILE_SLIDE_MAX_DUR)
+
+
 ## Новая фишка: прилетает из верхнего правого угла в свой слот.
-func _fly_in_tile(tv: TileView, step: int, gap: float = 0.05, cap: float = 0.4) -> float:
-	var parent := tv.get_parent()
+func _fly_in_tile(tv: TileView, step: int, gap: float = 0.05,
+		cap: float = 0.4, start_global: Vector2 = Vector2.INF) -> float:
+	var parent := tv.get_parent() as Control
 	if parent == null:
 		return 0.0
 	var final_local := tv.position
@@ -3592,7 +3622,8 @@ func _fly_in_tile(tv: TileView, step: int, gap: float = 0.05, cap: float = 0.4) 
 	# обнулить соседний прилёт той же фишки — тогда твин 0→0 гасил бы
 	# её навсегда.
 	var final_alpha := tv.base_alpha
-	var start_global := _corner_spawn_global()
+	if not is_finite(start_global.x) or not is_finite(start_global.y):
+		start_global = _corner_spawn_global()
 	tv.position = parent.get_global_transform().affine_inverse() * start_global
 	tv.pivot_offset = tv.size * 0.5
 	tv.scale = Vector2(0.45, 0.45)
@@ -3615,10 +3646,12 @@ func _fly_in_tile(tv: TileView, step: int, gap: float = 0.05, cap: float = 0.4) 
 ## заранее спрятан в refresh, стартует от точки отпускания).
 func _slide_tile(tv: TileView, from_global: Vector2, delay := 0.0,
 		fade_in := false) -> float:
-	var parent := tv.get_parent()
+	var parent := tv.get_parent() as Control
 	if parent == null:
 		return 0.0
 	var final_local := tv.position
+	var final_global: Vector2 = parent.get_global_transform() * final_local
+	var duration := _slide_duration(from_global, final_global)
 	tv.position = parent.get_global_transform().affine_inverse() * from_global
 	var tw := create_tween()
 	tw.bind_node(tv)
@@ -3626,11 +3659,11 @@ func _slide_tile(tv: TileView, from_global: Vector2, delay := 0.0,
 		var final_alpha := tv.base_alpha
 		tv.modulate.a = 0.0
 		tw.set_parallel(true)
-		tw.tween_property(tv, "modulate:a", final_alpha, TILE_SLIDE_DUR) \
+		tw.tween_property(tv, "modulate:a", final_alpha, duration) \
 			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-	tw.tween_property(tv, "position", final_local, TILE_SLIDE_DUR) \
+	tw.tween_property(tv, "position", final_local, duration) \
 		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT).set_delay(delay)
-	return delay + TILE_SLIDE_DUR
+	return delay + duration
 
 ## Переезд/полёт кончились — возвращаем затронутые ряды в раскладку одной
 ## пачкой. Важно не делать это из finished каждой фишки: один ранний твин
