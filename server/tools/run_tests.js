@@ -530,9 +530,24 @@ test('UUID стаба dev-proxy принимается как Yandex ID', () => 
   assert.ok(db.getAccount('ya:' + uid), 'аккаунт ya:uuid существует');
 });
 
+test('хэшированный uid реальной платформы принимается', () => {
+  // getUniqueID() на залитой игре отдаёт base64 от 32 байт (SHA-256):
+  // 43 символа + '='. Раньше regex такое отбрасывал — игрок на Яндекс
+  // Игр получал «Некорректный Yandex ID».
+  const uid = '2ChgybREm/VZqQ4qR6RPzaA1+mBDGjuk0syUU7AY3YU=';
+  const r = accounts.loginYa(uid, 'Игрок с платформы');
+  assert.strictEqual(r.ok, true, r.reason);
+  assert.ok(db.getAccount('ya:' + uid.toLowerCase()), 'аккаунт ya:base64 существует');
+  // Тот же игрок (uid постоянный) входит во второй раз тем же аккаунтом.
+  assert.strictEqual(accounts.loginYa(uid, 'Другой ник').ok, true);
+  assert.strictEqual(db.getAccount('ya:' + uid.toLowerCase()).nick,
+    'Игрок с платформы', 'ник не перезаписывается при повторном входе');
+});
+
 test('не числовой Yandex ID отклоняется', () => {
   for (const bad of ['', 'abc', 'ya:123', '12 34', '123456789012345678901',
-    '0f2737f2-dd9b-4611-843e-97406d4fd8c', 'zzzzzzzz-0000-0000-0000-000000000000']) {
+    '0f2737f2-dd9b-4611-843e-97406d4fd8c', 'zzzzzzzz-0000-0000-0000-000000000000',
+    '2ChgybREm/VZqQ4qR6RPzaA1', '++++====']) {
     assert.strictEqual(accounts.loginYa(bad, 'X').ok, false, bad);
   }
 });
