@@ -233,25 +233,36 @@ const LB_NAME := "wins"
 
 
 ## Записи лидерборда: запускает чтение, результат — в poll_lb_entries.
-## Новый API (getEntries) с запасным старым (getLeaderboardEntries):
-## что есть в рантайме, то и едет — стаб dev-proxy логирует вызов сам.
+## Прямой новый API (ysdk.leaderboards.getEntries): устаревший
+## ysdk.getLeaderboards() рантайм ругается deprecated-ошибкой в консоль.
+## Старый путь — только запасной, если нового namespace нет (стаб
+## dev-proxy). Ответ нового и старого API сводится к одной форме
+## {entries, userRank} внутри shape(). Ошибка 404 здесь означает, что
+## в Консоли разработчика нет лидерборда с именем LB_NAME.
 static func request_lb_entries() -> void:
 	_eval("(function(){window.__yaLbDone=false;window.__yaLbData=null;" \
 		+ "window.__yaLbError='';" \
 		+ "function fail(m){window.__yaLbError=String(m);window.__yaLbDone=true;}" \
-		+ "try{if(!window.__ysdk)throw 'nosdk';" \
-		+ "window.__ysdk.getLeaderboards().then(function(lbs){if(!lbs)throw 'no-lb';" \
-		+ "if(lbs.getEntries)return lbs.getEntries('" + LB_NAME + "');" \
-		+ "if(lbs.getLeaderboardEntries)return lbs.getLeaderboardEntries('" + LB_NAME + "');" \
-		+ "throw 'no-entries-api';}).then(function(res){var out={entries:[],userRank:0};" \
-		+ "try{var list=res.entries||res.leaderboardEntries||[];" \
+		+ "function shape(res){var out={entries:[],userRank:0};" \
+		+ "try{var list=(res&&res.entries)||[];" \
 		+ "for(var i=0;i<list.length;i++){var e=list[i]||{};var pl=e.player||{};" \
 		+ "out.entries.push({name:String(pl.publicName||'')," \
 		+ "score:Number(e.score||0),rank:Number(e.rank||0)});}" \
-		+ "out.userRank=Number(res.userRank||0);}catch(e){}" \
-		+ "window.__yaLbData=out;window.__yaLbDone=true;})" \
+		+ "out.userRank=Number((res&&res.userRank)||0);}catch(e){}return out;}" \
+		+ "function done(res){window.__yaLbData=shape(res);window.__yaLbDone=true;}" \
+		+ "try{if(!window.__ysdk)throw 'nosdk';" \
+		+ "var lb=window.__ysdk.leaderboards;" \
+		+ "if(lb&&lb.getEntries){" \
+		+ "lb.getEntries('" + LB_NAME + "'," \
+		+ "{quantityTop:5,quantityAround:5,includeUser:true})" \
+		+ ".then(done).catch(function(e){fail(e&&e.message||e);});return;}" \
+		+ "if(!window.__ysdk.getLeaderboards)throw 'no-lb-api';" \
+		+ "window.__ysdk.getLeaderboards().then(function(old){if(!old)throw 'no-lb';" \
+		+ "if(old.getEntries)return old.getEntries('" + LB_NAME + "');" \
+		+ "if(old.getLeaderboardEntries)return old.getLeaderboardEntries('" + LB_NAME + "');" \
+		+ "throw 'no-entries-api';}).then(done)" \
 		+ ".catch(function(e){fail(e&&e.message||e);});}" \
-		+ "catch(e){fail(e&&e.message||e);}})()")
+		+ "catch(e){fail(e);}})()")
 
 
 ## Состояние чтения таблицы: {done, data ({entries, userRank} или null), error}.
@@ -268,20 +279,28 @@ static func poll_lb_entries() -> Dictionary:
 
 
 ## Отчёт очков (число побед с сервера) в лидерборд. Только явный вызов
-## после партии — никакого автоспама. Флаги: __yaLbReportDone/Error.
+## после партии — никакого автоспама. Новый API (leaderboards.setScore)
+## вперёд, без deprecated-предупреждений; старый путь — запасной для
+## стаба dev-proxy. Запись только авторизованным (так устроен SDK),
+## ошибка уходит в флаги и видна в консоли. Флаги: __yaLbReportDone/Error.
 static func report_lb_score(score: int) -> void:
 	_eval("(function(){window.__yaLbReportDone=false;window.__yaLbReportError='';" \
-		+ "function fail(m){window.__yaLbReportError=String(m);" \
-		+ "window.__yaLbReportDone=true;}" \
+		+ "function fail(m){window.__yaLbReportError=String(m);window.__yaLbReportDone=true;}" \
 		+ "try{if(!window.__ysdk)throw 'nosdk';" \
-		+ "window.__ysdk.getLeaderboards().then(function(lbs){if(!lbs)throw 'no-lb';" \
-		+ "if(lbs.setScore)return lbs.setScore({leaderboardName:'" + LB_NAME + "'," \
+		+ "var lb=window.__ysdk.leaderboards;" \
+		+ "if(lb&&lb.setScore){" \
+		+ "lb.setScore('" + LB_NAME + "'," + str(score) + ")" \
+		+ ".then(function(){window.__yaLbReportDone=true;})" \
+		+ ".catch(function(e){fail(e&&e.message||e);});return;}" \
+		+ "if(!window.__ysdk.getLeaderboards)throw 'no-lb-api';" \
+		+ "window.__ysdk.getLeaderboards().then(function(old){if(!old)throw 'no-lb';" \
+		+ "if(old.setScore)return old.setScore({leaderboardName:'" + LB_NAME + "'," \
 		+ "score:" + str(score) + "});" \
-		+ "if(lbs.setLeaderboardScore)return lbs.setLeaderboardScore('" + LB_NAME + "'," \
+		+ "if(old.setLeaderboardScore)return old.setLeaderboardScore('" + LB_NAME + "'," \
 		+ str(score) + ");" \
 		+ "throw 'no-setscore-api';}).then(function(){window.__yaLbReportDone=true;})" \
 		+ ".catch(function(e){fail(e&&e.message||e);});}" \
-		+ "catch(e){fail(e&&e.message||e);}})()")
+		+ "catch(e){fail(e);}})()")
 
 
 ## Состояние отчёта: {done, error}.
