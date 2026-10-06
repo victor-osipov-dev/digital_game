@@ -33,6 +33,8 @@ local.properties
 .gradle/
 # Артефакты экспорта (Web/AAB собираются локально).
 /build/
+*.apk
+*.idsig
 # Промежуточные файлы сборки Android-плагина (AAR в bin/ нужны и коммитятся).
 addons/MarketHelper/plugin/build/
 
