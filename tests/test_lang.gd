@@ -32,6 +32,7 @@ func _boot() -> void:
 	test_en_menu()
 	test_boot_title()
 	test_sdk_language()
+	test_win_countdown_caption()
 	# Возвращаем язык: сьют дальше идёт на русском по умолчанию.
 	# set_language помечает выбор ручным — авто-флаг возвращаем сами
 	# и пересохраняем cfg, чтобы тест не оставил следов.
@@ -175,6 +176,18 @@ func test_sdk_language() -> void:
 	# Мост обязан читать environment.i18n — иначе пункт не закрыт.
 	var sdk_src := _read_text("res://scripts/platform/yandex_sdk.gd")
 	ok("мост читает environment.i18n", sdk_src.contains("environment.i18n"))
+
+
+## Подпись отсчёта перед финальной рекламой: строка реально используется
+## в отсчёте и переведена на английский.
+func test_win_countdown_caption() -> void:
+	section("отсчёт «Реклама через»")
+	var game_src := _read_text("res://scripts/ui/game.gd")
+	ok("подпись в _start_win_countdown",
+		game_src.contains('Lang.t("Реклама через")'))
+	Lang.set_lang("en")
+	ok("перевод", Lang.t("Реклама через") == "Ad in")
+	Lang.set_lang("ru")
 
 
 func _read_text(path: String) -> String:

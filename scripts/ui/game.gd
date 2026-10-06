@@ -2157,21 +2157,35 @@ func _show_win_screen() -> void:
 
 
 ## Обратный отсчёт 2–1 на весь экран (только Web, не пропускается):
-## дальше — fullscreen от SDK. Цифры огромные, фон полупрозрачный.
+## дальше — fullscreen от SDK. Сверху подпись «Реклама через», под ней —
+## крупные цифры секунд; фон полупрозрачный.
 func _start_win_countdown() -> void:
 	var ov := ColorRect.new()
 	ov.color = Color(0, 0, 0, 0.72)
 	ov.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	ov.mouse_filter = Control.MOUSE_FILTER_STOP
 	add_child(ov)
+	var box := VBoxContainer.new()
+	box.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	box.alignment = BoxContainer.ALIGNMENT_CENTER
+	box.add_theme_constant_override("separation", Settings.fs(8))
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ov.add_child(box)
+	var cap := Label.new()
+	cap.text = Lang.t("Реклама через")
+	cap.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	cap.add_theme_font_size_override("font_size", Settings.fs(48))
+	cap.add_theme_color_override("font_color", Color(1, 1, 1, 0.95))
+	cap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(cap)
 	var lab := Label.new()
 	lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	lab.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	lab.add_theme_font_size_override("font_size", Settings.fs(160))
 	lab.add_theme_color_override("font_color", Color(1, 1, 1, 0.95))
+	lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	lab.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	ov.add_child(lab)
+	box.add_child(lab)
 	for n in ["2", "1"]:
 		if not is_instance_valid(ov):
 			return

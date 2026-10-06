@@ -253,6 +253,7 @@ const _EN := {
 "Расклад сохранён (чекпоинт)": "Layout saved (checkpoint)",
 "Регистрация": "Sign up",
 "Реклама": "Ad",
+"Реклама через": "Ad in",
 "Россия": "Russia",
 "Самый первый ход игры (первый игрок) должен быть не меньше 30 очков (сумма чисел),":
 	"The very first turn of the game (first player) must be at least 30 points (tile total),",
