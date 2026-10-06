@@ -291,3 +291,57 @@ static func poll_lb_report() -> Dictionary:
 	if r.is_empty():
 		return {"done": true, "error": "nosdk"}
 	return {"done": bool(r.get("d", false)), "error": String(r.get("e", ""))}
+
+
+## Облачное сохранение настроек и статистики (данные игрока): ключи
+## 'settings' и 'stats'. У авторизованного — облако аккаунта (живёт на
+## всех устройствах), у гостя — хранилище браузера: так SDK разделяет
+## данные сам. Флаги: __yaCloudLoadDone/Data/Error.
+static func request_cloud_load() -> void:
+	_eval("(function(){window.__yaCloudLoadDone=false;window.__yaCloudLoadData=null;" \
+		+ "window.__yaCloudLoadError='';" \
+		+ "function fail(m){window.__yaCloudLoadError=String(m);window.__yaCloudLoadDone=true;}" \
+		+ "try{if(!window.__ysdk)throw 'nosdk';" \
+		+ "window.__ysdk.getPlayer().then(function(p){return p.getData(['settings','stats']);})" \
+		+ ".then(function(d){window.__yaCloudLoadData=d||null;window.__yaCloudLoadDone=true;})" \
+		+ ".catch(function(e){fail(e&&e.message||e);});}" \
+		+ "catch(e){fail(e);}})()")
+
+
+## Состояние загрузки: {done, data (Dictionary или null), error}.
+static func poll_cloud_load() -> Dictionary:
+	var r := _eval_dict("({d:!!window.__yaCloudLoadDone," \
+		+ "t:(window.__yaCloudLoadData||null)," \
+		+ "e:String(window.__yaCloudLoadError||'')})")
+	if r.is_empty():
+		return {"done": true, "data": null, "error": "nosdk"}
+	var data = r.get("t", null)
+	if data != null and not (data is Dictionary):
+		data = null
+	return {"done": bool(r.get("d", false)),
+		"data": data, "error": String(r.get("e", ""))}
+
+
+## Запись блоба (JSON-строка) в данные игрока. flush=true — немедленная
+## запись (финал партии, уход страницы в фон), иначе SDK положит сам.
+## Флаги: __yaCloudSaveDone/Error.
+static func request_cloud_save(payload_json: String, flush: bool) -> void:
+	_eval("(function(){window.__yaCloudSaveDone=false;window.__yaCloudSaveError='';" \
+		+ "function fail(m){window.__yaCloudSaveError=String(m);window.__yaCloudSaveDone=true;}" \
+		+ "try{if(!window.__ysdk)throw 'nosdk';" \
+		+ "var blob=null;" \
+		+ "try{blob=JSON.parse(" + JSON.stringify(payload_json) + ");}catch(e){fail('bad-json');return;}" \
+		+ "window.__ysdk.getPlayer().then(function(p){return p.setData(blob," \
+		+ ("true" if flush else "false") + ");})" \
+		+ ".then(function(){window.__yaCloudSaveDone=true;})" \
+		+ ".catch(function(e){fail(e&&e.message||e);});}" \
+		+ "catch(e){fail(e);}})()")
+
+
+## Состояние записи: {done, error}.
+static func poll_cloud_save() -> Dictionary:
+	var r := _eval_dict("({d:!!window.__yaCloudSaveDone," \
+		+ "e:String(window.__yaCloudSaveError||'')})")
+	if r.is_empty():
+		return {"done": true, "error": "nosdk"}
+	return {"done": bool(r.get("d", false)), "error": String(r.get("e", ""))}

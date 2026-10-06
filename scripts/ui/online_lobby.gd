@@ -489,6 +489,9 @@ func _do_ya_login() -> void:
 		_update_buttons()
 		_set_auth_note(Lang.t("Не удалось получить гостевой профиль Яндекса"), true)
 		return
+	# Профиль готов: подтягиваем облако уже под текущего игрока — после
+	# авторизации данные приходят от аккаунта, а не от lite-ID.
+	Settings.cloud_load()
 	var res := await Net.ya_login(String(profile.get("uid", "")),
 		_ya_profile_nick(profile))
 	_ya_log("ya_login: ok=%s reason='%s'" % [str(res.get("ok", "?")), str(res.get("reason", ""))])

@@ -40,16 +40,27 @@ var stat_wins: int = 0
 var stat_losses: int = 0
 var _ya_pause_mute_applied := false
 var _ya_prev_master_mute := false
+## Облачное сохранение (SDK Яндекс Игр): настройки шлём не чаще раза
+## в 5 с, финал партии и уход страницы в фон — срочно и с flush;
+## загрузка — один раз при старте и повторно после авторизации.
+var _cloud_load_busy := false
+var _cloud_load_pending := false
+var _cloud_push_dirty := false
+var _cloud_push_urgent := false
+var _cloud_push_inflight := false
+var _cloud_push_last := 0
 
 func _ready() -> void:
 	load_settings()
 	if OS.get_name() == "Android":
 		DisplayServer.screen_set_orientation(DisplayServer.SCREEN_SENSOR)
 	_auto_lang_from_sdk()
+	cloud_load()
 
 
 func _process(_delta: float) -> void:
 	_sync_yandex_audio_pause()
+	_cloud_push_tick()
 
 
 ## Пункт Яндекс Игр про звук вне фокуса: SDK шлёт game_api_pause/resume,
@@ -67,6 +78,8 @@ func _sync_yandex_audio_pause() -> void:
 		_ya_prev_master_mute = AudioServer.is_bus_mute(bus)
 		AudioServer.set_bus_mute(bus, true)
 		_ya_pause_mute_applied = true
+		# Страница уходит в фон: незакрытые изменения досылаем сразу.
+		_cloud_push_urgent = true
 	elif not paused and _ya_pause_mute_applied:
 		AudioServer.set_bus_mute(bus, _ya_prev_master_mute)
 		_ya_pause_mute_applied = false
@@ -344,6 +357,7 @@ func save_settings() -> void:
 	cf.set_value("game", "stat_wins", stat_wins)
 	cf.set_value("game", "stat_losses", stat_losses)
 	cf.save(CFG_PATH)
+	_cloud_mark_dirty()
 
 
 ## Учёт завершённой партии для экрана «Статистика». Один вызов на
@@ -356,3 +370,152 @@ func record_game(won: bool, lost: bool) -> void:
 	if lost:
 		stat_losses += 1
 	save_settings()
+	# Финал партии: досылаем в облако сразу и с flush — это последний
+	# гарантированный момент, пока страница жива.
+	_cloud_push_urgent = true
+
+
+## --- Облачное сохранение настроек и статистики (SDK Яндекс Игр) ---
+
+const CLOUD_PUSH_INTERVAL_MSEC := 5000
+
+
+## Загрузка при старте (и повторно после авторизации Yandex ID — тогда
+## данные игрока уже от аккаунта, а не от lite-ID): ждём init SDK,
+## читаем блоки 'settings'/'stats', применяем и зеркалим в локальный cfg.
+## Вне Web / без моста — тихий no-op. Повторный вызов во время работы
+## ставится в очередь: второй заход начнётся после первого.
+func cloud_load() -> void:
+	if not OS.has_feature("web") or not ResourceLoader.exists(YANDEX_SDK_SCRIPT):
+		return
+	if _cloud_load_busy:
+		_cloud_load_pending = true
+		return
+	_cloud_load_busy = true
+	await _cloud_load_step()
+	_cloud_load_busy = false
+	if _cloud_load_pending:
+		_cloud_load_pending = false
+		cloud_load()
+
+
+func _cloud_load_step() -> void:
+	var sdk := load(YANDEX_SDK_SCRIPT) as GDScript
+	# ensure_sdk идемпотентен (сторожок __ysdkRequested): главное меню
+	# зовёт своё — параллельный вызов не мешает.
+	sdk.ensure_sdk()
+	for _attempt in 120:
+		var ready: Dictionary = sdk.poll_sdk_ready()
+		if bool(ready.get("ready", false)):
+			break
+		if String(ready.get("error", "")) != "":
+			return  # init не удался: живём на локальном cfg
+		await get_tree().create_timer(0.25).timeout
+	sdk.request_cloud_load()
+	for _attempt in 120:
+		var r: Dictionary = sdk.poll_cloud_load()
+		if bool(r.get("done", false)):
+			var data = r.get("data")
+			if data is Dictionary and not (data as Dictionary).is_empty():
+				var before := language
+				apply_cloud(data)
+				save_settings()
+				if language != before:
+					_reload_menu_if_visible()
+			return
+		await get_tree().create_timer(0.25).timeout
+
+
+## Применение облачного блока. Настройки — облако сильнее локальных
+## (это предпочтения игрока, они переживают смену устройства); ячейки
+## вне диапазона зажимаем, как при чтении cfg. Статистика — поэлементный
+## максимум: счётчики только растут, сыгранное офлайн не пропадает.
+## Язык: ручной выбор из облака сильнее авто-языка платформы; «авто»
+## из облака платформе не указывает — ей владеет environment.i18n.
+func apply_cloud(data: Dictionary) -> void:
+	var s = data.get("settings")
+	if s is Dictionary:
+		var d := s as Dictionary
+		player_count = clampi(int(d.get("player_count", player_count)), MIN_PLAYERS, MAX_PLAYERS)
+		require_30 = bool(d.get("require_30", require_30))
+		text_scale = clampi(int(d.get("text_scale", text_scale)), 0, TEXT_SCALES.size() - 1)
+		tile_step = clampi(int(d.get("tile_step", tile_step)), 0, TILE_WIDTHS.size() - 1)
+		bot_level = clampi(int(d.get("bot_level", bot_level)), 0, BOT_LEVEL_NAMES.size() - 1)
+		bot_anim = bool(d.get("bot_anim", bot_anim))
+		var cloud_auto := bool(d.get("language_auto", language_auto))
+		if not cloud_auto:
+			var cloud_lang := String(d.get("language", language))
+			language = "en" if cloud_lang == "en" else "ru"
+			language_auto = false
+			Lang.set_lang(language)
+		else:
+			language_auto = true
+		var names = d.get("player_names")
+		if names is PackedStringArray:
+			player_names = names
+		elif names is Array:
+			player_names = PackedStringArray(names)
+		var bots = d.get("player_is_bot")
+		if bots is Array:
+			player_is_bot = bots
+	var st = data.get("stats")
+	if st is Dictionary:
+		var ds := st as Dictionary
+		stat_games = maxi(stat_games, int(ds.get("stat_games", 0)))
+		stat_wins = maxi(stat_wins, int(ds.get("stat_wins", 0)))
+		stat_losses = maxi(stat_losses, int(ds.get("stat_losses", 0)))
+	_ensure_names()
+	_ensure_bots()
+
+
+## Блоб для облака: те же поля, что и в локальном cfg.
+func _cloud_blob() -> Dictionary:
+	return {
+		"settings": {
+			"player_count": player_count,
+			"require_30": require_30,
+			"text_scale": text_scale,
+			"tile_step": tile_step,
+			"bot_level": bot_level,
+			"bot_anim": bot_anim,
+			"language": language,
+			"language_auto": language_auto,
+			"player_names": Array(player_names),
+			"player_is_bot": player_is_bot,
+		},
+		"stats": {
+			"stat_games": stat_games,
+			"stat_wins": stat_wins,
+			"stat_losses": stat_losses,
+		},
+	}
+
+
+func _cloud_mark_dirty() -> void:
+	if OS.has_feature("web") and ResourceLoader.exists(YANDEX_SDK_SCRIPT):
+		_cloud_push_dirty = true
+
+
+## Отправка из _process: не чаще раза в 5 с; urgent (flush) — после
+## партии и при уходе страницы в фон. Ошибка не съедает флаг: повтор
+## придёт через интервал, пока save_settings не пометит заново.
+func _cloud_push_tick() -> void:
+	if not OS.has_feature("web") or not ResourceLoader.exists(YANDEX_SDK_SCRIPT):
+		return
+	var sdk := load(YANDEX_SDK_SCRIPT) as GDScript
+	if _cloud_push_inflight:
+		var r: Dictionary = sdk.poll_cloud_save()
+		if bool(r.get("done", false)):
+			_cloud_push_inflight = false
+			_cloud_push_last = Time.get_ticks_msec()
+			if String(r.get("error", "")) == "":
+				_cloud_push_dirty = false
+			_cloud_push_urgent = false
+		return
+	if not _cloud_push_dirty:
+		return
+	var now := Time.get_ticks_msec()
+	if not _cloud_push_urgent and now - _cloud_push_last < CLOUD_PUSH_INTERVAL_MSEC:
+		return
+	_cloud_push_inflight = true
+	sdk.request_cloud_save(JSON.stringify(_cloud_blob()), _cloud_push_urgent)
