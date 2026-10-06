@@ -75,6 +75,8 @@ const _EN := {
 "Возврат к чекпоинту": "Restored checkpoint",
 "Возвращаемся": "Returning",
 "Войдите через Яндекс, чтобы играть по сети": "Sign in with Yandex to play online",
+"Войдите через Яндекс для имени, облачной статистики и лидербордов":
+	"Sign in with Yandex for your name, cloud stats, and leaderboards",
 "Войти по коду": "Join by code",
 "Войти через Яндекс": "Sign in with Yandex",
 "Вход и реклама работают только внутри Яндекс Игр": "Sign-in and ads only work inside Yandex Games",
@@ -87,6 +89,7 @@ const _EN := {
 "Вход выполнен": "Signed in",
 "Вход": "Sign in",
 "Входим…": "Signing in…",
+"Входим как гость…": "Signing in as guest…",
 "Вы всё ещё в комнате %s: %s. ": "You're still in room %s: %s. ",
 "Вы всё ещё в комнате %s: %s.": "You're still in room %s: %s.",
 "Вы вышли": "Signed out",
@@ -99,6 +102,7 @@ const _EN := {
 "Выход в меню": "Quit to menu",
 "Выход": "Quit",
 "Готов(-а)": "Ready",
+"Гость": "Guest",
 "Действия": "Actions",
 "Джокер заменяет любое число любого цвета.": "A joker replaces any tile of any color.",
 "Джокер — заменяет любое число любого цвета": "Joker — replaces any tile of any color",
@@ -120,6 +124,8 @@ const _EN := {
 "Заходим в %s…": "Joining %s…",
 "ИГРА ПО СЕТИ": "PLAY ONLINE",
 "ИЛИ взять одно случайное число из колоды.": "OR draw one random tile from the deck.",
+"Или продолжайте как гость — играть по сети можно без входа":
+	"Or continue as a guest — online play works without signing in",
 "Игра на паузе": "Game paused",
 "Игра на паузе: кто-то отвалился. Ждём возвращения.":
 	"Game paused: someone dropped. Waiting for them.",
@@ -178,6 +184,7 @@ const _EN := {
 "Не удалось создать код комнаты": "Couldn't create room code",
 "Не удалось создать комнату": "Couldn't create the room",
 "Не удалось удалить аккаунт": "Could not delete the account",
+"Не удалось получить гостевой профиль Яндекса": "Could not get the Yandex guest profile",
 "Невозможный": "Impossible",
 "Нельзя брать из колоды после выкладки": "Can't draw from the deck after placing",
 "Некорректное сообщение": "Malformed message",
@@ -470,5 +477,4 @@ static func card_word(count: int) -> String:
 	if d >= 2 and d <= 4 and not (h >= 12 and h <= 14):
 		return "карточки"
 	return "карточек"
-
 

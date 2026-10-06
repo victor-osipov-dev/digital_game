@@ -436,12 +436,14 @@ func _do_register() -> void:
 
 ## Вход через Yandex ID (только Web): сначала пробуем готовый профиль
 ## (вдруг уже авторизован — тогда диалог не нужен и не показывается),
-## иначе явный диалог с объяснением выгод. Без UID дальше нельзя:
-## гость играет офлайн, онлайн закрыт.
+## иначе явный диалог с объяснением выгод. Если игрок отменил диалог,
+## но SDK отдал lite-ID, продолжаем гостем: сетевой режим не должен
+## быть заперт за авторизацией Яндекса.
 func _do_ya_login() -> void:
 	if _ya_busy:
 		return
 	_ya_busy = true
+	_set_page(_page_auth)
 	_update_buttons()
 	# ensure_sdk идемпотентен (сторожок __ysdkRequested): зовём и отсюда,
 	# а не только из главного меню — иначе прямой заход в лобби ждал бы
@@ -485,13 +487,48 @@ func _do_ya_login() -> void:
 	if String(profile.get("uid", "")).is_empty():
 		_ya_busy = false
 		_update_buttons()
-		_set_auth_note(Lang.t("Без входа доступен только офлайн-режим"), true)
+		_set_auth_note(Lang.t("Не удалось получить гостевой профиль Яндекса"), true)
 		return
 	var res := await Net.ya_login(String(profile.get("uid", "")),
-		String(profile.get("name", "")))
+		_ya_profile_nick(profile))
 	_ya_log("ya_login: ok=%s reason='%s'" % [str(res.get("ok", "?")), str(res.get("reason", ""))])
 	_ya_busy = false
 	_after_auth(res, Lang.t("Вход выполнен"))
+
+
+## Гостевой вход для Яндекс Игр: getPlayer() без openAuthDialog отдаёт
+## lite-ID. Этого достаточно для серверной сессии и игры по сети; облачные
+## возможности/публичное имя остаются за явной кнопкой «Войти через Яндекс».
+func _do_ya_guest_login() -> void:
+	if _ya_busy:
+		return
+	_ya_busy = true
+	_set_page(_page_auth)
+	_update_buttons()
+	_ysdk_call("ensure_sdk")
+	if not await _sdk_ready_short():
+		_ya_busy = false
+		_update_buttons()
+		_set_auth_note(Lang.t("Вход и реклама работают только внутри Яндекс Игр"), true)
+		return
+	_set_auth_note(Lang.t("Входим как гость…"))
+	var profile := await _ya_profile()
+	if String(profile.get("uid", "")).is_empty():
+		_ya_busy = false
+		_update_buttons()
+		_set_auth_note(Lang.t("Не удалось получить гостевой профиль Яндекса"), true)
+		return
+	var res := await Net.ya_login(String(profile.get("uid", "")),
+		_ya_profile_nick(profile))
+	_ya_busy = false
+	_after_auth(res, Lang.t("Вход выполнен"))
+
+
+func _ya_profile_nick(profile: Dictionary) -> String:
+	var nick := String(profile.get("name", "")).strip_edges()
+	if nick.is_empty():
+		nick = Lang.t("Гость")
+	return nick
 
 
 ## Профиль из SDK (пусто — не получилось). Повторный вызов после диалога.
@@ -523,15 +560,15 @@ func _ya_log(msg: String) -> void:
 
 
 ## Web-вход без промежуточной страницы (требования Яндекс Игр):
-## 1. Играть без регистрации можно: отказ («Без входа», мимо модалки)
-##    закрывает лобби назад в меню; офлайн и локальное ничто не трогаем.
+## 1. Играть без регистрации можно: «Без входа» берёт lite-ID через
+##    getPlayer() без openAuthDialog и заводит гостевую серверную сессию.
 ## 2. Только Yandex ID: парольная форма на Web скрыта (_sync_auth_mode),
 ##    диалог — только openAuthDialog из SDK, своего ничего нет.
 ## 3. Старт — лишь по явному нажатию «Играть с другими» (открытие лобби);
 ##    при запуске и в фоне авторизации нет (в _ready только ensure_sdk).
 ## 4. Перед диалогом — модалка с пользой и честным выбором.
-## 5-6. Гость играет офлайн, прогресс на устройстве не пропадает:
-##    отказ ничего не стирает, просто закрывает лобби.
+## 5-6. Гость играет по сети без персональных данных: отказ от Яндекс ID
+##    ничего не стирает и не отправляет в пользовательский диалог.
 ## 7. Залогинен (сессия) или уже авторизован в Яндексе — входим молча:
 ##    сначала тихий профиль БЕЗ диалога, модалку не показываем.
 func _enter_web_fast() -> void:
@@ -607,8 +644,8 @@ func _build_ya_benefit() -> void:
 	title.add_theme_color_override("font_color", Color("FFD54F"))
 	box.add_child(title)
 	var body := Label.new()
-	body.text = Lang.t("Войдите через Яндекс, чтобы играть по сети") + "\n" \
-		+ Lang.t("Без входа доступен только офлайн-режим")
+	body.text = Lang.t("Войдите через Яндекс для имени, облачной статистики и лидербордов") \
+		+ "\n" + Lang.t("Или продолжайте как гость — играть по сети можно без входа")
 	body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	body.add_theme_font_size_override("font_size", Settings.fs(15))
@@ -648,18 +685,22 @@ func _on_ya_benefit_yes() -> void:
 	_do_ya_login()
 
 
-## «Без входа» и мимо модалки — отказ от авторизации: закрываем лобби
-## назад в меню. Гость играет офлайн, ничего не стираем (пп. 1, 5, 6).
+## «Без входа» — не отказ от сетевого режима, а гостевая сессия через
+## lite-ID Яндекс Игр. Мимо модалки оставляем мягким выходом в меню.
 func _on_ya_benefit_no() -> void:
 	if _ya_modal != null:
 		(_ya_modal as ColorRect).visible = false
-	close()
+	_do_ya_guest_login()
 
 
 func _on_ya_benefit_backdrop(event: InputEvent) -> void:
 	if event is InputEventMouseButton and (event as InputEventMouseButton).pressed:
-		_on_ya_benefit_no()
-		(_ya_modal as ColorRect).accept_event()
+		var modal := _ya_modal as ColorRect
+		if modal != null:
+			modal.visible = false
+		close()
+		if modal != null:
+			modal.accept_event()
 
 
 ## Мост SDK Яндекс Игр (только Web). Один load на файл — см. константу
@@ -1953,7 +1994,7 @@ func _build_auth() -> VBoxContainer:
 	_auth_ya_box.visible = false
 	_auth_ya_box.add_child(_header(Lang.t("Онлайн через Яндекс ID"), 19))
 	var ya_note := Label.new()
-	ya_note.text = Lang.t("Войдите через Яндекс, чтобы играть по сети")
+	ya_note.text = Lang.t("Войдите через Яндекс для имени, облачной статистики и лидербордов")
 	ya_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	ya_note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	ya_note.add_theme_font_size_override("font_size", Settings.fs(15))

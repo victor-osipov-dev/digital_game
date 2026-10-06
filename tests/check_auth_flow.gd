@@ -249,12 +249,18 @@ func _check_web_fast_path() -> void:
 	check(build.contains("Войти через Яндекс") and build.contains("Без входа"),
 		"в модалке обе кнопки: вход и гость")
 	var no := _func_body(src, "func _on_ya_benefit_no")
-	check(no.contains("close()"), "отказ закрывает лобби в меню, ничего не стирая")
+	check(no.contains("_do_ya_guest_login()"),
+		"отказ от Яндекс ID ведёт в гостевой сетевой вход")
+	var guest := _func_body(src, "func _do_ya_guest_login")
+	check(guest.contains("request_player") or guest.contains("_ya_profile()"),
+		"гостевой вход берёт lite-ID без openAuthDialog")
+	check(not guest.contains("open_auth_dialog"),
+		"гостевой вход не открывает диалог Яндекса")
 	var yes := _func_body(src, "func _on_ya_benefit_yes")
 	check(yes.contains("_do_ya_login()"), "согласие идёт штатным входом")
 
 
-## Модалка живьём: видна, кнопки на месте, гость закрывает лобби.
+## Модалка живьём: видна, кнопки на месте, гость запускает вход.
 func _check_ya_benefit_modal() -> void:
 	var lobby := inst
 	lobby.call("_show_ya_benefit")
@@ -267,10 +273,11 @@ func _check_ya_benefit_modal() -> void:
 	lobby.call("_on_ya_benefit_yes")
 	check(not (modal as Control).visible, "согласие прячет модалку")
 	check(bool(inst.get("_ya_busy")), "согласие запускает вход")
+	inst.set("_ya_busy", false)
 	lobby.call("_show_ya_benefit")
 	lobby.call("_on_ya_benefit_no")
 	check(not (modal as Control).visible, "отказ прячет модалку")
-	check(not inst.visible, "отказ возвращает в главное меню")
+	check(bool(inst.get("_ya_busy")), "отказ запускает гостевой вход")
 
 
 ## Вкладки комнат с широкими боковыми полями (палец попадает).

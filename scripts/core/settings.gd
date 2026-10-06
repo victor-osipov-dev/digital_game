@@ -38,12 +38,38 @@ var player_is_bot: Array = []
 var stat_games: int = 0
 var stat_wins: int = 0
 var stat_losses: int = 0
+var _ya_pause_mute_applied := false
+var _ya_prev_master_mute := false
 
 func _ready() -> void:
 	load_settings()
 	if OS.get_name() == "Android":
 		DisplayServer.screen_set_orientation(DisplayServer.SCREEN_SENSOR)
 	_auto_lang_from_sdk()
+
+
+func _process(_delta: float) -> void:
+	_sync_yandex_audio_pause()
+
+
+## Пункт Яндекс Игр про звук вне фокуса: SDK шлёт game_api_pause/resume,
+## мост кладёт флаг, здесь мы безопасно глушим Master и возвращаем ровно
+## прежнее состояние. Если звуков нет, это no-op; если появятся — уже готово.
+func _sync_yandex_audio_pause() -> void:
+	if not OS.has_feature("web") or not ResourceLoader.exists(YANDEX_SDK_SCRIPT):
+		return
+	var sdk := load(YANDEX_SDK_SCRIPT) as GDScript
+	var paused := bool(sdk.platform_paused())
+	var bus := AudioServer.get_bus_index("Master")
+	if bus < 0:
+		return
+	if paused and not _ya_pause_mute_applied:
+		_ya_prev_master_mute = AudioServer.is_bus_mute(bus)
+		AudioServer.set_bus_mute(bus, true)
+		_ya_pause_mute_applied = true
+	elif not paused and _ya_pause_mute_applied:
+		AudioServer.set_bus_mute(bus, _ya_prev_master_mute)
+		_ya_pause_mute_applied = false
 
 ## Размер шрифта: база × шкала, но не ниже читаемого минимума —
 ## на «Маленьком» fs(12)/fs(13) не превращаются в крошку.

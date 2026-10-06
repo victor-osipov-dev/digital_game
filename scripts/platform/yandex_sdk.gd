@@ -13,9 +13,9 @@ extends RefCounted
 const SDK_URL := "https://yandex.ru/games/sdk/v2"
 
 ## Диагностика входа/рекламы: точки [ya-sdk]/[ya-lobby] в консоли браузера.
-## ВРЕМЕННО true — найти, где встаёт вход под dev-proxy. После починки
-## выставить false (рантайм замолчит, мост продолжит работать).
-const DEBUG_LOG := true
+## В проде молчим: SDK-ошибки возвращаются через poll_* и показываются UI.
+## Для локальной диагностики можно временно включить true.
+const DEBUG_LOG := false
 
 
 static func _bridge():
@@ -57,25 +57,32 @@ static func _eval_dict(js_expr: String) -> Dictionary:
 ## иначе дальше всё молча отвечает nosdk и причина не видна нигде.
 static func ensure_sdk() -> void:
 	_eval("(function(){if(window.__ysdkRequested)return;window.__ysdkRequested=true;" \
+		+ "var dbg=" + ("true" if DEBUG_LOG else "false") \
+		+ ";function log(m){if(dbg)console.log(m);}" \
 		+ "window.__ysdkInitError='';" \
 		+ "function initNow(){try{YaGames.init().then(function(ysdk){window.__ysdk=ysdk;" \
-		+ "console.log('[ya-sdk] init ok');" \
+		+ "window.__yaGameApiPaused=false;" \
+		+ "if(!window.__ysdkEventsBound){window.__ysdkEventsBound=true;" \
+		+ "try{ysdk.on('game_api_pause',function(){window.__yaGameApiPaused=true;});" \
+		+ "ysdk.on('game_api_resume',function(){window.__yaGameApiPaused=false;});}" \
+		+ "catch(e){}}" \
+		+ "log('[ya-sdk] init ok');" \
 		+ "try{ysdk.features.LoadingAPI.ready();}catch(e){}})" \
 		+ ".catch(function(e){window.__ysdkInitError=String(e&&e.message||e);" \
-		+ "console.log('[ya-sdk] init fail: '+window.__ysdkInitError);});}catch(e){" \
+		+ "log('[ya-sdk] init fail: '+window.__ysdkInitError);});}catch(e){" \
 		+ "window.__ysdkInitError=String(e&&e.message||e);" \
-		+ "console.log('[ya-sdk] init throw: '+window.__ysdkInitError);}}" \
-		+ "console.log('[ya-sdk] ensure, YaGames present='+(!!window.YaGames));" \
+		+ "log('[ya-sdk] init throw: '+window.__ysdkInitError);}}" \
+		+ "log('[ya-sdk] ensure, YaGames present='+(!!window.YaGames));" \
 		+ "if(window.YaGames){initNow();return;}" \
-		+ "console.log('[ya-sdk] injecting /sdk.js');" \
+		+ "log('[ya-sdk] injecting /sdk.js');" \
 		+ "var s=document.createElement('script');s.src='/sdk.js';" \
-		+ "s.onload=function(){console.log('[ya-sdk] /sdk.js loaded');initNow();};" \
-		+ "s.onerror=function(){console.log('[ya-sdk] /sdk.js failed, fallback CDN');" \
+		+ "s.onload=function(){log('[ya-sdk] /sdk.js loaded');initNow();};" \
+		+ "s.onerror=function(){log('[ya-sdk] /sdk.js failed, fallback CDN');" \
 		+ "var c=document.createElement('script');" \
 		+ "c.src='" + SDK_URL + "';c.onload=function(){" \
-		+ "console.log('[ya-sdk] CDN loaded');initNow();};" \
+		+ "log('[ya-sdk] CDN loaded');initNow();};" \
 		+ "c.onerror=function(){window.__ysdkInitError='sdk load failed';" \
-		+ "console.log('[ya-sdk] CDN failed');};" \
+		+ "log('[ya-sdk] CDN failed');};" \
 		+ "document.head.appendChild(c);};" \
 		+ "document.head.appendChild(s);})()")
 
@@ -101,6 +108,13 @@ static func sdk_lang() -> String:
 	if raw == null:
 		return ""
 	return String(raw).to_lower().strip_edges()
+
+
+## События платформы game_api_pause/game_api_resume: JS-слушатели
+## ставят флаг, Godot-процесс его опрашивает и глушит/возвращает звук.
+static func platform_paused() -> bool:
+	var raw = _eval("!!window.__yaGameApiPaused")
+	return bool(raw)
 
 
 ## Игрок реально играет (ходить/партия началась).
