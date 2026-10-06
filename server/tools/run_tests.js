@@ -2124,6 +2124,37 @@ test('финиш партии пишет статистику только лю�
   }
 });
 
+test('победный ход начисляет победу и партию ровно один раз', () => {
+  assert.ok(accounts.register('dblwin', 'secret123', 'ДаблПобеда').ok);
+  assert.ok(accounts.register('dbllose', 'secret123', 'ДаблВторой').ok);
+  const hub = newHub();
+  try {
+    const room = playingRoom('dblwin', 'dbllose');
+    const g = room.game;
+    g.current = 0;
+    // Рука = ровно один валидный ряд: выкладка всех трёх фишек
+    // оставляет пустую руку и заканчивает партию победой текущего.
+    const run = rigRun(room, 0, 1, 7);
+    g.currentPlayer().handIds = run.slice();
+    const a = fakeSock(hub, room, 0, userOf('dblwin'));
+    fakeSock(hub, room, 1, userOf('dbllose'));
+    hub.onMessage(a.ctx, Buffer.from(JSON.stringify({
+      t: C2S.GAME_COMMIT, rid: 'w1',
+      ops: run.map((id, i) => ({ op: 'place', tile: id, to: 'n0', index: i })),
+    })));
+    const err = a.msgs.find((m) => m.t === S2C.GAME_ERROR);
+    assert.ok(!err, `победный ход принят${err ? `: ${JSON.stringify(err)}` : ''}`);
+    const win = db.getAccount('dblwin');
+    const lose = db.getAccount('dbllose');
+    assert.strictEqual(win.wins, 1, 'победа насчитывается один раз, не два');
+    assert.strictEqual(win.games, 1, 'победитель играет одну партию, не две');
+    assert.strictEqual(lose.wins, 0, 'проигравшему победа не капает');
+    assert.strictEqual(lose.games, 1, 'проигравший — одна сыгранная');
+  } finally {
+    hub.stop();
+  }
+});
+
 test('board.list по маршруту требует входа, вошедшему отвечает', () => {
   const hub = newHub();
   try {

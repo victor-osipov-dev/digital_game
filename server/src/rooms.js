@@ -56,6 +56,9 @@ class Room {
     // Кем закрыт прошлый ход: цепочка «бот за ботом» ждёт паузу
     // (см. hub.maybeRunBots), после человека бот идёт сразу.
     this._prevTurnByBot = false;
+    // Статистика финиша уже записана (hub.recordGameResult): сторожок
+    // от двойного начисления, сбрасывается при старте новой партии.
+    this._statsRecorded = false;
   }
 
   seatOfUser(userId) {
@@ -418,6 +421,8 @@ class Rooms {
       gp.isBot = !!p.isBot;
     }
     room.state = 'playing';
+    // Новая партия в этой же комнате — сторожок статистики чист.
+    room._statsRecorded = false;
     room.paused.clear();
     room.touch();
     log.info(`комната ${room.code}: партия началась (людей ${humans} из ${room.seats} мест, ботов добираем)`);
@@ -518,7 +523,7 @@ class Rooms {
     // Ход кончился — отсчёт прежнего игрока больше не нужен: новый запустит
     // хаб (maybeRunBots -> _scheduleTurn), когда дойдёт до рассылки.
     room.turnDeadlineMs = null;
-    this.db.addResult(room.players[seat].login, result.win === true);
+    // Статистика (games/wins) — только на финише партии: hub.recordGameResult.
     return { ok: true, room, seat, win: result.win === true };
   }
 

@@ -684,16 +684,25 @@ class Hub {
     this.maybeRunBots(room);
     this.pushGameState(room, r.seat, rid);
     this.broadcastRoom(room, r.seat);
-    if (room.state === 'playing' && room.game.finished) {
-      const w = room.game.players[room.game.winner];
-      log.info(`комната ${room.code}: победа ${w ? w.name : '?'}`);
-      this.recordGameResult(room);
-    }
+    this._noteFinish(room);
+  }
+
+  /**
+   * Финиш, замеченный на любом из путей хода: обычный ход человека
+   * (afterMove), черновик по дедлайну, ход бота (afterBotMove). Дедлайн
+   * с авто-взятием партию не заканчивает — там только взятие/пропуск
+   * без выкладки, и конец возможен лишь через endTurn.
+   */
+  _noteFinish(room) {
+    if (!room || room.state !== 'playing' || !room.game || !room.game.finished) return;
+    const w = room.game.players[room.game.winner];
+    log.info(`комната ${room.code}: победа ${w ? w.name : '?'}`);
+    this.recordGameResult(room);
   }
 
   /**
    * Учёт финиша партии в статистику — единственный писатель games/wins.
-   * Вызывается из afterMove при первом обнаружении finished (сторожок
+   * Зовётся из _noteFinish при первом обнаружении finished (сторожок
    * _statsRecorded: финиш видят все последующие ходы тоже). Боты и
    * сошедшие с мест не учитываются; финиш без победителя — всем лишь +1
    * к сыгранным. Клиент повлиять не может: ручек записи статистики нет.
@@ -839,6 +848,7 @@ class Hub {
       room._prevTurnByBot = false;
       this.maybeRunBots(room);
       this.broadcastRoom(room, null);
+      this._noteFinish(room);
       return;
     }
     let drew = false;
@@ -890,7 +900,6 @@ class Hub {
     const rows = room._draftRows ? room._draftRows.get(seat) : null;
     if (room._draftRows) room._draftRows.delete(seat);
     if (!rows || rows.length === 0) return false;
-    let win = false;
     try {
       g.beginTurn();
       // Черновик несёт СЫРЫЕ локальные id рядов (клиент в коммите мапит
@@ -914,9 +923,6 @@ class Hub {
       }
       g.commit();
       room.touch();
-      win = res.win === true;
-      const rec = room.players[seat];
-      if (rec && rec.login) this.db.addResult(rec.login, win);
     } catch (e) {
       log.warn(`комната ${room.code}: черновик к дедлайну не встал (${e.message})`);
       try { g.rollback(); } catch (_) { /* транзакции могло не быть */ }
@@ -957,9 +963,7 @@ class Hub {
           room.touch();
           // Ход бота кончился — прежний отсчёт гасим до _scheduleTurn.
           room.turnDeadlineMs = null;
-          const rec = room.players[seat];
-          if (rec && rec.login) this.db.addResult(rec.login, res.win === true);
-          else if (res.win === true) log.info(`комната ${room.code}: бот ${player.name} победил`);
+          if (res.win === true) log.info(`комната ${room.code}: бот ${player.name} победил`);
           this.afterBotMove(room);
           return;
         }
@@ -990,6 +994,7 @@ class Hub {
     room._prevTurnByBot = true;
     this.maybeRunBots(room);
     this.broadcastRoom(room, null);
+    this._noteFinish(room);
   }
 
   drainExpired() {
