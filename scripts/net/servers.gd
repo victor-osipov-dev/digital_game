@@ -38,10 +38,10 @@ const BUILTIN_IP := [
 		"port": 6767,
 	},
 	{
-		"id": "srv-lv",
-		"name": "Латвия",
-		"region": "lv",
-		"host": "31.56.196.114",
+		"id": "srv-ru2",
+		"name": "Россия 2",
+		"region": "ru",
+		"host": "157.228.134.211",
 		"port": 6767,
 	},
 ]
@@ -54,9 +54,9 @@ const BUILTIN_WEB := [
 		"port": 6767,
 	},
 	{
-		"id": "srv-lv",
-		"name": "Латвия",
-		"region": "lv",
+		"id": "srv-ru2",
+		"name": "Россия 2",
+		"region": "ru",
 		"host": "lvdigitalgame.fimdi.ru",
 		"port": 6767,
 	},

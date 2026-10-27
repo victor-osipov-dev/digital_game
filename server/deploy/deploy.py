@@ -19,17 +19,22 @@ deploy.py — ставит игровой сервер на VPS без учас�
 Учётные данные берутся из .env в корне репозитория (в git он не входит).
 
 Запуск:
-    python server/deploy/deploy.py              # обе машины
+    python server/deploy/deploy.py              # все машины из .env
     python server/deploy/deploy.py ru           # только Россия
-    python server/deploy/deploy.py lv
+    python server/deploy/deploy.py ru2          # только Россия 2
     python server/deploy/deploy.py --certs-only # только забрать сертификаты
     python server/deploy/deploy.py --status     # ничего не ставить
+
+Список целей НЕ зашит: берутся все пары <КОД>_HOST / DG_<КОД>_* из .env.
+Добавить сервер — значит дописать блок в .env (см. README, «Добавление
+или замена сервера»), а не править этот файл.
 """
 
 from __future__ import annotations
 
 import argparse
 import posixpath
+import re
 import shlex
 import socket
 import sys
@@ -88,6 +93,11 @@ def load_env() -> dict:
 
 # ------------------------------------------------------------------- хосты
 
+# Ключ цели в .env: RU_HOST, RU2_HOST, … Код — заглавные буквы и цифры.
+# DG_* намеренно не подходит: там лежит своё (DG_RU_PUBLIC_HOST и т.п.).
+_TARGET_KEY_RE = re.compile(r"^([A-Z][A-Z0-9]*)_HOST$")
+
+
 class Target:
     def __init__(self, key: str, env: dict):
         self.key = key
@@ -106,11 +116,25 @@ class Target:
 
 
 def build_targets(env: dict) -> list[Target]:
-    found = [Target(k, env) for k in ("RU", "LV") if env.get(f"{k}_HOST")]
+    """Строит цели по .env, а не по зашитому списку.
+
+    Сервером считается любой <КОД>_HOST, у которого есть пара
+    DG_<КОД>_SERVER_ID. Так добавление машины — это дописать блок в .env,
+    а не править deploy.py (раньше здесь стояло жёсткое ("RU", "LV"), и
+    новый сервер молча не деплоился, пока не тронешь код).
+    """
+    found: list[Target] = []
+    for name in sorted(env):
+        m = _TARGET_KEY_RE.match(name)
+        if not m or name.startswith("DG_"):
+            continue
+        key = m.group(1)
+        if env.get(f"DG_{key}_SERVER_ID"):
+            found.append(Target(key, env))
     if not found:
-        sys.exit("в .env нет ни RU_HOST, ни LV_HOST")
+        sys.exit("в .env нет ни одного сервера: нужны <КОД>_HOST и DG_<КОД>_SERVER_ID")
     # Соседями считаются ВСЕ серверы из .env, даже когда ставим один из
-    # них: RU должен знать про LV, и наоборот, иначе реестр будет полупустым
+    # них: RU должен знать про RU2, и наоборот, иначе реестр будет полупустым
     # ровно тогда, когда один из серверов недавно поднят.
     for t in found:
         t.peers = [o for o in found if o is not t]
@@ -369,6 +393,21 @@ def write_env(remote: Remote, target: Target, secret: str) -> None:
     gossip и подсунул свои аккаунты.
     """
     peers = ",".join(f"https://{p.public_host}:{PORT}" for p in target.peers)
+    # LE-пути пишем ТОЛЬКО когда оба файла уже лежат на сервере. Порядок
+    # важен: при старте index.js читает le-cert/le-key по этим путям и
+    # падает, если файла нет, — а на свежей машине их ещё не выпустили.
+    # Пусто — сервер поднимается в legacy-режиме (только IP), и включит
+    # публичный сертификат сам после выпуска LE (файлы появятся, а
+    # браузер/клиент всё равно ходит и по IP).
+    code, _ = remote.quiet(
+        f"test -s {REMOTE_TLS}/le-cert.pem && test -s {REMOTE_TLS}/le-key.pem")
+    if code == 0:
+        le_lines = (f"DG_TLS_LE_CERT={REMOTE_TLS}/le-cert.pem\n"
+                    f"DG_TLS_LE_KEY={REMOTE_TLS}/le-key.pem")
+    else:
+        le_lines = ("# DG_TLS_LE_CERT/DG_TLS_LE_KEY не заданы: публичного\n"
+                    "# сертификата ещё нет, работаем в legacy-режиме (только\n"
+                    "# IP). Web-клиенты оживут после выпуска LE (см. README).")
     body = f"""# Сгенерировано deploy.py {time.strftime('%Y-%m-%d %H:%M')} по МСК.
 # Следующий запуск deploy.py перезапишет файл целиком.
 #
@@ -395,8 +434,7 @@ DG_TLS_KEY={REMOTE_TLS}/key.pem
 # Публичный сертификат (Let's Encrypt) для DNS-имён Web-клиентов.
 # Подаётся только по SNI DNS-имени (см. tls_select.js); без него и по IP —
 # прежний самоподписанный. Пусто — работает только legacy-режим.
-DG_TLS_LE_CERT={REMOTE_TLS}/le-cert.pem
-DG_TLS_LE_KEY={REMOTE_TLS}/le-key.pem
+{le_lines}
 
 # --- кластер ------------------------------------------------------------
 DG_CLUSTER_SECRET={secret}
@@ -719,7 +757,10 @@ def main() -> int:
             pass  # поток подменён тестом или не поддерживает reconfigure
 
     ap = argparse.ArgumentParser(description="деплой игрового сервера")
-    ap.add_argument("which", nargs="?", default="both", choices=["both", "ru", "lv"])
+    # Без choices: список серверов известен только после load_env(), а
+    # ошибку выбора всё равно ловит проверка ниже (с перечислением ключей).
+    ap.add_argument("which", nargs="?", default="both",
+                    help="ключ из .env (ru, ru2, …) или both")
     ap.add_argument("--certs-only", action="store_true", help="только забрать сертификаты в клиент")
     ap.add_argument("--status", action="store_true", help="ничего не ставить, только проверить")
     ap.add_argument("--check", action="store_true", help="только проверить кластер")

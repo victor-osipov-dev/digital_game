@@ -395,10 +395,12 @@ func _build_ui() -> void:
 
 	hint_btn = _make_top_button(Lang.t("Подск."), Lang.t("Подсказка - показать возможный ход"),
 		_on_hint_pressed, Lang.t("Подсказка"))
-	if OS.has_feature("web") and ResourceLoader.exists("res://assets/ui/ad_badge.png"):
-		# Web: подсказка за просмотр rewarded — иконка честно говорит,
-		# что кнопка ведёт к рекламе. Исходник 64px уменьшаем до 22:
-		# в натуральную величину он выше кнопки и выживал из неё текст.
+	if Settings.is_yandex_web() and ResourceLoader.exists("res://assets/ui/ad_badge.png"):
+		# Сборка Яндекс Игр: подсказка за просмотр rewarded — иконка
+		# честно говорит, что кнопка ведёт к рекламе. На своём сайте и
+		# на Android подсказка бесплатная — иконки нет. Исходник 64px
+		# уменьшаем до 22: в натуральную величину он выше кнопки и
+		# выживал из неё текст.
 		hint_btn.icon = _fit_icon(load("res://assets/ui/ad_badge.png") as Texture2D, 22)
 	_top_actions.add_child(hint_btn)
 
@@ -2137,8 +2139,9 @@ func _bot_resolve_row(ref: String, created: Dictionary) -> GameState.Row:
 
 
 func _show_win() -> void:
-	# Web: сначала обратный отсчёт и реклама, экран победы — после них.
-	if OS.has_feature("web") and not _win_ad_done and state != null and state.finished:
+	# Сборка Яндекс Игр: сначала обратный отсчёт и реклама, экран победы
+	# — после них. На своём сайте и на Android — сразу экран победы.
+	if Settings.is_yandex_web() and not _win_ad_done and state != null and state.finished:
 		_win_ad_done = true
 		_start_win_countdown()
 		return
@@ -2575,7 +2578,9 @@ func _mark_hint_used() -> void:
 func _on_hint_pressed() -> void:
 	if not _can_act() or _is_hint_used() or _hint_ad_pending:
 		return
-	if OS.has_feature("web"):
+	# Сборка Яндекс Игр: подсказка за rewarded-рекламу. На своём сайте
+	# и на Android подсказка бесплатная и даётся сразу.
+	if Settings.is_yandex_web():
 		_request_hint_ad()
 		return
 	_give_hint()

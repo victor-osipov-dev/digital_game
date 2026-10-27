@@ -160,7 +160,7 @@ func _run() -> void:
 	# Серверы только что подняты, gossip ходит раз в минуту, поэтому
 	# ждать тут есть чего и отводим на это минуту с запасом.
 	var registry := await _wait_for_registry(2)
-	_check(registry.has("srv-ru") and registry.has("srv-lv"),
+	_check(registry.has("srv-ru") and registry.has("srv-ru2"),
 		"реестр серверов дополнен gossip'ом: %s" % ", ".join(registry.keys()))
 
 	# --- список комнат с обоих серверов -------------------------------
@@ -260,7 +260,7 @@ func _other_than(server_id: String) -> Dictionary:
 	# Предпочитаем второй сервер кластера, а не «любой другой из
 	# списка»: иначе проверка прошла бы на одной машине с одним сервером
 	# и ничего не сказала бы о репликации.
-	for id in ["srv-lv", "srv-ru"]:
+	for id in ["srv-ru2", "srv-ru"]:
 		if id != server_id:
 			var e := _sv.by_id(id)
 			if not e.is_empty():

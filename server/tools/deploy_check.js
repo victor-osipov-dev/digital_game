@@ -21,7 +21,7 @@
 //  Запуск:
 //      node server/tools/deploy_check.js
 //      node server/tools/deploy_check.js --server srv-ru=85.209.2.116:6767 \
-//                                        --server srv-lv=31.56.196.114:6767
+//                                        --server srv-ru2=157.228.134.211:6767
 //      node server/tools/deploy_check.js --wait 90
 //
 //  Адреса берутся из .env в корне репозитория, сертификаты — из
@@ -73,7 +73,12 @@ function serversFromEnv() {
     }
   }
   const out = [];
-  for (const key of ['RU', 'LV']) {
+  // Ключи не зашиты: сервером считается любой <КОД>_HOST, у которого
+  // есть пара DG_<КОД>_SERVER_ID. Раньше тут стояло ['RU', 'LV'], и новый
+  // сервер не проверялся, пока не тронешь код.
+  for (const hostKey of Object.keys(env)) {
+    if (hostKey.startsWith('DG_') || !hostKey.endsWith('_HOST')) continue;
+    const key = hostKey.slice(0, -'_HOST'.length);
     if (!env[`DG_${key}_SERVER_ID`] || !env[`DG_${key}_PUBLIC_HOST`]) continue;
     out.push({
       id: env[`DG_${key}_SERVER_ID`],

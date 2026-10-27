@@ -61,7 +61,7 @@ Rummikub-подобная игра на Godot 4.7 с сетевым режимо
 | id | Имя | Адрес | Порт |
 |---|---|---|---|
 | `srv-ru` | Россия | `85.209.2.116` | 6767 |
-| `srv-lv` | Латвия | `31.56.196.114` | 6767 |
+| `srv-ru2` | Россия 2 | `157.228.134.211` | 6767 |
 
 ---
 
@@ -605,7 +605,7 @@ node server/tools/run_tests.js        # проверка порта + корпу
 
 ```
 certs/85-209-2-116.crt     # Россия
-certs/31-56-196-114.crt    # Латвия
+certs/157-228-134-211.crt  # Россия 2
 ```
 
 > **Перевыпуск сертификата на сервере без обновления клиента = потеря связи
@@ -677,10 +677,10 @@ SQLite через встроенный `node:sqlite`. Файл: `/var/lib/digita
 
 ```bash
 RU_HOST=...  RU_USER=root  RU_PASSWORD=...
-LV_HOST=...  LV_USER=root  LV_PASSWORD=...
+RU2_HOST=...  RU2_USER=root  RU2_PASSWORD=...
 DG_CLUSTER_SECRET=<32 случайных байта>
 DG_RU_SERVER_ID=srv-ru     DG_RU_SERVER_NAME=Россия  DG_RU_REGION=ru  DG_RU_PUBLIC_HOST=<ip>
-DG_LV_SERVER_ID=srv-lv     DG_LV_SERVER_NAME=Латвия  DG_LV_REGION=lv  DG_LV_PUBLIC_HOST=<ip>
+DG_RU2_SERVER_ID=srv-ru2   DG_RU2_SERVER_NAME=Россия 2  DG_RU2_REGION=ru  DG_RU2_PUBLIC_HOST=<ip>
 ```
 
 Секрет генерируется так:
@@ -696,9 +696,9 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
 **2. Развернуть.**
 
 ```bash
-python server/deploy/deploy.py              # оба сервера
+python server/deploy/deploy.py              # все серверы из .env
 python server/deploy/deploy.py ru           # только Россия
-python server/deploy/deploy.py lv           # только Латвия
+python server/deploy/deploy.py ru2          # только Россия 2
 ```
 
 Скрипт на каждом сервере: ставит Node в `/opt/node` (сверяя SHA256),
@@ -780,13 +780,15 @@ journalctl -u digital-game -n 100 --no-pager
 ### Добавить третий
 
 1. Поднять VPS, открыть порт `6767`.
-2. Добавить в `.env` блок `DG_<КОД>_SERVER_ID / _NAME / _REGION / _PUBLIC_HOST`.
-3. Поправить `build_targets()` в `deploy.py` — он строит список целей из `.env`.
-4. В `server.env` каждого **существующего** сервера дописать нового соседа
-   в `DG_PEER_URLS`. Забытый сосед — самая частая причина «сервер не появился».
-5. `python server/deploy/deploy.py`
-6. `python server/deploy/deploy.py --certs-only` и **закоммитить** новый `.crt`.
-7. Дописать сервер в `BUILTIN_IP`/`BUILTIN_WEB` в `scripts/net/servers.gd`
+2. Добавить в `.env` блок `<КОД>_HOST` (SSH) и `DG_<КОД>_SERVER_ID / _NAME / _REGION / _PUBLIC_HOST`.
+   Правки в `deploy.py` не нужны: он (и `deploy_check.js`) находит цели
+   в `.env` сам — по паре `<КОД>_HOST` и `DG_<КОД>_SERVER_ID`.
+3. Выполнить `python server/deploy/deploy.py` — он разложит нового соседа
+   в `DG_PEER_URLS` каждого **существующего** сервера сам. Если ставите
+   только новую машину (`deploy.py <код>`), не забудьте перед этим
+   переразвернуть остальные, иначе они про соседа не узнают.
+4. `python server/deploy/deploy.py --certs-only` и **закоммитить** новый `.crt`.
+5. Дописать сервер в `BUILTIN_IP`/`BUILTIN_WEB` в `scripts/net/servers.gd`
    (или просто дать клиенту узнать его через gossip — но встроенный список
    нужен, чтобы клиент вообще знал, куда стучаться в первый раз).
 

@@ -151,27 +151,18 @@ class Cluster {
       throw new Error(`peer ${peer.url} вернул мусор`);
     }
     this.ingest(reply);
-    // Курсор двигаем только по тому, что реально долетело в this.accounts.
-    // Если сервер срезал пачку (more=true), курсор остаётся на sent_up_to,
-    // и доберём остаток на следующем цикле.
-    if (!reply.more) {
-      this.db.setPeerState(peer.url, Number(reply.sent_up_to) || 0, true);
-    } else {
-      this.db.setPeerState(peer.url, since, true);
-    }
+    // Курсор двигаем ровно на последнюю реально полученную запись —
+    // sent_up_to. Раньше при more=true (пачка усечена) курсор возвращали
+    // на прежнее `since`, и на outbox длиннее ACCOUNT_BATCH он застревал
+    // навсегда: свежий сервер тянул одни и те же первые 200 записей и не
+    // мог дойти до хвоста, где лежат свежие аккаунты и их регистрации.
+    this.db.setPeerState(peer.url, Number(reply.sent_up_to) || 0, true);
     // Тот же принцип для отзывов сессий: у них отдельный курсор.
     const peerState = this.db.getPeerState(peer.url) || {};
-    if (!reply.rev_more) {
-      this.db.setPeerState(peer.url, Number(peerState.last_seq) || 0, false, {
-        lastSeq: Number(reply.rev_sent_up_to) || revSince,
-        pulled: true,
-      });
-    } else {
-      this.db.setPeerState(peer.url, Number(peerState.last_seq) || 0, false, {
-        lastSeq: revSince,
-        pulled: true,
-      });
-    }
+    this.db.setPeerState(peer.url, Number(peerState.last_seq) || 0, false, {
+      lastSeq: Number(reply.rev_sent_up_to) || revSince,
+      pulled: true,
+    });
     this.db.upsertClusterServer({
       server_id: reply.from.server_id,
       name: String(reply.from.name || reply.from.server_id),

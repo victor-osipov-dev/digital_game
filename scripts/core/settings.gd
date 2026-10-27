@@ -8,6 +8,12 @@ const YANDEX_SDK_SCRIPT := "res://scripts/platform/yandex_sdk.gd"
 const MIN_PLAYERS := 2
 const MAX_PLAYERS := 5
 
+## Сборка Яндекс Игр: Web плюс мост SDK в PCK. Сборка для собственного
+## сайта (пресет Site_Web) исключает yandex_sdk.gd, и игра ведёт себя
+## как Android: парольный вход, свои серверы, без рекламы и таблицы.
+static func is_yandex_web() -> bool:
+	return OS.has_feature("web") and ResourceLoader.exists(YANDEX_SDK_SCRIPT)
+
 ## Лестница масштабов: маленький — ровно прежний ×1.0 (вёрстка под
 ## него родная), большой — ×2, чтобы весь текст был заметно крупным.
 ## «Маленького» ×0.85 больше нет. Потолоков у текста нет, зато есть

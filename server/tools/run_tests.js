@@ -488,7 +488,7 @@ test('плохой логин отклоняется', () => {
 
 test('SNI: DNS-имя — публичный контекст, IP и пустое — прежний', () => {
   const { isIpLiteral, selectTlsContext } = require('../src/tls_select');
-  for (const ip of ['85.209.2.116', '31.56.196.114', '127.0.0.1', '0.0.0.0']) {
+  for (const ip of ['85.209.2.116', '157.228.134.211', '127.0.0.1', '0.0.0.0']) {
     assert.strictEqual(isIpLiteral(ip), true, ip);
     assert.strictEqual(selectTlsContext(ip), 'legacy', ip);
   }
@@ -990,7 +990,7 @@ test('чужой сервер попадает в реестр из реплик
   const cluster = new Cluster(db);
   cluster.handleGossip({
     from: {
-      server_id: 'srv-peer', name: 'Латвия', region: 'lv',
+      server_id: 'srv-peer', name: 'Россия 2', region: 'ru',
       host: '10.0.0.2', port: 6767, version: '1',
     },
     since: 999999,
@@ -999,7 +999,7 @@ test('чужой сервер попадает в реестр из реплик
   const peer = reg.find((s) => s.id === 'srv-peer');
   assert.ok(peer, 'сосед должен появиться в реестре');
   assert.strictEqual(peer.host, '10.0.0.2');
-  assert.strictEqual(peer.region, 'lv');
+  assert.strictEqual(peer.region, 'ru');
 });
 
 test('молчащий сервер выбрасывается из реестра', () => {

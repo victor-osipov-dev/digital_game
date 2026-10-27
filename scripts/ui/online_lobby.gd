@@ -323,7 +323,9 @@ func _enter() -> void:
 func _enter_auth() -> void:
 	# На Web промежуточной страницы входа нет: сразу быстрый путь —
 	# тихая проверка готового профиля, иначе модалка с пользой.
-	if OS.has_feature("web"):
+	# Только для сборки Яндекс Игр: на своём сайте (SDK не в PCK) —
+	# обычная форма, как на Android.
+	if OS.has_feature("web") and ResourceLoader.exists(YA_SDK_PATH):
 		_enter_web_fast()
 		return
 	_set_page(_page_auth)
@@ -349,7 +351,7 @@ func _enter_auth() -> void:
 func _sync_auth_mode() -> void:
 	if _auth_form.is_empty() and _auth_ya_box == null:
 		return
-	var web := OS.has_feature("web")
+	var web := Settings.is_yandex_web()
 	for c in _auth_form:
 		(c as Control).visible = not web
 	if _auth_ya_box != null:
@@ -1704,12 +1706,14 @@ func _header(text: String, size: int = 17, wrap := true) -> Label:
 	return lab
 
 
-func _field(placeholder: String, secret := false) -> LineEdit:
+func _field(placeholder: String, secret := false, max_chars := 0) -> LineEdit:
 	var edit := LineEdit.new()
 	edit.placeholder_text = placeholder
 	edit.custom_minimum_size = Vector2(0, Settings.touch(44))
 	edit.add_theme_font_size_override("font_size", Settings.fs(15))
 	edit.secret = secret
+	if max_chars > 0:
+		edit.max_length = max_chars
 	return edit
 
 
@@ -1966,16 +1970,16 @@ func _build_auth() -> VBoxContainer:
 	page.visible = false
 
 	page.add_child(_header(Lang.t("Вход"), 19))
-	_login_edit = _field(Lang.t("логин"))
+	_login_edit = _field(Lang.t("логин"), false, 20)
 	page.add_child(_login_edit)
-	_pass_edit = _field(Lang.t("пароль"), true)
+	_pass_edit = _field(Lang.t("пароль"), true, 200)
 	# Набранный пароль запоминаем сразу, а не только по кнопке
 	# «Войти»: игрок может закрыть игру, не доходя до входа, и
 	# рассчитывать, что в следующий раз поле уже заполнено.
 	_pass_edit.text_changed.connect(_on_pass_typed)
 	page.add_child(_pass_edit)
 	page.add_child(_header(Lang.t("Если аккаунта нет"), 15))
-	_nick_edit = _field(Lang.t("имя в игре"))
+	_nick_edit = _field(Lang.t("имя в игре"), false, 24)
 	page.add_child(_nick_edit)
 
 	_login_btn = _button(Lang.t("Войти"), 17)
@@ -2137,10 +2141,10 @@ func _build_rooms() -> VBoxContainer:
 		_seats_option.set_item_id(_seats_option.get_item_count() - 1, n)
 	_seats_option.select(1)
 	create_row.add_child(_seats_option)
-	_room_name = _field(Lang.t("название (необязательно)"))
+	_room_name = _field(Lang.t("название (необязательно)"), false, 24)
 	_room_name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	create_row.add_child(_room_name)
-	_room_pass = _field(Lang.t("пароль (необязательно)"), true)
+	_room_pass = _field(Lang.t("пароль (необязательно)"), true, 64)
 	_room_pass.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	create_row.add_child(_room_pass)
 	_require_30 = CheckBox.new()
@@ -2170,10 +2174,10 @@ func _build_rooms() -> VBoxContainer:
 	code_row.add_theme_constant_override("separation", 8)
 	_code_box.add_child(code_row)
 	_stack_rows.append(code_row)
-	_join_code = _field(Lang.t("код"))
+	_join_code = _field(Lang.t("код"), false, 5)
 	_join_code.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	code_row.add_child(_join_code)
-	_join_pass = _field(Lang.t("пароль"), true)
+	_join_pass = _field(Lang.t("пароль"), true, 64)
 	_join_pass.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	code_row.add_child(_join_pass)
 	_join_btn = _button(Lang.t("Войти"), 15)
@@ -2233,11 +2237,12 @@ func _build_rooms() -> VBoxContainer:
 
 
 func _logout_row(page: VBoxContainer) -> void:
-	# Web: кнопки «Выйти» нет. Выйти из Yandex ID нельзя в принципе —
-	# в SDK нет такого метода, авторизация живёт в браузере. А рвать
-	# только нашу сессию и делать вид, что вышли (следующий клик молча
-	# вернёт тот же аккаунт), — враньё игроку.
-	if OS.has_feature("web"):
+	# Сборка Яндекс Игр: кнопки «Выйти» нет. Выйти из Yandex ID нельзя в
+	# принципе — в SDK нет такого метода, авторизация живёт в браузере.
+	# А рвать только нашу сессию и делать вид, что вышли (следующий клик
+	# молча вернёт тот же аккаунт), — враньё игроку. На своём сайте и на
+	# Android сессия обычная — кнопка «Выйти» на месте.
+	if Settings.is_yandex_web():
 		return
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_END
@@ -2356,11 +2361,11 @@ func _build_board_modal() -> void:
 	box.add_child(note)
 	# На Web таблица Яндекс Игр — ВЫШЕ нашей: она про текущий заход
 	# игрока, а наша — общий топ со всех платформ (там же сидят игроки
-	# с Android и других мест). На Android яндекс-блок и пометка скрыты —
-	# там меняется только подпись выше.
+	# с Android и других мест). На Android и на собственном сайте
+	# яндекс-блок и пометка скрыты — там только наш топ.
 	_ya_board_wrap = VBoxContainer.new()
 	_ya_board_wrap.add_theme_constant_override("separation", 8)
-	_ya_board_wrap.visible = OS.has_feature("web")
+	_ya_board_wrap.visible = Settings.is_yandex_web()
 	box.add_child(_ya_board_wrap)
 	var ya_title := Label.new()
 	ya_title.text = Lang.t("Яндекс Игры")
@@ -2387,7 +2392,7 @@ func _build_board_modal() -> void:
 	sepline.color = Color(1, 1, 1, 0.22)
 	sepline.thickness = 1
 	sep.add_theme_stylebox_override("separator", sepline)
-	sep.visible = OS.has_feature("web")
+	sep.visible = Settings.is_yandex_web()
 	box.add_child(sep)
 	var global_note := Label.new()
 	global_note.text = Lang.t("Общий топ со всех платформ")
@@ -2395,7 +2400,7 @@ func _build_board_modal() -> void:
 	global_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	global_note.add_theme_font_size_override("font_size", Settings.fs(13))
 	global_note.add_theme_color_override("font_color", Color(1, 1, 1, 0.55))
-	global_note.visible = OS.has_feature("web")
+	global_note.visible = Settings.is_yandex_web()
 	box.add_child(global_note)
 	_board_grid = GridContainer.new()
 	_board_grid.columns = 3

@@ -21,11 +21,13 @@ config/icon="res://icon.png"
 
 Settings="*res://scripts/core/settings.gd"
 Net="*res://scripts/net/net.gd"
+WebTextInput="*res://scripts/platform/web_text_input.gd"
 
 [display]
 
 window/size/viewport_width=576
 window/size/viewport_height=1024
+window/size/mode=3
 window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
 window/handheld/orientation=6
@@ -33,6 +35,10 @@ window/handheld/orientation=6
 [editor]
 
 movie_writer/movie_file="C:/Users/victor/Desktop/Projects/godot/video.avi"
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/MarketHelper/plugin.cfg")
 
 [physics]
 
@@ -44,7 +50,3 @@ rendering_device/driver.windows="d3d12"
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
 textures/vram_compression/import_etc2_astc=true
-
-[editor_plugins]
-
-enabled=PackedStringArray("res://addons/MarketHelper/plugin.cfg")
