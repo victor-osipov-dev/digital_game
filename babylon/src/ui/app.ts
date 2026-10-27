@@ -90,13 +90,35 @@ export class App implements MenuHost, OfflineHost {
       if (this.current === 'online') this.online.onSessionClosed();
     };
     l.onQuick = () => undefined; // quick-очередь заменена матча-подбором по списку
-    l.onPending = (room) => this.online.applyPending(room);
+    l.onPending = (room) => {
+      this.online.applyPending(room);
+      // главное меню показывает баннер «вы всё ещё в комнате» — обновляем
+      // живьём, иначе он появляется только после повторного входа в меню
+      if (this.currentName === 'menu') this.rebuild();
+    };
   }
 
   private lastLobby: RoomLobbyView | null = null;
 
   // GAME_STATE: сетевая партия на том же 2D-экране, что и офлайн.
   enterGame(env: GameEnvelope): void {
+    if (this.currentName === 'menu') {
+      // Партия началась/идёт, пока мы в главном меню после парковки:
+      // экран не подменяем, но место за нами держится — баннер должен
+      // звать «вернуться в партию» (online_lobby.gd:289-301).
+      this.api.parkRoom({
+        code: env.state.code,
+        name: env.state.code,
+        seats: env.state.seats,
+        require30: env.state.require30,
+        hasPassword: false,
+        state: 'playing',
+        you: env.state.you,
+        isHost: false,
+        players: [],
+      });
+      return;
+    }
     if (this.currentName !== 'offline') this.show('offline');
     if (!this.offline) this.offline = new OfflineGame(this);
     this.offline.onlineMode = true;
@@ -107,6 +129,12 @@ export class App implements MenuHost, OfflineHost {
   // после конца партии — рисуем страницы сетевого меню.
   roomState(room: RoomLobbyView): void {
     this.lastLobby = room;
+    if (this.currentName === 'menu') {
+      // В главном меню после парковки комнату не открываем: только
+      // обновляем «вы всё ещё в комнате» (online_lobby.gd:1138-1151).
+      this.api.parkRoom(room);
+      return;
+    }
     // партия кончилась/вернулись в лобби — экран игры останавливаем
     if (this.offline && this.offline.onlineMode) {
       this.offline.running = false;
@@ -172,6 +200,16 @@ export class App implements MenuHost, OfflineHost {
   // OnlineHost: «Назад» из сетевого меню. Комнату не покидаем —
   // место за нами сохраняется, как в оригинале (park_room).
   onLeaveOnline(): void {
+    const { started, room } = this.online.takeRoomForLeave();
+    if (started) {
+      // Партия уже начата: мягкий выход, сервер пришлёт room в ROOM_LEFT,
+      // и «вы всё ещё в партии» можно вернуть (online_lobby.gd:203-209).
+      void this.api.leaveRoom();
+    } else if (room) {
+      // Лобби: комнату не трогаем на сервере, паркуем локально
+      // (online_lobby.gd:210-215).
+      this.api.parkRoom(room);
+    }
     this.show('menu');
   }
 

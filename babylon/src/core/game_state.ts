@@ -388,6 +388,17 @@ export class GameState {
     }
     return rows;
   }
+  // Стол для ЧЕРНОВИКА: id рядов уходят локальные, без обнуления новых —
+  // как в оригинале (_build_draft_rows): по ним соперник узнаёт только что
+  // созданный ряд, а commit отдельно шлёт нули (setTableRows).
+  localTableRows(): { id: number; tiles: number[] }[] {
+    const rows: { id: number; tiles: number[] }[] = [];
+    for (const row of this.table) {
+      if (row.tiles.length === 0) continue;
+      rows.push({ id: row.id, tiles: row.tiles.map((t2) => t2.id) });
+    }
+    return rows;
+  }
   tableStatus(): { ok: boolean; errors: { row: number; reason: string }[] } {
     const errors: { row: number; reason: string }[] = [];
     for (let i = 0; i < this.table.length; i += 1) {

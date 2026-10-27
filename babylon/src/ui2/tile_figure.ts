@@ -80,7 +80,10 @@ export class TileFigure {
       }
     }
 
-    if (!faceDown && marks.drawn) {
+    // Галочка с кружочком в правом верхнем углу: взятая из колоды фишка
+    // и своя живая выкладка (в Godot badge = mark_drawn OR mark_draft,
+    // tile_view.gd:170-189).
+    if (!faceDown && (marks.drawn || marks.draft)) {
       this.addBadge();
     }
   }
@@ -109,8 +112,9 @@ export class TileFigure {
     this.rgbaAlpha = 1;
     const bw = clampInt(Math.round(this.ts.x * 0.05), 1, 3);
     this.applyMarkBorder(m, bw);
-    if (!this.faceDown && m.drawn) {
+    if (!this.faceDown && (m.drawn || m.draft)) {
       if (this.badge === null) this.addBadge();
+      else this.badge.isVisible = true;
     } else if (this.badge !== null) {
       this.badge.isVisible = false;
     }

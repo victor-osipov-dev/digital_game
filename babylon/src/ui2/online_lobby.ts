@@ -1287,6 +1287,18 @@ export class OnlineLobby {
 
   // =============================================================== события сети (из App)
 
+  // «Назад» в главное меню (online_lobby.gd close(), 203-218): комнату не
+  // покидаем. Идущая партия — мягкий выход (место держится, сервер вернёт
+  // room в ROOM_LEFT); лобби — просто паркуем локально. Возвращаем решение,
+  // чтобы App сделал запрос/баннер.
+  takeRoomForLeave(): { started: boolean; room: RoomLobbyView | null } {
+    const out = { started: this.started, room: this.currentRoom };
+    this.started = false;
+    this.currentRoom = null;
+    this.lobbyReady = false;
+    return out;
+  }
+
   onRoomState(room: RoomLobbyView): void {
     this.applyRoom(room);
   }
@@ -1322,9 +1334,14 @@ export class OnlineLobby {
   }
 
   // Вернуться: идущая партия — через game.rejoin, лобби — room.join.
+  // busyFlag здесь не преграда: вход в меню параллельно запускает сбор
+  // списка комнат, и раньше этот флаг молча глотал «Вернуться».
+  private returning = false;
+
   async returnToPending(): Promise<void> {
     const room = this.pendingRoomState;
-    if (!room || this.busyFlag) return;
+    if (!room || this.returning) return;
+    this.returning = true;
     this.setBusy(t('Заходим в %s…', room.code));
     try {
       if (room.state === 'playing') {
@@ -1338,13 +1355,20 @@ export class OnlineLobby {
       this.onRoomStateOrGame(env);
     } catch (e) {
       this.setBusy('');
-      this.showToast((e as Error).message);
+      const msg = (e as Error).message;
+      // Комнаты больше нет: место не держится, баннер врал бы
+      // (online_lobby.gd:985-989).
+      if (msg.includes('не найдена')) this.app.api.parkRoom(null);
+      this.showToast(msg);
+    } finally {
+      this.returning = false;
     }
   }
 
   // Покинуть место окончательно (room.drop).
   async dropPending(): Promise<void> {
-    if (!this.pendingRoomState || this.busyFlag) return;
+    if (!this.pendingRoomState || this.returning) return;
+    this.returning = true;
     this.setBusy(t('Покидаем комнату…'));
     try {
       await this.app.api.dropRoom();
@@ -1352,6 +1376,7 @@ export class OnlineLobby {
       /* уже не существует */
     }
     this.setBusy('');
+    this.returning = false;
   }
 
   // Ответ join/rejoin: лобби или сразу партия.

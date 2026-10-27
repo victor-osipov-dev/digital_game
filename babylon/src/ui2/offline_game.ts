@@ -36,7 +36,7 @@ import {
 import { openRulesOverlay, openSettingsOverlay } from './overlays';
 import { measureTextWidth } from './menu_screen';
 import type { OfflineHost } from './ports';
-import type { DraftMsg, GameEnvelope, GameErrorMsg } from '../net/protocol';
+import type { DraftMsg, GameEnvelope, GameErrorMsg, GameView } from '../net/protocol';
 
 interface RowFig {
   rowId: number;
@@ -116,7 +116,6 @@ export class OfflineGame {
   private flightActive = false;
   private refreshPending = false;
   private titlePendingSeat = -1;
-  private stepsSinceTitle = false;
   private titleShownFor = -1;
   private pendingSteps: { ids: number[]; seat: number }[] = [];
   private lastWaitEnv: GameEnvelope | null = null;
@@ -130,6 +129,7 @@ export class OfflineGame {
   private topRow!: StackPanel;
   private deckBtn!: Button;
   private saveBtn!: Button;
+  private hintBtn!: Button;
   private timerLab!: TextBlock;
   private allTopActionButtons: Button[] = [];
   private hiddenTopActionNames: string[] = [];
@@ -154,8 +154,12 @@ export class OfflineGame {
   private toastHost: Container | null = null;
   private toastLabel: TextBlock | null = null;
   private flashTimer = 0;
-  // Взятая из колоды: пока фишка в руке взявшего — галочка-бейдж.
-  private drawnMark: { seat: number; tileId: number } | null = null;
+  // Взятые из колоды: место -> id фишки. Пока фишка в руке взявшего —
+  // галочка с кружочком в углу (game.gd _draw_marks, tile_view.gd badge).
+  private drawMarks = new Map<number, number>();
+  // Кто последним брал из колоды: чип показывает «· взял» до следующего
+  // взятия или новой партии (game.gd _drew_seat).
+  private drewSeat = -1;
   // Диалог подтверждения (Godot: _ask_confirm — «Взять карту», «Выход в меню»).
   private confirmUi: { overlay: Container; close: () => void } | null = null;
   private confirmAction: (() => void) | null = null;
@@ -256,6 +260,7 @@ export class OfflineGame {
     const restore = mkTop(t('Вернуть'), () => this.onRestoreCheckpoint());
     this.restoreBtn = restore;
     const hint = mkTop(t('Подск.'), () => this.onHint());
+    this.hintBtn = hint;
     const help = mkTop('?', () => this.showRulesOverlay());
     const settings = mkTop(t('Настр.'), () => this.showSettingsOverlay());
     const menu = mkTop(t('Меню'), () => {
@@ -321,7 +326,27 @@ export class OfflineGame {
   }
 
   private resetDrawMark(): void {
-    this.drawnMark = null;
+    this.drawMarks.clear();
+    this.drewSeat = -1;
+  }
+
+  // Запомнить взятие (game.gd _note_draw): чип «· взял» у любого места,
+  // галочка — на фишке в руке, пока она там.
+  private noteDraw(seat: number, tileId: number | null): void {
+    if (tileId !== null && tileId > 0) this.drawMarks.set(seat, tileId);
+    this.drewSeat = seat;
+  }
+
+  // Место взяло из колоды: рука выросла на одну при том же столе и без
+  // выкладки (game.gd _seat_drew, 1766-1785).
+  private seatDrew(prev: GameState, view: GameView, seat: number): boolean {
+    if (seat < 0 || seat >= prev.playerCount()) return false;
+    if ((view.lastTurn ?? []).length > 0) return false;
+    const hc = view.players[seat]?.handCount ?? -1;
+    if (prev.handSize(seat) + 1 !== hc) return false;
+    const a = prev.table.map((r) => r.tiles.map((t) => t.id));
+    const b = view.table.map((r) => r.tileIds);
+    return JSON.stringify(a) === JSON.stringify(b);
   }
 
   private turnTitleText(): string {
@@ -524,7 +549,6 @@ export class OfflineGame {
     this.titlePendingSeat = -1;
     this.pendingSteps = [];
     this.shownSeat = -1;
-    this.stepsSinceTitle = false;
     this.titleShownFor = -1;
     this.lastWaitEnv = null;
     this.build(this.boardRoot ?? this.host.screenRoot());
@@ -581,11 +605,20 @@ export class OfflineGame {
       this.applyWaitState(env);
     } else {
       this.state = st;
-      // бейдж «взял»: в руке появилась одна новая фишка (ответ draw)
+      // галочка и чип «· взял»: наша рука выросла ровно на одну фишку —
+      // это наше взятие (game.gd _mark_drawn_diff, 2405-2419)
       if (prevHandIds) {
         const added = view.hand.filter((id) => !prevHandIds.includes(id));
-        if (added.length === 1) this.drawnMark = { seat: view.you, tileId: added[0] };
-        else this.resetDrawMark();
+        if (added.length === 1) this.noteDraw(view.you, added[0]);
+      }
+      // Чужое взятие: тот, кто ходил перед текущим, увеличил руку при том
+      // же столе и пустом lastTurn (game.gd _seat_drew:1781). Взятие
+      // передаёт ход, поэтому место берём СМЕЩЁННЫМ от current, а не
+      // mv_seat презентации (при пустом lastTurn он равен текущему).
+      const drawSeat = (curSeat - 1 + nSeats) % nSeats;
+      if (prev && drawSeat >= 0 && drawSeat !== view.you
+        && this.seatDrew(prev, view, drawSeat)) {
+        this.drewSeat = drawSeat;
       }
       // пока летит сегмент чужого хода, виды не пересобираем: пересборка
       // убивает полёт. Данные уже применены — откладываем только показ.
@@ -655,20 +688,19 @@ export class OfflineGame {
 
   private appendTurnTitle(seat: number): void {
     if (!this.state || this.state.finished || seat < 0) return;
+    // Одно и то же место подряд не титруем: свой ход после своего же
+    // показа («Ход: вы» дважды) мигал бы. А вот «Ваш ход!» после чужого
+    // взятия (шагов нет, но ход перешёл к нам) показываем — как и для
+    // других игроков.
     if (seat === this.titleShownFor) return;
-    // свой ход титруем только после чужих шагов, иначе «Ход: вы» мигает
-    // после каждого своего хода
-    if (this.state.myTurn() && !this.stepsSinceTitle) return;
     this.titleShownFor = seat;
     this.presentQueue.push({ kind: 'title', seat, text: this.turnTitleFor(seat) });
-    this.stepsSinceTitle = false;
     void this.pumpPresent();
   }
 
   private enqueueSteps(ids: number[], seat: number): void {
     if (ids.length === 0) return;
     this.presentQueue.push({ kind: 'steps', seat, ids: [...ids] });
-    this.stepsSinceTitle = true;
     void this.pumpPresent();
   }
 
@@ -736,37 +768,64 @@ export class OfflineGame {
     }
   }
 
-  // Пошаговый прилёт фишек из очереди: прячем их и «привозим» по одной
-  // с шагом, как в оригинале (_play_queued_steps).
+  // Пошаговый прилёт фишек из очереди: прячем их и «привозим» по одной,
+  // как в оригинале (_play_queued_steps, game.gd:3404-3447): шаг 0.18 с,
+  // полёт TILE_FLY_DUR = 0.34 с, старт — из чипа автора хода. Титр
+  // следующего хода встаёт в очередь ПОСЛЕ этих шагов, поэтому сначала
+  // проигрывается весь чужой ход, и только потом надпись «Ход: …».
   private async playQueuedSteps(ids: number[], gen: number, seat: number): Promise<void> {
-    void seat;
     const figures = this.currentTileFigures();
-    const targets: { fig: TileFigure; to: { x: number; y: number; w: number; h: number } }[] = [];
+    const figs: TileFigure[] = [];
     for (const id of ids) {
       const fig = figures.get(id);
-      if (!fig) continue;
+      if (fig) figs.push(fig);
+    }
+    if (figs.length === 0) return;
+    // Прячем сразу все: иначе фишки, чья очередь ещё не дошла, мигают на
+    // своём месте до начала полёта.
+    for (const f of figs) f.root.alpha = 0;
+    // Только что пересобранный ряд ещё не получил ширины: Babylon считает
+    // раскладку на кадре рендера, и цель полёта сейчас — (0,0). Ждём до
+    // трёх кадров, как _views_laid_out в оригинале (game.gd:3423-3433).
+    for (let i = 0; i < 3; i += 1) {
+      if (figs.every((f) => rectOf(f.root).w > 0)) break;
+      await new Promise<void>((r) => window.requestAnimationFrame(() => r()));
+      if (gen !== this.presentGen || !this.running) return;
+    }
+    if (gen !== this.presentGen || !this.running) return;
+    const ts = tileSize();
+    const targets: { fig: TileFigure; to: { x: number; y: number; w: number; h: number } }[] = [];
+    for (const fig of figs) {
       const to = rectOf(fig.root);
       if (to.w <= 0 || to.h <= 0) continue;
       targets.push({ fig, to });
     }
-    if (targets.length === 0) return;
-    // старт — верхний правый угол экрана (у чужих нет «точки пальца»)
-    const spawn = { x: window.innerWidth - 40, y: -60 };
+    if (targets.length === 0) {
+      for (const f of figs) f.root.alpha = f.rgbaAlpha;
+      return;
+    }
+    const spawn = this.chipSpawnRect(seat, ts);
     let maxEnd = 0;
     targets.forEach(({ fig, to }, i) => {
-      const delay = i * 55;
-      const duration = 220;
+      const delay = Math.min(i * 180, 1200);
+      const duration = 340;
       maxEnd = Math.max(maxEnd, delay + duration);
       const start = { face: fig.face, rect: { x: spawn.x, y: spawn.y, w: to.w, h: to.h } };
       const run = (): void => {
         if (gen !== this.presentGen || !this.running) return;
-        fig.root.alpha = 0;
-        this.playTileFlight(start, fig, to);
+        this.playTileFlight(start, fig, to, { duration, fromScale: 0.45, fromAlpha: 0 });
       };
       if (delay === 0) run();
       else window.setTimeout(run, delay);
     });
-    await new Promise<void>((r) => window.setTimeout(r, maxEnd + 60));
+    await new Promise<void>((r) => window.setTimeout(r, maxEnd + 360));
+  }
+
+  private chipSpawnRect(seat: number, ts: { x: number; y: number }): { x: number; y: number } {
+    const chip = seat >= 0 ? this.chipsRow.children[seat] ?? null : null;
+    const r = chip ? rectOf(chip) : { x: 0, y: 0, w: 0, h: 0 };
+    if (r.w > 1 && r.h > 1) return { x: r.x + r.w / 2 - ts.x / 2, y: r.y + r.h / 2 - ts.y / 2 };
+    return { x: window.innerWidth - 40, y: -60 };
   }
 
   // Входящий DRAFT: стол другого игрока подменяется его раскладкой.
@@ -776,6 +835,19 @@ export class OfflineGame {
     if (!this.onlineMode || !this.state || this.state.finished) return;
     if (msg.from === this.state.local_seat) return;
     if (msg.from !== this.state.current) return;
+    // Срок жизни черновика обновляем ВСЕГДА, даже если стол тот же:
+    // автор повторяет висящий черновик каждые 3 с, и этот повтор и есть
+    // «я ещё здесь» (game.gd:2851). Иначе повторный пакет дедуплицировался
+    // и черновик протухал через 15 с прямо посреди хода соперника.
+    if (this.draftExpireTimer) window.clearTimeout(this.draftExpireTimer);
+    this.draftExpireTimer = window.setTimeout(() => {
+      this.draftExpireTimer = 0;
+      // автор замолчал: вернуть последний подтверждённый стол
+      if (!this.state || this.state.finished || this.state.myTurn()) return;
+      this.applyServerRows(this.lastConfirmedTable);
+      this.draftNewIds.clear();
+      this.refresh();
+    }, 15000);
     const payload = JSON.stringify(msg.rows);
     if (payload === this.lastDraftPayload) return;
     this.lastDraftPayload = payload;
@@ -786,15 +858,6 @@ export class OfflineGame {
     for (const r of msg.rows) for (const id of r.tiles) if (!confirmed.has(id)) this.draftNewIds.add(id);
     this.applyServerRows(msg.rows);
     this.refresh();
-    if (this.draftExpireTimer) window.clearTimeout(this.draftExpireTimer);
-    this.draftExpireTimer = window.setTimeout(() => {
-      this.draftExpireTimer = 0;
-      // автор замолчал: вернуть последний подтверждённый стол
-      if (!this.state || this.state.finished || this.state.myTurn()) return;
-      this.applyServerRows(this.lastConfirmedTable);
-      this.draftNewIds.clear();
-      this.refresh();
-    }, 15000);
   }
 
   // GAME_ERROR: причина в тосте; красная подсветка рядов по errors[row].
@@ -876,7 +939,14 @@ export class OfflineGame {
       this.onlineTimer = null;
     }
     if (!this.timerLab) return;
-    if (seconds === null) {
+    const env = this.lastWaitEnv;
+    // Отсчёт живёт только в идущей сетевой партии: пауза, ожидание
+    // игроков, grace и финал строку гасят (game.gd:1994-2014). Таймер
+    // приходит не в каждом состоянии — без числа его тоже не рисуем,
+    // иначе на экране «Ваш ход — NaN с».
+    if (!this.onlineMode || !this.state || this.state.finished
+      || (env && (env.paused || env.waiting || (env.grace ?? 0) > 0))
+      || seconds === null || !Number.isFinite(seconds) || seconds <= 0) {
       this.timerLab.text = '';
       return;
     }
@@ -909,11 +979,15 @@ export class OfflineGame {
     const grace = env.grace ?? 0;
     if (grace > 0 && !env.state.finished) {
       this.startGraceCountdown(grace);
+      this.updateActionRow();
       return;
     }
     this.stopGraceCountdown();
     if (env.paused || env.waiting) this.showWaitPanel(t('Ожидание игроков…'));
     else this.hideWaitPanel();
+    // пауза блокирует действия — пересчитать кнопки сразу, не дожидаясь
+    // следующей пересборки
+    this.updateActionRow();
   }
 
   private startGraceCountdown(graceSec: number): void {
@@ -983,18 +1057,30 @@ export class OfflineGame {
   // Повтор своего черновика каждые 3 с, пока ход не завершён
   // (game.gd:2916-2949): переподключившийся соперник не останется с
   // пустым столом.
+  // Повтор своего черновика каждые 3 с, пока ход не завершён
+  // (game.gd:2929-2949): у соперника черновик протухает через 15 с, если
+  // автор замолчал, поэтому неизменённый стол тоже нужно повторять —
+  // иначе чужие фишки «пропадают» посреди хода.
   private startDraftResend(): void {
     if (this.draftResendTimer) return;
     this.draftResendTimer = window.setInterval(() => {
-      if (!this.onlineMode || !this.state || !this.state.myTurn() || this.state.finished) {
+      if (!this.onlineMode || !this.state || !this.state.myTurn() || this.state.finished
+        || this.state.turn_placed.length === 0) {
         this.stopDraftResend();
         return;
       }
-      const payload = JSON.stringify(this.state.setTableRows());
-      if (payload === this.lastDraftPayload) return;
-      this.lastDraftPayload = payload;
-      this.host.gameApi().sendDraft(this.state.setTableRows());
+      const rows = this.state.localTableRows();
+      this.lastDraftPayload = JSON.stringify(rows);
+      this.host.gameApi().sendDraft(rows);
     }, 3000);
+  }
+
+  private sendMyDraft(): void {
+    if (!this.state) return;
+    const rows = this.state.localTableRows();
+    this.lastDraftPayload = JSON.stringify(rows);
+    this.host.gameApi().sendDraft(rows);
+    this.startDraftResend();
   }
 
   private stopDraftResend(): void {
@@ -1241,30 +1327,46 @@ export class OfflineGame {
     window.requestAnimationFrame(() => {
       if (requestId !== this.layoutAnimationId || !this.running) return;
       const figures = this.currentTileFigures();
-      const flights: { source: TileSnapshot; target: TileFigure; to: { x: number; y: number; w: number; h: number } }[] = [];
+      const origins = new Map(this.flightOrigins);
+      this.flightOrigins.clear();
+      // Уже лежащие фишки переезжают ПАРАЛЛЕЛЬНО и без задержек, а
+      // длительность — по расстоянию (game.gd _play_place_anim,
+      // _slide_duration: 900 px/с, 0.24-0.46 с). Поэтапный каскад нужен
+      // только новым прилётам; иначе соседи «толкались», догоняя друг
+      // друга.
+      const slides: {
+        source: TileSnapshot; target: TileFigure;
+        to: { x: number; y: number; w: number; h: number };
+        duration: number; fade: boolean;
+      }[] = [];
       for (const [id, target] of figures) {
-        const source = this.flightOrigins.get(id) ?? before.get(id);
+        const origin = origins.get(id);
+        const source = origin ?? before.get(id);
         if (!source) continue;
         const to = rectOf(target.root);
-        const dx = to.x - source.rect.x;
-        const dy = to.y - source.rect.y;
-        if (Math.hypot(dx, dy) < 3) continue;
-        flights.push({ source, target, to });
+        if (to.w <= 0 || to.h <= 0) continue;
+        const dist = Math.hypot(to.x - source.rect.x, to.y - source.rect.y);
+        if (dist < 2) continue;
+        const duration = Math.round(Math.max(240, Math.min(460, dist / 0.9)));
+        slides.push({ source, target, to, duration, fade: !!origin });
       }
-      // пошаговый показ, как в оригинале: фишки «прилетают» не разом
-      flights.forEach((f, i) => {
-        const delay = i === 0 ? 0 : Math.min(560, i * 45);
-        if (delay === 0) this.playTileFlight(f.source, f.target, f.to);
-        else window.setTimeout(() => {
-          if (requestId !== this.layoutAnimationId || !this.running) return;
-          this.playTileFlight(f.source, f.target, f.to);
-        }, delay);
-      });
-      this.flightOrigins.clear();
+      for (const s of slides) {
+        if (requestId !== this.layoutAnimationId || !this.running) return;
+        this.playTileFlight(s.source, s.target, s.to, {
+          duration: s.duration,
+          fromScale: 1,
+          fromAlpha: s.fade ? 0 : 1,
+        });
+      }
     });
   }
 
-  private playTileFlight(source: TileSnapshot, target: TileFigure, to: { x: number; y: number; w: number; h: number }): void {
+  private playTileFlight(
+    source: TileSnapshot,
+    target: TileFigure,
+    to: { x: number; y: number; w: number; h: number },
+    opts: { duration?: number; fromScale?: number; fromAlpha?: number } = {},
+  ): void {
     target.root.alpha = 0;
     const ghost = new TileFigure(source.face, false, {}, tileSize());
     const root = ghost.root;
@@ -1276,21 +1378,31 @@ export class OfflineGame {
     root.isPointerBlocker = false;
     this.boardRoot.addControl(root);
 
+    const duration = opts.duration ?? 240;
+    const fromScale = opts.fromScale ?? 1;
+    const fromAlpha = opts.fromAlpha ?? 1;
+    const endAlpha = target.rgbaAlpha;
+    root.scaleX = fromScale;
+    root.scaleY = fromScale;
+    root.alpha = fromAlpha;
     const start = performance.now();
-    const duration = 240;
     const step = (now: number): void => {
       const progress = Math.min(1, (now - start) / duration);
       const eased = 1 - (1 - progress) ** 3;
       root.left = px(Math.round(source.rect.x + (to.x - source.rect.x) * eased));
       root.top = px(Math.round(source.rect.y + (to.y - source.rect.y) * eased));
-      root.scaleX = 0.96 + 0.04 * Math.sin(progress * Math.PI);
-      root.scaleY = root.scaleX;
+      const scale = fromScale + (1 - fromScale) * eased;
+      root.scaleX = scale;
+      root.scaleY = scale;
+      // как Godot: проявление за 0.76 длительности полёта (SINE ease-out)
+      const fade = Math.min(1, progress / 0.76);
+      root.alpha = fromAlpha + (endAlpha - fromAlpha) * (1 - (1 - fade) ** 2);
       if (progress < 1) {
         window.requestAnimationFrame(step);
         return;
       }
       if (root.parent) root.parent.removeControl(root);
-      target.root.alpha = target.rgbaAlpha;
+      target.root.alpha = endAlpha;
     };
     window.requestAnimationFrame(step);
   }
@@ -1322,7 +1434,7 @@ export class OfflineGame {
       if (isYou && myTurnNow) chipText += t(' · ваш ход');
       else if (isCur && !isYou) chipText += t(' · ходит');
       if (handN > 0) chipText += ` · ${handN}`;
-      if (this.drawnMark && this.drawnMark.seat === i) chipText += t(' · взял');
+      if (i === this.drewSeat) chipText += t(' · взял');
       if (!this.state!.isConnectedPlayer(i) && !isBot) chipText += t(' · нет связи');
       const chipWidth = Math.max(112, Math.ceil(measureTextWidth(chipText, fs(11))) + 24);
 
@@ -1433,9 +1545,11 @@ export class OfflineGame {
     let marks: TileMarks[] = [];
     if (!hint) marks = tiles.map((_tl, i) => this.markFor({ kind: 'row', rowId, index: i }));
     for (let i = 0; i < tiles.length; i += 1) {
-      const f = new TileFigure(tiles[i], false, marks[i] ?? {}, ts);
-      // чужой черновик: новые фишки полупрозрачны (game.gd:2844-2910)
-      if (this.draftNewIds.has(tiles[i].id)) f.root.alpha = 0.7;
+      // Чужой черновик помечается как draft: полупрозрачность, жирная
+      // зелёная рамка и галочка в углу (game.gd get_tile_marks:3062-3072).
+      const m: TileMarks = { ...(marks[i] ?? {}) };
+      if (this.draftNewIds.has(tiles[i].id)) m.draft = true;
+      const f = new TileFigure(tiles[i], false, m, ts);
       this.wireDrag(f, { kind: 'row', rowId, index: i });
       fig.figures.push(f);
       fig.items.push({ root: f.root, width: ts.x, height: ts.y });
@@ -1482,8 +1596,11 @@ export class OfflineGame {
     if (!this.state) return;
     const hand = this.state.hand();
     sortTiles(hand);
-    const seat = this.state.current;
-    const drawnTileId = this.drawnMark && this.drawnMark.seat === seat ? this.drawnMark.tileId : null;
+    // В сети внизу всегда наша рука, в офлайне — рука текущего игрока;
+    // галочка ставится на фишку того места, которое её брало (а не того,
+    // чей сейчас ход): взятие сразу передаёт ход дальше.
+    const handSeat = this.onlineMode ? this.state.local_seat : this.state.current;
+    const drawnTileId = this.drawMarks.get(handSeat) ?? null;
     void ts;
     for (let i = 0; i < hand.length; i += 1) {
       const face = hand[i];
@@ -1494,43 +1611,56 @@ export class OfflineGame {
     }
   }
 
+  // Базовый фон кнопки: Babylon в disabled рисует disabledColor, но простой
+  // возврат isEnabled=true может оставить чужой hover-фон — восстанавливаем.
+  private btnBaseBg = new Map<Button, string>();
+
+  private setBtnEnabled(b: Button, on: boolean): void {
+    if (!this.btnBaseBg.has(b)) this.btnBaseBg.set(b, String(b.background ?? ''));
+    if (b.isEnabled === on) return;
+    b.isEnabled = on;
+    b.disabledColor = '#FFFFFF1F';
+    if (on) b.background = this.btnBaseBg.get(b) as string;
+    if (b.textBlock) b.textBlock.alpha = on ? 1 : 0.45;
+  }
+
   private updateActionRow(): void {
     if (!this.state) return;
+    const env = this.lastWaitEnv;
+    // Пауза/ожидание/grace: ходить нельзя — гасим все действия, как в
+    // оригинале (_update_buttons: busy = бот или «не наш ход», locked).
+    const paused = !!env && (env.paused || env.waiting || (env.grace ?? 0) > 0);
+    const botNow = this.currentPlayerIsBot();
+    const notMyTurn = this.onlineMode && !this.state.myTurn();
+    const locked = this.state.finished || this.sending || botNow || notMyTurn || paused;
+    const placed = this.state.turn_placed.length > 0;
+    // «Отменить ход» — возврат к началу хода (Godot: restore_turn_snapshot);
+    // «Вернуть» — восстановление сохранённого чекпоинта.
+    this.setBtnEnabled(this.undoBtn, !locked && placed);
+    this.setBtnEnabled(this.saveBtn, !locked && placed);
+    this.setBtnEnabled(this.restoreBtn, !locked && this.state.checkpoints.length > 0);
+    this.setBtnEnabled(this.hintBtn, !locked && !this.hintsUsed.has(this.state.current));
+    this.setBtnEnabled(this.deckBtn, !locked && !placed && this.state.canDraw());
     if (this.state.finished) {
       setButtonLabel(this.bottomBtn, t('Игра окончена'));
-      this.undoBtn.isEnabled = false;
-      this.saveBtn.isEnabled = false;
-      this.restoreBtn.isEnabled = false;
-      this.deckBtn.isEnabled = false;
+      this.setBtnEnabled(this.bottomBtn, false);
       return;
     }
     // запрос в полёте: все действия гаснут до ответа сервера
     if (this.sending) {
-      this.undoBtn.isEnabled = false;
-      this.saveBtn.isEnabled = false;
-      this.restoreBtn.isEnabled = false;
-      this.deckBtn.isEnabled = false;
       setButtonLabel(this.bottomBtn, t('…'));
+      this.setBtnEnabled(this.bottomBtn, false);
       return;
     }
-    const botNow = this.currentPlayerIsBot();
-    const placed = this.state.turn_placed.length > 0;
-    // «Отменить ход» — возврат к началу хода (Godot: restore_turn_snapshot);
-    // «Вернуть» — восстановление сохранённого чекпоинта.
-    this.undoBtn.isEnabled = !botNow && placed;
-    this.saveBtn.isEnabled = !botNow && placed;
-    this.restoreBtn.isEnabled = !botNow && this.state.checkpoints.length > 0;
-    this.deckBtn.isEnabled = !botNow && !placed && this.state.canDraw();
     if (botNow) {
       setButtonLabel(this.bottomBtn, t('Ход бота'));
+      this.setBtnEnabled(this.bottomBtn, false);
       return;
     }
-    if (placed) {
-      setButtonLabel(this.bottomBtn, t('Продолжить'));
-      return;
-    }
-    if (this.state.canSkip()) setButtonLabel(this.bottomBtn, t('Пропуск хода'));
+    if (placed) setButtonLabel(this.bottomBtn, t('Продолжить'));
+    else if (this.state.canSkip()) setButtonLabel(this.bottomBtn, t('Пропуск хода'));
     else setButtonLabel(this.bottomBtn, t('Взять'));
+    this.setBtnEnabled(this.bottomBtn, !locked);
   }
 
   // === Действия ===
@@ -1547,11 +1677,7 @@ export class OfflineGame {
     // Godot: _on_undo_pressed → restore_turn_snapshot (весь ход целиком).
     if (this.state.restoreTurnSnapshot()) {
       // в сети перемещение уходит черновиком и остальным
-      if (this.onlineMode) {
-        this.lastDraftPayload = JSON.stringify(this.state.setTableRows());
-        this.host.gameApi().sendDraft(this.state.setTableRows());
-        this.startDraftResend();
-      }
+      if (this.onlineMode) this.sendMyDraft();
       this.refresh();
     }
   }
@@ -1559,11 +1685,7 @@ export class OfflineGame {
   private onRestoreCheckpoint(): void {
     if (!this.state) return;
     if (this.state.restoreCheckpoint()) {
-      if (this.onlineMode) {
-        this.lastDraftPayload = JSON.stringify(this.state.setTableRows());
-        this.host.gameApi().sendDraft(this.state.setTableRows());
-        this.startDraftResend();
-      }
+      if (this.onlineMode) this.sendMyDraft();
       this.refresh();
     }
   }
@@ -1711,7 +1833,7 @@ export class OfflineGame {
           },
         });
       }
-      if (res.tile) this.drawnMark = { seat: drawingSeat, tileId: res.tile.id };
+      if (res.tile) this.noteDraw(drawingSeat, res.tile.id);
       this.toast(res.tile ? (res.tile.is_joker ? '★' : String(res.tile.value)) : '');
       this.refresh();
       window.setTimeout(() => {
@@ -2046,11 +2168,7 @@ export class OfflineGame {
     // невалидных рядов; объяснение — по кнопке «Продолжить»/«Взять».
     this.refresh();
     // в сети каждое перемещение — черновик остальным + повтор каждые 3 с
-    if (this.onlineMode && ok && this.state && this.state.myTurn()) {
-      this.lastDraftPayload = JSON.stringify(this.state.setTableRows());
-      this.host.gameApi().sendDraft(this.state.setTableRows());
-      this.startDraftResend();
-    }
+    if (this.onlineMode && ok && this.state && this.state.myTurn()) this.sendMyDraft();
   }
 
   private applyDrop(tileId: number, src: TileSrc, targetRow: number, index: number): boolean {    if (!this.state) return false;
@@ -2098,7 +2216,9 @@ export class OfflineGame {
     void tiles;
     if (action === 'draw') {
       const deckRect = rectOf(this.deckBtn);
+      const drawSeat = this.state.current;
       const drawn = this.state.drawFromDeck();
+      if (drawn.tile) this.noteDraw(drawSeat, drawn.tile.id);
       if (drawn.tile && deckRect.w > 0 && deckRect.h > 0) {
         const ts = tileSize();
         this.flightOrigins.set(drawn.tile.id, {
@@ -2173,8 +2293,11 @@ export class OfflineGame {
     // на своём ходе: добираем из колоды либо пропускаем, затем пробуем
     // пройти дальше.
     if (!res.ok) {
-      if (this.state.deck.count() > 0) this.state.drawFromDeck();
-      else this.state.skipTurn();
+      const drawSeat = this.state.current;
+      if (this.state.deck.count() > 0) {
+        const fb = this.state.drawFromDeck();
+        if (fb.tile) this.noteDraw(drawSeat, fb.tile.id);
+      } else this.state.skipTurn();
     }
     this.refresh();
     this.checkPassOrBot();

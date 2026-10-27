@@ -288,8 +288,20 @@ export class Api {
 
   async leaveRoom(): Promise<void> {
     const token = this.requireToken();
-    await this.session.request(C2S.ROOM_LEAVE, { token }, [S2C.ROOM_LEFT, S2C.GAME_ERROR]).catch(() => undefined);
-    this.setPending(null);
+    const pkt = await this.session
+      .request(C2S.ROOM_LEAVE, { token }, [S2C.ROOM_LEFT, S2C.GAME_ERROR])
+      .catch(() => null);
+    // Мягкий выход из партии: сервер присылает room — место за нами ещё
+    // держится, и «вы всё ещё в комнате» должно остаться (net.gd:464-469).
+    if (pkt && pkt.t === S2C.ROOM_LEFT) this.setPending((pkt as unknown as RoomLeftMsg).room ?? null);
+    else this.setPending(null);
+  }
+
+  // Локальная парковка комнаты (net.gd park_room): вышли в главное меню,
+  // не покидая комнату. Сервер о ней знает, баннер «вы всё ещё в комнате»
+  // живёт до возврата/выхода.
+  parkRoom(room: RoomLobbyView | null): void {
+    this.setPending(room);
   }
 
   async dropRoom(): Promise<void> {
