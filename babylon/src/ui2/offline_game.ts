@@ -68,6 +68,7 @@ interface DragData {
 interface TileSnapshot {
   face: TileFace;
   rect: { x: number; y: number; w: number; h: number };
+  slot?: string;
 }
 
 const DROP_MS = 350;
@@ -100,6 +101,7 @@ export class OfflineGame {
   private lastConfirmedTable: { id: number; tiles: number[] }[] = [];
   private lastDraftPayload = '';
   private draftNewIds = new Set<number>();
+  private draftFrom = -1;
   private draftExpireTimer = 0;
   private draftResendTimer = 0;
   // ===== очередь презентаций сетевых ходов (game.gd _present_queue) =====
@@ -143,6 +145,14 @@ export class OfflineGame {
   private undoBtn!: Button;
   private restoreBtn!: Button;
   private popups!: Container;
+  // отдельный слой для бейджей-«галочек»: они шире фишки и не должны
+  // обрезаться ни ею, ни соседними фишками
+  private badgeLayer!: Container;
+  // Призраки перелёта находятся под бейджами, чтобы карточка не закрывала
+  // собственную галочку во время движения.
+  private flightLayer!: Container;
+  // прежние фишки по id на время пересборки — чтобы перенести бейджи
+  private inheritFigs: Map<number, TileFigure> | null = null;
   private ctx!: DropdownCtx;
 
   private rowFigs: RowFig[] = [];
@@ -207,6 +217,25 @@ export class OfflineGame {
     this.buildTable(col);
     this.buildHandArea(col);
     this.buildBottom(col);
+
+    this.flightLayer = new Container('flightLayer');
+    this.flightLayer.width = '100%';
+    this.flightLayer.height = '100%';
+    this.flightLayer.isHitTestVisible = false;
+    this.flightLayer.isPointerBlocker = false;
+    this.flightLayer.clipChildren = false;
+    root.addControl(this.flightLayer);
+
+    // Слой бейджей-«галочек»: поверх стола и руки, но ниже модалок —
+    // как отдельный слой бейджей в оригинале (tile_view.gd _badge_host).
+    // Кружок выходит за карточку и не режется ни фишкой, ни соседями.
+    this.badgeLayer = new Container('badgeLayer');
+    this.badgeLayer.width = '100%';
+    this.badgeLayer.height = '100%';
+    this.badgeLayer.isHitTestVisible = false;
+    this.badgeLayer.isPointerBlocker = false;
+    this.badgeLayer.clipChildren = false;
+    root.addControl(this.badgeLayer);
 
     // popups → последним ребёнком root: порядок рисования в ADT — по
     // детям контейнера, модалки обязаны лежать над столом/рукой.
@@ -330,6 +359,14 @@ export class OfflineGame {
     this.drewSeat = -1;
   }
 
+  private clearDraftPresentation(): void {
+    if (this.draftExpireTimer) window.clearTimeout(this.draftExpireTimer);
+    this.draftExpireTimer = 0;
+    this.draftNewIds.clear();
+    this.draftFrom = -1;
+    this.lastDraftPayload = '';
+  }
+
   // Запомнить взятие (game.gd _note_draw): чип «· взял» у любого места,
   // галочка — на фишке в руке, пока она там.
   private noteDraw(seat: number, tileId: number | null): void {
@@ -441,6 +478,8 @@ export class OfflineGame {
     const innerHolder = new StackPanel('innerHolder');
     innerHolder.isVertical = true;
     innerHolder.spacing = 6;
+    // бейджи-«галочки» выходят за карточку — не режем их рядами
+    innerHolder.clipChildren = false;
     innerHolder.paddingLeft = px(SIDE_PAD);
     innerHolder.paddingRight = px(SIDE_PAD);
     innerHolder.paddingTop = px(8);
@@ -460,12 +499,14 @@ export class OfflineGame {
       height: ts.y + 26,
     }).root;
     this.handPanel.width = px(Math.max(180, window.innerWidth - SIDE_PAD * 2));
+    this.handPanel.clipChildren = false;
     this.handPanel.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
     col.addControl(this.handPanel);
     this.handScroll = new ScrollViewer('handScroll');
     this.handScroll.thickness = 0;
     this.handScroll.width = '100%';
-    this.handScroll.height = px(ts.y + 10);
+    // Выше фишки на запас под бейдж-«галочку» в правом верхнем углу.
+    this.handScroll.height = px(ts.y + 20);
     this.handScroll.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
     this.handScroll.barSize = 2;
     enableSmoothScroll(this.handScroll, 'horizontal', { tileDragAllowed: () => this.canInteract() });
@@ -473,6 +514,7 @@ export class OfflineGame {
     this.handHost = new StackPanel('handHost');
     this.handHost.isVertical = false;
     this.handHost.spacing = 6;
+    this.handHost.clipChildren = false;
     this.handHost.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
     // фишка не прилипает к левому краю зелёного поля (padding у
     // ScrollViewer не смещает контент — только у панели детей)
@@ -537,6 +579,7 @@ export class OfflineGame {
   startGame(state: GameState): void {
     this.state = state;
     this.running = true;
+    this.clearDraftPresentation();
     this.hintsUsed.clear();
     this.onlineStatsDone = false;
     this.resetDrawMark();
@@ -581,6 +624,14 @@ export class OfflineGame {
     }
     const nSeats = view.players.length || 1;
     const curSeat = Math.min(Math.max(view.current, 0), nSeats - 1);
+    if (prev && prev.current !== curSeat) this.lastDraftPayload = '';
+    // Черновик живёт только до окончания хода автора. Как только сервер
+    // передал ход дальше (commit/draw/skip), прозрачность и бейджи draft
+    // снимаются немедленно; committed tiles остаются зелёными через
+    // lastTurnTileIds до следующего перехода хода.
+    if (this.draftFrom >= 0 && (view.finished || curSeat !== this.draftFrom)) {
+      this.clearDraftPresentation();
+    }
     const moverSeat = (view.lastTurn ?? []).length === 0
       ? curSeat
       : (curSeat - 1 + nSeats) % nSeats;
@@ -835,6 +886,7 @@ export class OfflineGame {
     if (!this.onlineMode || !this.state || this.state.finished) return;
     if (msg.from === this.state.local_seat) return;
     if (msg.from !== this.state.current) return;
+    this.draftFrom = msg.from;
     // Срок жизни черновика обновляем ВСЕГДА, даже если стол тот же:
     // автор повторяет висящий черновик каждые 3 с, и этот повтор и есть
     // «я ещё здесь» (game.gd:2851). Иначе повторный пакет дедуплицировался
@@ -845,7 +897,7 @@ export class OfflineGame {
       // автор замолчал: вернуть последний подтверждённый стол
       if (!this.state || this.state.finished || this.state.myTurn()) return;
       this.applyServerRows(this.lastConfirmedTable);
-      this.draftNewIds.clear();
+      this.clearDraftPresentation();
       this.refresh();
     }, 15000);
     const payload = JSON.stringify(msg.rows);
@@ -1108,10 +1160,7 @@ export class OfflineGame {
     this.titlePendingSeat = -1;
     this.pendingSteps = [];
     this.shownSeat = -1;
-    if (this.draftExpireTimer) {
-      window.clearTimeout(this.draftExpireTimer);
-      this.draftExpireTimer = 0;
-    }
+    this.clearDraftPresentation();
     this.hideWaitPanel();
     if (this.onlineTimer) {
       clearInterval(this.onlineTimer);
@@ -1295,8 +1344,14 @@ export class OfflineGame {
     this.deckBtn.textBlock!.fontSize = fs(15);
     this.syncTopBar();
     this.rebuildChips();
+    // Бейджи переезжают от прежних фишек к новым: пересборка не должна
+    // гасить «галочки» ни на кадр (иначе ряд мигает при каждой выкладке).
+    this.inheritFigs = new Map<number, TileFigure>();
+    for (const r of this.rowFigs) for (const f of r.figures) this.inheritFigs.set(f.face.id, f);
+    for (const f of this.handFigs) this.inheritFigs.set(f.face.id, f);
     this.rebuildRows(ts);
     this.rebuildHand(ts);
+    this.inheritFigs = null;
     this.updateActionRow();
     // в сети чужие ходы показывает очередь презентаций, а не общий
     // дифф: иначе фишки летели бы дважды
@@ -1305,13 +1360,38 @@ export class OfflineGame {
 
   private captureTileSnapshots(): Map<number, TileSnapshot> {
     const snapshots = new Map<number, TileSnapshot>();
+    const slots = this.tileSlotKeys();
     const collect = (f: TileFigure): void => {
       const rect = rectOf(f.root);
-      if (rect.w > 0 && rect.h > 0) snapshots.set(f.face.id, { face: f.face, rect });
+      if (rect.w > 0 && rect.h > 0) {
+        snapshots.set(f.face.id, { face: f.face, rect, slot: slots.get(f.face.id) });
+      }
     };
     for (const row of this.rowFigs) for (const f of row.figures) collect(f);
     for (const f of this.handFigs) collect(f);
     return snapshots;
+  }
+
+  // Слот визуального layout. Сравнение до/после позволяет ещё ДО кадра
+  // Babylon спрятать только действительно перемещаемые фишки, не моргая
+  // неизменившимися рядами и рукой.
+  private tileSlotKeys(): Map<number, string> {
+    const slots = new Map<number, string>();
+    const rows = this.rowFigs.filter((r) => !r.hintZone);
+    let prefixHeights = '';
+    for (let ri = 0; ri < rows.length; ri += 1) {
+      const row = rows[ri];
+      const height = String(row.root.height);
+      for (let i = 0; i < row.figures.length; i += 1) {
+        slots.set(row.figures[i].face.id,
+          `row:${ri}:${prefixHeights}:${row.rowId}:${i}:${row.lineOf[i] ?? 0}`);
+      }
+      prefixHeights += `${height};`;
+    }
+    for (let i = 0; i < this.handFigs.length; i += 1) {
+      slots.set(this.handFigs[i].face.id, `hand:${i}`);
+    }
+    return slots;
   }
 
   private currentTileFigures(): Map<number, TileFigure> {
@@ -1324,41 +1404,78 @@ export class OfflineGame {
   private animateTileTransitions(before: Map<number, TileSnapshot>): void {
     if (before.size === 0 && this.flightOrigins.size === 0) return;
     const requestId = ++this.layoutAnimationId;
-    window.requestAnimationFrame(() => {
-      if (requestId !== this.layoutAnimationId || !this.running) return;
-      const figures = this.currentTileFigures();
-      const origins = new Map(this.flightOrigins);
-      this.flightOrigins.clear();
-      // Уже лежащие фишки переезжают ПАРАЛЛЕЛЬНО и без задержек, а
-      // длительность — по расстоянию (game.gd _play_place_anim,
-      // _slide_duration: 900 px/с, 0.24-0.46 с). Поэтапный каскад нужен
-      // только новым прилётам; иначе соседи «толкались», догоняя друг
-      // друга.
-      const slides: {
-        source: TileSnapshot; target: TileFigure;
-        to: { x: number; y: number; w: number; h: number };
-        duration: number; fade: boolean;
-      }[] = [];
-      for (const [id, target] of figures) {
-        const origin = origins.get(id);
-        const source = origin ?? before.get(id);
-        if (!source) continue;
-        const to = rectOf(target.root);
-        if (to.w <= 0 || to.h <= 0) continue;
-        const dist = Math.hypot(to.x - source.rect.x, to.y - source.rect.y);
-        if (dist < 2) continue;
+    const figures = this.currentTileFigures();
+    const origins = new Map(this.flightOrigins);
+    this.flightOrigins.clear();
+    const slots = this.tileSlotKeys();
+    const pending: { source: TileSnapshot; target: TileFigure; ghost: TileFigure; fade: boolean }[] = [];
+
+    // Сначала определяем только реально сдвинувшиеся слоты и прячем их
+    // синхронно с refresh. Иначе Babylon успевал один кадр показать новые
+    // координаты, после чего плитки дёргались обратно к точке старта.
+    for (const [id, target] of figures) {
+      const origin = origins.get(id);
+      const previous = before.get(id);
+      if (!origin && (!previous || previous.slot === slots.get(id))) continue;
+      const source = origin ?? previous;
+      if (!source) continue;
+      target.hideBadgeForFlight();
+      target.root.alpha = 0;
+      const ghost = this.createFlightGhost(source, target);
+      pending.push({ source, target, ghost, fade: !!origin });
+    }
+    if (pending.length === 0) return;
+
+    let layoutFrames = 0;
+    const finish = (): void => {
+      for (const p of pending) {
+        p.ghost.disposeBadge();
+        if (p.ghost.root.parent) p.ghost.root.parent.removeControl(p.ghost.root);
+        p.target.root.alpha = p.target.rgbaAlpha;
+        p.target.revealBadge();
+      }
+    };
+    const launch = (): void => {
+      if (requestId !== this.layoutAnimationId || !this.running) {
+        finish();
+        return;
+      }
+      const ready = pending.every((p) => rectOf(p.target.root).w > 0 && rectOf(p.target.root).h > 0);
+      if (!ready && layoutFrames < 3) {
+        layoutFrames += 1;
+        window.requestAnimationFrame(launch);
+        return;
+      }
+      for (const p of pending) {
+        if (requestId !== this.layoutAnimationId || !this.running) {
+          finish();
+          return;
+        }
+        const to = rectOf(p.target.root);
+        if (to.w <= 0 || to.h <= 0) {
+          p.ghost.disposeBadge();
+          if (p.ghost.root.parent) p.ghost.root.parent.removeControl(p.ghost.root);
+          p.target.root.alpha = p.target.rgbaAlpha;
+          p.target.revealBadge();
+          continue;
+        }
+        const dist = Math.hypot(to.x - p.source.rect.x, to.y - p.source.rect.y);
+        if (dist < 2) {
+          p.ghost.disposeBadge();
+          if (p.ghost.root.parent) p.ghost.root.parent.removeControl(p.ghost.root);
+          p.target.root.alpha = p.target.rgbaAlpha;
+          p.target.revealBadge();
+          continue;
+        }
         const duration = Math.round(Math.max(240, Math.min(460, dist / 0.9)));
-        slides.push({ source, target, to, duration, fade: !!origin });
-      }
-      for (const s of slides) {
-        if (requestId !== this.layoutAnimationId || !this.running) return;
-        this.playTileFlight(s.source, s.target, s.to, {
-          duration: s.duration,
+        this.playTileFlight(p.source, p.target, to, {
+          duration,
           fromScale: 1,
-          fromAlpha: s.fade ? 0 : 1,
-        });
+          fromAlpha: p.fade ? 0 : p.target.rgbaAlpha,
+        }, p.ghost);
       }
-    });
+    };
+    window.requestAnimationFrame(launch);
   }
 
   private playTileFlight(
@@ -1366,17 +1483,12 @@ export class OfflineGame {
     target: TileFigure,
     to: { x: number; y: number; w: number; h: number },
     opts: { duration?: number; fromScale?: number; fromAlpha?: number } = {},
+    existingGhost?: TileFigure,
   ): void {
+    target.hideBadgeForFlight();
     target.root.alpha = 0;
-    const ghost = new TileFigure(source.face, false, {}, tileSize());
+    const ghost = existingGhost ?? this.createFlightGhost(source, target);
     const root = ghost.root;
-    root.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-    root.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
-    root.left = px(Math.round(source.rect.x));
-    root.top = px(Math.round(source.rect.y));
-    root.zIndex = 680;
-    root.isPointerBlocker = false;
-    this.boardRoot.addControl(root);
 
     const duration = opts.duration ?? 240;
     const fromScale = opts.fromScale ?? 1;
@@ -1401,10 +1513,36 @@ export class OfflineGame {
         window.requestAnimationFrame(step);
         return;
       }
+      ghost.disposeBadge();
       if (root.parent) root.parent.removeControl(root);
       target.root.alpha = endAlpha;
+      // Бейдж возвращаем сразу, без пустого кадра до следующего tick'а.
+      target.revealBadge();
     };
     window.requestAnimationFrame(step);
+  }
+
+  private createFlightGhost(source: TileSnapshot, target: TileFigure): TileFigure {
+    // Копируем все метки, включая draft: иначе зелёная рамка пропадает
+    // во время полёта. Бейдж живёт в отдельном слое над flightLayer.
+    const ghost = new TileFigure(
+      source.face,
+      false,
+      target.flightMarks(),
+      tileSize(),
+      this.badgeLayer,
+      target.badgeShown(),
+    );
+    const root = ghost.root;
+    root.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    root.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    root.left = px(Math.round(source.rect.x));
+    root.top = px(Math.round(source.rect.y));
+    root.zIndex = 680;
+    root.isPointerBlocker = false;
+    root.alpha = target.rgbaAlpha;
+    this.flightLayer.addControl(root);
+    return ghost;
   }
 
   relayout(): void {
@@ -1518,6 +1656,7 @@ export class OfflineGame {
   private makeRowBlock(rowId: number, tiles: TileFace[], ts: { x: number; y: number }, innerW: number, hint: boolean, serverInvalid = false): RowFig {
     const hostC = new Container('rowBlock');
     hostC.width = px(innerW);
+    hostC.clipChildren = false;
     // высота — по фактическому числу визуальных строк: при переполнении
     // ряд растёт вниз и вмещает все фишки
     hostC.height = px(ts.y + 16);
@@ -1535,6 +1674,7 @@ export class OfflineGame {
     hostC.addControl(block.root);
     const host = new Container('rowHost');
     host.width = px(innerW - 20);
+    host.clipChildren = false;
     host.height = px(ts.y);
     host.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
     host.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
@@ -1549,7 +1689,7 @@ export class OfflineGame {
       // зелёная рамка и галочка в углу (game.gd get_tile_marks:3062-3072).
       const m: TileMarks = { ...(marks[i] ?? {}) };
       if (this.draftNewIds.has(tiles[i].id)) m.draft = true;
-      const f = new TileFigure(tiles[i], false, m, ts);
+      const f = new TileFigure(tiles[i], false, m, ts, this.badgeLayer, false, this.inheritFigs?.get(tiles[i].id) ?? null);
       this.wireDrag(f, { kind: 'row', rowId, index: i });
       fig.figures.push(f);
       fig.items.push({ root: f.root, width: ts.x, height: ts.y });
@@ -1604,7 +1744,7 @@ export class OfflineGame {
     void ts;
     for (let i = 0; i < hand.length; i += 1) {
       const face = hand[i];
-      const f = new TileFigure(face, false, drawnTileId === face.id ? { drawn: true } : {}, ts);
+      const f = new TileFigure(face, false, drawnTileId === face.id ? { drawn: true } : {}, ts, this.badgeLayer, false, this.inheritFigs?.get(face.id) ?? null);
       this.wireDrag(f, { kind: 'hand', rowId: -1, index: i });
       this.handFigs.push(f);
       this.handHost.addControl(f.root);
@@ -1704,8 +1844,14 @@ export class OfflineGame {
     }
     if (plan.action === 'place' && plan.tiles.length > 0) {
       const planned = new Set<number>(plan.tiles);
+      const handSeat = this.onlineMode ? this.state.local_seat : this.state.current;
+      const drawnId = this.drawMarks.get(handSeat) ?? -1;
       for (const f of this.handFigs) {
-        if (planned.has(f.face.id)) f.refreshMarks({ hint: true, drawn: f.face.is_joker && false });
+        if (planned.has(f.face.id)) {
+          // метки пересчитываются целиком, как refresh_marks в оригинале:
+          // иначе подсказка стёрла бы галочку взятой фишки
+          f.refreshMarks({ hint: true, drawn: f.face.id === drawnId });
+        }
       }
       this.hintsUsed.add(this.state.current);
       this.toast(t('Подсказка: выложите %d чисел', plan.tiles.length));
