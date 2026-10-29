@@ -1,5 +1,6 @@
 import { Container, Control, Image as GuiImage, Rectangle, ScrollViewer, StackPanel, TextBlock } from '@babylonjs/gui';
 import { colorHex, TileFace } from '../core/tile';
+import { t } from '../core/lang';
 import { fs, tileSize } from '../core/settings';
 import { dataURL } from './art';
 import { px } from './uiskin';
@@ -75,7 +76,7 @@ export class TileFigure {
     if (!faceDown) {
       if (face.is_joker) {
         const img = new GuiImage('star', dataURL('star'));
-        const s = Math.round(Math.min(ts.x, ts.y) * 0.98);
+        const s = Math.round(Math.min(ts.x, ts.y) * 0.84);
         img.width = px(s);
         img.height = px(s);
         img.horizontalAlignment = Container.HORIZONTAL_ALIGNMENT_CENTER;
@@ -297,7 +298,7 @@ export class TileFigure {
 
   // Короткая подпись фишки (для экранных читалок/логов).
   infoText(): string {
-    if (this.face.is_joker) return 'Джокер — заменяет любое число любого цвета';
+    if (this.face.is_joker) return t('Джокер — заменяет любое число любого цвета');
     return `${this.face.value}`;
   }
 }

@@ -1,7 +1,7 @@
 import { Scene } from '@babylonjs/core';
 import { AdvancedDynamicTexture, Container } from '@babylonjs/gui';
 import { Api } from '../net/api';
-import { applyTitle } from '../core/lang';
+import { applyTitle, t } from '../core/lang';
 import { MenuScreen } from '../ui2/menu_screen';
 import { OfflineGame } from '../ui2/offline_game';
 import { OnlineLobby } from '../ui2/online_lobby';
@@ -19,6 +19,7 @@ export class App implements MenuHost, OfflineHost {
   offline: OfflineGame | null = null;
   private root = new Container('root');
   private currentName: ScreenName | null = null;
+  private menuConnectionTask: Promise<void> | null = null;
 
   constructor(
     readonly scene: Scene,
@@ -32,6 +33,33 @@ export class App implements MenuHost, OfflineHost {
     this.wireApi();
     window.addEventListener('resize', () => this.relayout());
     this.show('menu');
+    this.startMenuConnection();
+  }
+
+  // Восстанавливаем авторизованную сессию, пока игрок ещё в главном меню:
+  // сервер сразу сообщит, числится ли за ним комната/партия. Комната
+  // привязана к своему серверу, поэтому сначала reconnect на прошлый host.
+  private startMenuConnection(): void {
+    if (this.api.isOpen || this.menuConnectionTask) return;
+    const task = (async () => {
+      try {
+        const serverId = this.api.savedPendingServerId;
+        if (serverId) await this.api.connect(serverId);
+        else await this.api.connectFastest();
+      } catch {
+        // Не блокируем меню: при открытии сетевого экрана лобби повторит
+        // обычный перебор доступных серверов и покажет причину.
+      }
+    })();
+    let tracked: Promise<void>;
+    tracked = task.finally(() => {
+      if (this.menuConnectionTask === tracked) this.menuConnectionTask = null;
+    });
+    this.menuConnectionTask = tracked;
+  }
+
+  async waitForMenuConnection(): Promise<void> {
+    await this.menuConnectionTask?.catch(() => undefined);
   }
 
   // MenuHost: меню и оверлеи пересобираются при смене языка/масштабов.
@@ -77,7 +105,7 @@ export class App implements MenuHost, OfflineHost {
     l.onDraft = (msg) => this.offline?.applyDraft(msg);
     l.onError = (msg) => {
       if (this.current === 'offline' && this.offline) this.offline.onGameError(msg);
-      else if (this.current === 'online') this.showToast(msg.reason ?? 'Ошибка', true);
+      else if (this.current === 'online') this.showToast(t(msg.reason ?? 'Ошибка'), true);
     };
     l.onToast = (msg) => this.showToast(msg.text, false);
     l.onLeft = () => {
@@ -106,6 +134,7 @@ export class App implements MenuHost, OfflineHost {
       // Партия началась/идёт, пока мы в главном меню после парковки:
       // экран не подменяем, но место за нами держится — баннер должен
       // звать «вернуться в партию» (online_lobby.gd:289-301).
+      this.lastLobby = null;
       this.api.parkRoom({
         code: env.state.code,
         name: env.state.code,
@@ -128,13 +157,14 @@ export class App implements MenuHost, OfflineHost {
   // ROOM_STATE: лобби комнаты (гостевая) или возврат комнаты к ожиданию
   // после конца партии — рисуем страницы сетевого меню.
   roomState(room: RoomLobbyView): void {
-    this.lastLobby = room;
     if (this.currentName === 'menu') {
       // В главном меню после парковки комнату не открываем: только
       // обновляем «вы всё ещё в комнате» (online_lobby.gd:1138-1151).
+      this.lastLobby = null;
       this.api.parkRoom(room);
       return;
     }
+    this.lastLobby = room;
     // партия кончилась/вернулись в лобби — экран игры останавливаем
     if (this.offline && this.offline.onlineMode) {
       this.offline.running = false;
@@ -160,6 +190,7 @@ export class App implements MenuHost, OfflineHost {
     applyTitle();
     if (name === 'menu') {
       this.menu.build(this.root);
+      this.startMenuConnection();
       return;
     }
     if (name === 'offline') {
@@ -189,6 +220,7 @@ export class App implements MenuHost, OfflineHost {
   }
 
   onReturnToRoom(): void {
+    this.online.preparePendingReturn();
     this.show('online');
     void this.online.returnToPending();
   }
@@ -201,6 +233,7 @@ export class App implements MenuHost, OfflineHost {
   // место за нами сохраняется, как в оригинале (park_room).
   onLeaveOnline(): void {
     const { started, room } = this.online.takeRoomForLeave();
+    this.lastLobby = null;
     if (started) {
       // Партия уже начата: мягкий выход, сервер пришлёт room в ROOM_LEFT,
       // и «вы всё ещё в партии» можно вернуть (online_lobby.gd:203-209).
@@ -215,6 +248,10 @@ export class App implements MenuHost, OfflineHost {
 
   // OfflineHost
   toMenu(): void {
+    if (this.offline?.onlineMode) {
+      this.online.resetAfterGameExit();
+      this.lastLobby = null;
+    }
     if (this.offline) {
       this.offline.running = false;
       this.offline.stopTimers();

@@ -18,6 +18,8 @@ const NICK_KEY = 'dg.nick';
 const LOGIN_KEY = 'dg.login';
 // пароль запоминается, как session.json в оригинале (session.gd:16-86)
 const PASS_KEY = 'dg.pass';
+// Чтобы в главном меню восстановить pending на сервере, где живёт комната.
+const PENDING_SERVER_KEY = 'dg.pending_server';
 export const MIN_PLAYERS = 2;
 export const MAX_PLAYERS = 5;
 
@@ -80,6 +82,8 @@ export class Api {
 
   private setPending(room: RoomLobbyView | null): void {
     this.pendingRoom = room;
+    if (room && this.ref) localStorage.setItem(PENDING_SERVER_KEY, this.ref.id);
+    else if (!room) localStorage.removeItem(PENDING_SERVER_KEY);
     this.listeners.onPending?.(room);
   }
 
@@ -97,6 +101,10 @@ export class Api {
 
   get savedPassword(): string {
     return localStorage.getItem(PASS_KEY) ?? '';
+  }
+
+  get savedPendingServerId(): string {
+    return localStorage.getItem(PENDING_SERVER_KEY) ?? '';
   }
 
   get isOpen(): boolean {

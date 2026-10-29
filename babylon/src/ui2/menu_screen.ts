@@ -1,5 +1,5 @@
 import { Container, Control, InputText, Rectangle, ScrollViewer, StackPanel } from '@babylonjs/gui';
-import { t } from '../core/lang';
+import { appName, t } from '../core/lang';
 import {
   BOT_LEVEL_NAMES,
   fs,
@@ -90,6 +90,7 @@ export class MenuScreen {
     col.isVertical = true;
     col.width = px(colW);
     col.paddingLeft = '0px';
+    col.paddingTop = px(12);
     col.spacing = 14;
     scroll.addControl(col);
 
@@ -103,45 +104,78 @@ export class MenuScreen {
       openFor: (a, items, cur, cb, w) => popupList(this.popups, a, items, cur, cb, fs(12), w),
     };
 
-    const title = mkLabel(t('Цифровая игра'), { color: SKIN.gold, fontSize: fitFontSize(t('Цифровая игра'), avail, fs(38)), height: 52 });
+    const titleText = appName();
+    const titleFont = fitFontSize(titleText, colW, fs(38));
+    const title = mkLabel(titleText, {
+      color: SKIN.gold,
+      fontSize: titleFont,
+      width: '100%',
+      height: Math.max(52, estimateWrappedTextHeight(titleText, colW, titleFont) + 8),
+      noWrap: false,
+      vAlign: 'center',
+    });
     col.addControl(title);
 
-    const subtitle = mkLabel(t('числа · 4 цвета · джокеры'), { color: '#ffffff8c', fontSize: fs(16) });
+    const subtitleFont = fs(16);
+    const subtitle = mkLabel(t('числа · 4 цвета · джокеры'), {
+      color: '#ffffff8c', fontSize: subtitleFont, height: Math.ceil(subtitleFont * 1.5),
+    });
     col.addControl(subtitle);
 
     // pending_room: «вы всё ещё в комнате» с возвратом/отказом
     const pending = this.host.pendingRoom();
     if (pending) {
+      const message = pending.state === 'playing'
+        ? t('Вы всё ещё в партии «%s»', pending.name || pending.code)
+        : t('Вы всё ещё в комнате «%s»', pending.name || pending.code);
+      const innerW = Math.max(120, colW - 20);
+      const labelFont = fs(14);
+      const labelH = estimateWrappedTextHeight(message, innerW, labelFont) + 4;
+      const buttonFont = fs(14);
+      const buttonH = Math.max(40, Math.ceil(buttonFont * 1.7));
+      const backText = t('Вернуться');
+      const dropText = t('Покинуть');
+      const backNeed = Math.ceil(measureTextWidth(backText, buttonFont)) + 28;
+      const dropNeed = Math.ceil(measureTextWidth(dropText, buttonFont)) + 28;
+      const stackButtons = backNeed + dropNeed + 8 > innerW;
+      const actionH = stackButtons ? buttonH * 2 + 8 : buttonH;
       const box = softPanel({ bg: '#FFD54F14', border: SKIN.gold, thickness: 2, corner: 10 });
       box.root.width = '100%';
-      box.root.height = px(96);
+      box.root.height = px(6 + labelH + 6 + actionH + 8);
       const bcol = new StackPanel('pendingCol');
       bcol.isVertical = true;
       bcol.spacing = 6;
-      bcol.width = '100%';
+      bcol.width = px(innerW);
       bcol.paddingLeft = px(10);
-      bcol.paddingRight = px(10);
       bcol.paddingTop = px(6);
       box.root.addControl(bcol);
-      bcol.addControl(mkLabel(
-        pending.state === 'playing'
-          ? t('Вы всё ещё в партии «%s»', pending.name || pending.code)
-          : t('Вы всё ещё в комнате «%s»', pending.name || pending.code),
-        { fontSize: fs(14), color: SKIN.noteGold, height: 34 },
-      ));
-      const row = hrow(8);
-      row.width = '100%';
-      row.height = px(44);
-      row.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
-      const backBtn = mkButton(t('Вернуться'), { height: 40, width: Math.floor(avail / 2) - 8, fontSize: fs(14), theme: BUTTON_STYLE.green });
+      const pendingLabel = mkLabel(message, {
+        fontSize: labelFont,
+        color: SKIN.noteGold,
+        width: innerW,
+        height: labelH,
+        noWrap: false,
+        align: 'left',
+        vAlign: 'top',
+      });
+      pendingLabel.resizeToFit = true;
+      pendingLabel.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+      bcol.addControl(pendingLabel);
+      const actions = new StackPanel('pendingActions');
+      actions.isVertical = stackButtons;
+      actions.spacing = 8;
+      actions.width = px(innerW);
+      actions.height = px(actionH);
+      bcol.addControl(actions);
+      const buttonW = stackButtons ? innerW : Math.floor((innerW - 8) / 2);
+      const backBtn = mkButton(backText, { height: buttonH, width: buttonW, fontSize: buttonFont, theme: BUTTON_STYLE.green });
       backBtn.onPointerUpObservable.clear();
       backBtn.onPointerUpObservable.add(() => this.host.onReturnToRoom());
-      const dropBtn = mkButton(t('Покинуть'), { height: 40, width: Math.floor(avail / 2) - 8, fontSize: fs(14), theme: BUTTON_STYLE.deck });
+      const dropBtn = mkButton(dropText, { height: buttonH, width: buttonW, fontSize: buttonFont, theme: BUTTON_STYLE.deck });
       dropBtn.onPointerUpObservable.clear();
       dropBtn.onPointerUpObservable.add(() => this.host.onDropRoom());
-      row.addControl(backBtn);
-      row.addControl(dropBtn);
-      bcol.addControl(row);
+      actions.addControl(backBtn);
+      actions.addControl(dropBtn);
       col.addControl(box.root);
     }
 
@@ -390,4 +424,3 @@ export function measureTextWidth(text: string, fontSize: number): number {
   ctx.font = `${fontSize}px Arial`;
   return ctx.measureText(text).width;
 }
-

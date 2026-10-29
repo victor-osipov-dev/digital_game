@@ -261,17 +261,19 @@ export class OfflineGame {
     });
     this.deckBtn.onPointerUpObservable.clear();
     this.deckBtn.onPointerUpObservable.add(() => this.onDeckButton());
+    this.deckBtn.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
     this.topRow.addControl(this.deckBtn);
 
     // таймер хода (только сетевая партия)
-    this.timerLab = mkLabel(' ', { fontSize: fs(14), color: SKIN.gold, width: 130, height: 46, noWrap: true });
+    this.timerLab = mkLabel(' ', { fontSize: fs(14), color: SKIN.gold, width: 130, height: 46, noWrap: false, vAlign: 'center' });
+    this.timerLab.textWrapping = true;
     this.topRow.addControl(this.timerLab);
 
     const actions = new StackPanel('topActions');
     actions.isVertical = false;
     actions.height = px(46);
     actions.spacing = 6;
-    actions.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    actions.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
     actions.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
     this.topRow.addControl(actions);
 
@@ -295,7 +297,7 @@ export class OfflineGame {
     const menu = mkTop(t('Меню'), () => {
       if (this.onlineMode) {
         // сетевая партия: подтверждение выхода из комнаты в лобби
-        this.askConfirm(t('Выход в лобби'), t('Выйти из комнаты в лобби?'), t('Выйти'), () => this.leaveToLobby());
+        this.askConfirm(t('Выход в меню'), t('Выйти из партии в главное меню? Вы сможете вернуться.'), t('Выйти'), () => this.leaveToMenu());
         return;
       }
       this.askConfirm(t('Выход в меню'), t('Выйти в главное меню?'), t('Выйти'), () => {
@@ -320,13 +322,14 @@ export class OfflineGame {
     const vw = window.innerWidth;
     const actions = this.topRow.children.find((c) => c.name === 'topActions') as StackPanel;
     if (!actions) return;
+    this.timerLab.width = px(Math.min(170, Math.max(96, Math.floor(vw * 0.28))));
     const sep = 6;
     const widthOf = (b: Control): number => (b as Button).widthInPixels || 60;
     const fits = (list: Control[], burger: boolean): boolean => {
       const actionWidth = list.reduce((acc, b) => acc + widthOf(b), 0)
         + Math.max(0, list.length - 1) * sep
         + (burger ? 60 + (list.length ? sep : 0) : 0);
-      const timerW = 130;
+      const timerW = this.timerLab.widthInPixels || 130;
       const need = actionWidth + widthOf(this.deckBtn) + timerW + 2 * sep;
       return need <= vw - SIDE_PAD * 2;
     };
@@ -352,6 +355,7 @@ export class OfflineGame {
     actions.clearControls();
     for (const c of list) actions.addControl(c);
     actions.width = px(list.reduce((acc, b) => acc + widthOf(b), 0) + Math.max(0, list.length - 1) * sep);
+    this.resizeTimerLayout();
   }
 
   private resetDrawMark(): void {
@@ -1000,6 +1004,7 @@ export class OfflineGame {
       || (env && (env.paused || env.waiting || (env.grace ?? 0) > 0))
       || seconds === null || !Number.isFinite(seconds) || seconds <= 0) {
       this.timerLab.text = '';
+      this.resizeTimerLayout();
       return;
     }
     // «Ваш ход — N с» / «Ход: X — N с» (game.gd:1994-2014)
@@ -1010,8 +1015,9 @@ export class OfflineGame {
       this.timerLab.text = mine
         ? t('Ваш ход — %d с', sec)
         : t('Ход: %s — %d с', curName, sec);
-      this.timerLab.width = px(Math.min(150, Math.ceil(measureTextWidth(this.timerLab.text, fs(14))) + 10));
+      this.timerLab.fontSize = fs(14);
       this.timerLab.color = left <= 10 ? SKIN.flag : SKIN.gold;
+      this.resizeTimerLayout();
     };
     render();
     this.onlineTimer = setInterval(() => {
@@ -1022,6 +1028,26 @@ export class OfflineGame {
       }
       render();
     }, 1000);
+  }
+
+  private resizeTimerLayout(): void {
+    if (!this.timerLab || !this.topRow) return;
+    const font = fs(14);
+    this.timerLab.fontSize = font;
+    this.timerLab.textWrapping = true;
+    const width = this.timerLab.widthInPixels || Math.min(170, Math.max(96, Math.floor(window.innerWidth * 0.28)));
+    const contentH = this.timerLab.text.trim()
+      ? estimateWrappedTextHeight(this.timerLab.text, width, font) + 6
+      : 46;
+    const rowH = Math.max(46, contentH);
+    this.timerLab.height = px(rowH);
+    this.topRow.height = px(rowH);
+    this.deckBtn.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+    const actions = this.topRow.children.find((c) => c.name === 'topActions') as StackPanel | undefined;
+    if (actions) {
+      actions.height = px(rowH);
+      actions.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+    }
   }
 
   // Панель ожидания: пауза/ожидание соперника/восстановление связи.
@@ -1297,9 +1323,9 @@ export class OfflineGame {
     col.addControl(peek);
     if (this.onlineMode) {
       // сетевая партия: покинуть комнату (место освобождается) и в лобби
-      const back = mkButton(t('К лобби'), { height: 54, width: 200, fontSize: fs(18), theme: BUTTON_STYLE.green });
+      const back = mkButton(t('В меню'), { height: 54, width: 200, fontSize: fs(18), theme: BUTTON_STYLE.green });
       back.onPointerUpObservable.clear();
-      back.onPointerUpObservable.add(() => this.leaveToLobby());
+      back.onPointerUpObservable.add(() => this.leaveToMenu());
       col.addControl(back);
       return;
     }
@@ -1902,7 +1928,7 @@ export class OfflineGame {
     if (this.hiddenTopActionNames.includes('topSettings')) mk(t('Настр.'), () => this.showSettingsOverlay());
     if (this.hiddenTopActionNames.includes('topMenu')) mk(t('Меню'), () => {
       if (this.onlineMode) {
-        this.askConfirm(t('Выход в лобби'), t('Выйти из комнаты в лобби?'), t('Выйти'), () => this.leaveToLobby());
+        this.askConfirm(t('Выход в меню'), t('Выйти из партии в главное меню? Вы сможете вернуться.'), t('Выйти'), () => this.leaveToMenu());
         return;
       }
       this.askConfirm(t('Выход в меню'), t('Выйти в главное меню?'), t('Выйти'), () => {
@@ -1917,10 +1943,9 @@ export class OfflineGame {
     openRulesOverlay(this.popups, () => {});
   }
 
-  // Сетевая партия: покинуть комнату и вернуться в лобби сетевого меню.
-  // После конца партии место освобождается сразу (game.gd:687-701:
-  // finished → drop_room, иначе leave_room).
-  private leaveToLobby(): void {
+  // Сетевая партия: временный выход ведёт в главное меню и сохраняет
+  // место (game.gd _on_leave_to_menu: finished → room.drop, иначе room.leave).
+  private leaveToMenu(): void {
     this.running = false;
     this.stopTimers();
     const api = this.host.gameApi();
@@ -1930,7 +1955,7 @@ export class OfflineGame {
     } catch {
       /* комната может уже не существовать */
     }
-    this.host.toLobby();
+    this.host.toMenu();
   }
 
   private showSettingsOverlay(): void {
@@ -2050,6 +2075,7 @@ export class OfflineGame {
     if (this.hintTimer) window.clearTimeout(this.hintTimer);
     this.hintTimer = 0;
     if (!this.toastHost || !this.toastLabel) return;
+    s = t(s);
     if (!s) {
       this.toastHost.isVisible = false;
       return;

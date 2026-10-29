@@ -26,6 +26,7 @@ import {
   dropdownRow,
   DropdownCtx,
   enableSmoothScroll,
+  estimateWrappedTextHeight,
   focusInputOnTap,
   hrow,
   mkButton,
@@ -183,6 +184,8 @@ export class OnlineLobby {
   private joinPass!: InputText;
   private joinBtn!: Button;
   private roomsNoteLab!: ReturnType<typeof mkLabel>;
+  private roomsHeader!: StackPanel;
+  private roomsRefreshRow!: StackPanel;
   private refreshBtn!: Button;
   private roomsBox!: StackPanel;
   private pageRow!: StackPanel;
@@ -202,6 +205,7 @@ export class OnlineLobby {
   private pendingRoomState: RoomLobbyView | null = null;
   private pendingReturnBtn!: Button;
   private pendingLeaveBtn!: Button;
+  private pendingActions!: StackPanel;
 
   private rooms: RoomWithServer[] = [];
   private roomsPage = 0;
@@ -402,7 +406,8 @@ export class OnlineLobby {
     // --- баннер «вы всё ещё в комнате» (net.gd pending_room)
     this.pendingBox = new Container('onlPending');
     this.pendingBox.width = '100%';
-    this.pendingBox.height = px(56);
+    this.pendingBox.height = px(80);
+    this.pendingBox.clipChildren = false;
     this.pendingBox.isVisible = false;
     const pendingFill = new Rectangle('pendingFill');
     pendingFill.cornerRadius = 10;
@@ -413,24 +418,23 @@ export class OnlineLobby {
     pendingFill.height = '100%';
     pendingFill.isHitTestVisible = false;
     this.pendingBox.addControl(pendingFill);
-    this.pendingLab = mkLabel('', { fontSize: fs(13), color: WHITE90, height: SMALL_H });
+    this.pendingLab = mkLabel('', { fontSize: fs(13), color: WHITE90, height: SMALL_H, noWrap: false, align: 'left', vAlign: 'top' });
     this.pendingLab.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    this.pendingLab.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
     this.pendingLab.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-    this.pendingLab.left = px(12);
-    this.pendingLab.width = px(Math.max(80, this.avail - 210));
     this.pendingBox.addControl(this.pendingLab);
+    this.pendingActions = new StackPanel('pendingActions');
+    this.pendingActions.isVertical = false;
+    this.pendingActions.spacing = 8;
+    this.pendingBox.addControl(this.pendingActions);
     this.pendingReturnBtn = greyButton(t('Вернуться'), SMALL_H, fs(13), 96);
     this.pendingReturnBtn.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
-    this.pendingReturnBtn.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
-    this.pendingReturnBtn.left = px(-104);
     this.pendingReturnBtn.onPointerUpObservable.add(() => { void this.returnToPending(); });
-    this.pendingBox.addControl(this.pendingReturnBtn);
+    this.pendingActions.addControl(this.pendingReturnBtn);
     this.pendingLeaveBtn = greyButton(t('Покинуть'), SMALL_H, fs(13), 88);
     this.pendingLeaveBtn.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
-    this.pendingLeaveBtn.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
-    this.pendingLeaveBtn.left = px(-12);
     this.pendingLeaveBtn.onPointerUpObservable.add(() => { void this.dropPending(); });
-    this.pendingBox.addControl(this.pendingLeaveBtn);
+    this.pendingActions.addControl(this.pendingLeaveBtn);
     page.addControl(this.pendingBox);
 
     this.playBtn = accentButton(t('Играть по сети'), BUTTON_STYLE.green, 58, fs(20));
@@ -517,23 +521,25 @@ export class OnlineLobby {
 
     // --- список
     page.addControl(headerLabel(t('Все комнаты'), fs(19)));
-    const head = hrow(8);
-    head.width = '100%';
-    head.height = px(SMALL_H);
-    page.addControl(head);
-    // в горизонтальном ряду «100%» съест весь ряд и вытолкнет «Обновить»
-    // за правый край — только численная ширина
+    this.roomsHeader = new StackPanel('roomsHeader');
+    this.roomsHeader.isVertical = true;
+    this.roomsHeader.width = '100%';
+    this.roomsHeader.spacing = 4;
+    page.addControl(this.roomsHeader);
     this.roomsNoteLab = mkLabel('', {
-      fontSize: fs(15), color: NOTE,
-      width: Math.max(120, this.avail - 120 - 16), height: SMALL_H,
+      fontSize: fs(15), color: NOTE, width: '100%', height: SMALL_H,
+      noWrap: false, align: 'left', vAlign: 'top',
     });
-    this.roomsNoteLab.resizeToFit = true;
     this.roomsNoteLab.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-    head.addControl(this.roomsNoteLab);
+    this.roomsHeader.addControl(this.roomsNoteLab);
+    this.roomsRefreshRow = hrow(0);
+    this.roomsRefreshRow.width = '100%';
+    this.roomsHeader.addControl(this.roomsRefreshRow);
     this.refreshBtn = greyButton(t('Обновить'), SMALL_H, fs(15), 120);
     this.refreshBtn.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
     this.refreshBtn.onPointerUpObservable.add(() => { void this.refreshRooms(false); });
-    head.addControl(this.refreshBtn);
+    this.roomsRefreshRow.addControl(this.refreshBtn);
+    this.layoutRoomsHeader();
 
     this.roomsBox = new StackPanel('onlRoomsBox');
     this.roomsBox.isVertical = true;
@@ -652,7 +658,7 @@ export class OnlineLobby {
   // _update_status-порт: сервер и активный игрок, или причина молчания.
   private updateStatus(): void {
     const api = this.app.api;
-    let text = t('Сервер: %s', api.ref?.name ?? '?');
+    let text = t('Сервер: %s', t(api.ref?.name ?? '?'));
     let warn = false;
     if (!api.isOpen) {
       // авто-переподключение ещё идёт — не пугаем «нет связи»
@@ -686,7 +692,7 @@ export class OnlineLobby {
       setNote(this.authNoteLab, t('Вход выполнен'), false);
       await this.gotoRooms();
     } catch (e) {
-      setNote(this.authNoteLab, (e as Error).message || t('Не удалось войти'), true);
+      setNote(this.authNoteLab, t((e as Error).message) || t('Не удалось войти'), true);
     }
   }
 
@@ -709,7 +715,7 @@ export class OnlineLobby {
       setNote(this.authNoteLab, t('Аккаунт создан'), false);
       await this.gotoRooms();
     } catch (e) {
-      setNote(this.authNoteLab, (e as Error).message || t('Не удалось войти'), true);
+      setNote(this.authNoteLab, t((e as Error).message) || t('Не удалось войти'), true);
     }
   }
 
@@ -761,6 +767,20 @@ export class OnlineLobby {
   // сервер выбирается один раз и не меняется посреди игры.
   async doConnect(): Promise<void> {
     if (this.connecting) return;
+    // Главное меню может уже поднимать сохранённую сессию. Дождёмся этого
+    // рукопожатия, чтобы не открыть второй сокет и не вытеснить себя из
+    // комнаты во время resume.
+    await this.app.waitForMenuConnection();
+    if (this.app.api.isOpen) {
+      this.updateStatus();
+      if (this.app.api.user) await this.gotoRooms();
+      else {
+        this.setPage('auth');
+        this.fillAuthDefaults();
+      }
+      this.updateButtons();
+      return;
+    }
     this.connecting = true;
     let lastErr = '';
     // сначала гоночный опрос: входим на быстрейший живой сервер
@@ -770,7 +790,7 @@ export class OnlineLobby {
     } catch (e) {
       // никто не ответил гонкой — обычный последовательный перебор
       for (const ref of listServerRefs()) {
-        this.setBusy(t('Подключаемся к %s…', ref.name));
+        this.setBusy(t('Подключаемся к %s…', t(ref.name)));
         try {
           await this.app.api.connect(ref.id);
           lastErr = '';
@@ -793,7 +813,7 @@ export class OnlineLobby {
     this.setBusy('');
     this.updateStatus();
     if (lastErr !== '' || !this.app.api.isOpen) {
-      setNote(this.busyLab, lastErr === '' ? t('Нет связи с сервером') : lastErr, true);
+      setNote(this.busyLab, lastErr === '' ? t('Нет связи с сервером') : t(lastErr), true);
       return;
     }
     if (this.app.api.user) {
@@ -840,16 +860,45 @@ export class OnlineLobby {
       const total = res.total;
       const online = total - res.failed.length;
       let line = t('Комнат найдено: %d · серверов в сети: %d из %d', this.rooms.length, online, total);
-      if (res.failed.length > 0) line += ' · ' + t('без %s', res.failed.map((f) => f.name).join(', '));
-      setNote(this.roomsNoteLab, line, false);
+      if (res.failed.length > 0) line += ' · ' + t('без %s', res.failed.map((f) => t(f.name)).join(', '));
+      this.setRoomsNote(line, false);
     } catch (e) {
       this.rooms = [];
-      setNote(this.roomsNoteLab, (e as Error).message || t('Не удалось получить список'), true);
+      this.setRoomsNote(t((e as Error).message) || t('Не удалось получить список'), true);
     }
     this.roomsLoading = false;
     if (!quiet) this.setBusy('');
     if (this.page === 'rooms') this.renderRooms();
     this.updateButtons();
+  }
+
+  private setRoomsNote(text: string, warn: boolean): void {
+    setNote(this.roomsNoteLab, t(text), warn);
+    this.layoutRoomsHeader();
+  }
+
+  private layoutRoomsHeader(): void {
+    if (!this.roomsNoteLab || !this.refreshBtn || !this.roomsHeader || !this.roomsRefreshRow) return;
+    const noteFont = fs(15);
+    const noteH = this.roomsNoteLab.text
+      ? estimateWrappedTextHeight(this.roomsNoteLab.text, this.avail, noteFont) + 4
+      : 0;
+    this.roomsNoteLab.fontSize = noteFont;
+    this.roomsNoteLab.width = px(this.avail);
+    this.roomsNoteLab.height = px(noteH);
+    this.roomsNoteLab.resizeToFit = false;
+    const buttonFont = fs(15);
+    const buttonH = Math.max(SMALL_H, Math.ceil(buttonFont * 1.7));
+    const buttonW = Math.min(this.avail, Math.max(120, Math.ceil(measureTextWidth(t('Обновить'), buttonFont)) + 32));
+    this.refreshBtn.width = px(buttonW);
+    this.refreshBtn.height = px(buttonH);
+    this.refreshBtn.fontSize = buttonFont;
+    this.refreshBtn.textBlock!.fontSize = buttonFont;
+    this.refreshBtn.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
+    this.refreshBtn.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+    this.roomsRefreshRow.height = px(buttonH);
+    this.roomsRefreshRow.width = '100%';
+    this.roomsHeader.height = px(noteH + (noteH > 0 ? 4 : 0) + buttonH);
   }
 
   private async refreshRooms(quiet: boolean): Promise<void> {
@@ -863,6 +912,7 @@ export class OnlineLobby {
     const total = this.rooms.length;
     const pages = Math.max(1, Math.ceil(total / ROOMS_PAGE_SIZE));
     this.roomsPage = Math.max(0, Math.min(this.roomsPage, pages - 1));
+    let renderedHeight = 0;
     if (total === 0) {
       const empty = mkLabel(t('Пока никто не создал комнату. Создайте свою.'), {
         fontSize: fs(16),
@@ -874,11 +924,20 @@ export class OnlineLobby {
       empty.resizeToFit = true;
       empty.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
       this.roomsBox.addControl(empty);
+      renderedHeight = ROOMS_MIN_H;
     } else {
       const start = this.roomsPage * ROOMS_PAGE_SIZE;
       const end = Math.min(start + ROOMS_PAGE_SIZE, total);
-      for (let i = start; i < end; i += 1) this.roomsBox.addControl(this.roomRow(this.rooms[i]));
+      for (let i = start; i < end; i += 1) {
+        const row = this.roomRow(this.rooms[i]);
+        this.roomsBox.addControl(row);
+        renderedHeight += Number.parseFloat(String(row.height)) || 56;
+        if (i > start) renderedHeight += this.roomsBox.spacing;
+      }
     }
+    // Карточки при крупном тексте могут быть выше стандартного окна списка;
+    // пусть растёт содержимое внешнего скролла, а не обрезается сама карточка.
+    this.roomsBox.height = px(Math.max(ROOMS_MIN_H, renderedHeight));
     this.pageRow.isVisible = pages > 1;
     this.pageLabel.text = t('Стр. %d из %d', this.roomsPage + 1, pages);
     const disable = this.busyFlag;
@@ -916,20 +975,38 @@ export class OnlineLobby {
     if (room.bots > 0) text += t(' · боты %d', room.bots);
     if (room.hasPassword) text += t(' · пароль');
 
-    const labelW = Math.max(60, this.avail - 130);
-    const lab = mkLabel(textTruncate(text, fs(16), labelW), {
-      fontSize: fs(16),
+    const font = fs(16);
+    const buttonFont = fs(16);
+    const joinW = Math.max(84, Math.ceil(measureTextWidth(t('Войти'), buttonFont)) + 28);
+    const buttonH = Math.max(38, Math.ceil(buttonFont * 1.55));
+    const rowInnerW = Math.max(100, this.avail - 24);
+    const sideLabelW = Math.max(80, rowInnerW - joinW - 12);
+    const sideLabelH = estimateWrappedTextHeight(text, sideLabelW, font);
+    const stacked = sideLabelH > buttonH + 8;
+    const labelW = stacked ? rowInnerW : sideLabelW;
+    const labelH = estimateWrappedTextHeight(text, labelW, font);
+    const rowH = stacked
+      ? 8 + labelH + 6 + buttonH + 8
+      : Math.max(buttonH + 12, labelH + 12);
+    row.height = px(rowH);
+    const lab = mkLabel(text, {
+      fontSize: font,
       color: WHITE90,
       width: labelW,
-      height: 56,
+      height: labelH,
+      noWrap: false,
       hAlign: 'left',
-      vAlign: 'center',
+      vAlign: stacked ? 'top' : 'center',
     });
+    lab.left = px(10);
+    lab.top = px(stacked ? 8 : 0);
     card.root.addControl(lab);
 
-    const join = accentButton(t('Войти'), BUTTON_STYLE.deck, 38, fs(16), 84);
+    const join = accentButton(t('Войти'), BUTTON_STYLE.deck, buttonH, buttonFont, joinW);
     join.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
-    join.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+    join.verticalAlignment = stacked ? Control.VERTICAL_ALIGNMENT_BOTTOM : Control.VERTICAL_ALIGNMENT_CENTER;
+    join.left = px(stacked ? -10 : -14);
+    if (stacked) join.top = px(-8);
     join.onPointerUpObservable.add(() =>
       void this.doJoin(room.code, room.hasPassword ? this.joinPass.text : ''));
     card.root.addControl(join);
@@ -943,6 +1020,9 @@ export class OnlineLobby {
   private async doJoin(code: string, password: string): Promise<void> {
     const api = this.app.api;
     if (code === '') return;
+    // Повторный вход по кнопке списка — новое явное действие возврата;
+    // старый started latch не должен проглотить GAME_STATE.
+    this.started = false;
     if (!api.user) {
       this.setPage('auth');
       this.fillAuthDefaults();
@@ -987,7 +1067,14 @@ export class OnlineLobby {
         }
       }
       this.setBusy('');
-      setNote(this.roomsNoteLab, (e as Error).message || t('Не удалось войти в комнату'), true);
+      const reason = (e as Error).message;
+      if (reason === 'Комната не найдена'
+        && this.app.api.pendingRoom?.code.toUpperCase() === code.toUpperCase()) {
+        // Сервер больше не держит место: не оставляем в меню обещание
+        // вернуться в уже удалённую комнату (online_lobby.gd:985-989).
+        this.app.api.parkRoom(null);
+      }
+      this.setRoomsNote(t(reason) || t('Не удалось войти в комнату'), true);
     }
   }
 
@@ -1026,7 +1113,7 @@ export class OnlineLobby {
       this.applyRoom(env.room);
     } catch (e) {
       this.setBusy('');
-      setNote(this.roomsNoteLab, (e as Error).message || t('Не удалось создать комнату'), true);
+      this.setRoomsNote(t((e as Error).message) || t('Не удалось создать комнату'), true);
     }
   }
 
@@ -1062,7 +1149,7 @@ export class OnlineLobby {
       this.applyRoom(env.room);
     } catch (e) {
       this.setBusy('');
-      setNote(this.roomsNoteLab, (e as Error).message || t('Не удалось создать комнату'), true);
+      this.setRoomsNote(t((e as Error).message) || t('Не удалось создать комнату'), true);
     }
   }
 
@@ -1085,6 +1172,7 @@ export class OnlineLobby {
 
   // _show_lobby-порт.
   applyRoom(room: RoomLobbyView): void {
+    this.started = false;
     this.currentRoom = room;
     this.setPage('lobby');
     this.lobbyCodeLab.text = t('Комната %s', room.code);
@@ -1113,7 +1201,7 @@ export class OnlineLobby {
     }
     this.lobbyReady = taken >= 2;
     this.lobbySeats.text = t('%s · свободно %d из %d · первый ход: %s',
-      this.app.api.ref?.name ?? '?', Math.max(0, room.seats - taken), room.seats,
+      t(this.app.api.ref?.name ?? '?'), Math.max(0, room.seats - taken), room.seats,
       room.require30 ? t('от 30') : t('любой'));
 
     const isHost = room.isHost;
@@ -1150,7 +1238,7 @@ export class OnlineLobby {
       setNote(this.lobbyNoteLab, t('Не удалось начать партию'), true);
     } catch (e) {
       this.setBusy('');
-      setNote(this.lobbyNoteLab, (e as Error).message || t('Не удалось начать партию'), true);
+      setNote(this.lobbyNoteLab, t((e as Error).message) || t('Не удалось начать партию'), true);
     }
   }
 
@@ -1240,7 +1328,7 @@ export class OnlineLobby {
       if (!open) return;
       grid.isVisible = false;
       panel.root.height = px(300);
-      setNote(bn.lab, (e as Error).message || t('Не удалось загрузить таблицу'), true);
+      setNote(bn.lab, t((e as Error).message) || t('Не удалось загрузить таблицу'), true);
     }
   }
 
@@ -1299,6 +1387,20 @@ export class OnlineLobby {
     return out;
   }
 
+  // Игра закрылась в главное меню: забываем экранное состояние старой
+  // комнаты, но pending в Api оставляем для баннера и последующего resume.
+  resetAfterGameExit(): void {
+    this.started = false;
+    this.currentRoom = null;
+    this.lobbyReady = false;
+  }
+
+  preparePendingReturn(): void {
+    this.started = false;
+    this.currentRoom = null;
+    this.lobbyReady = false;
+  }
+
   onRoomState(room: RoomLobbyView): void {
     this.applyRoom(room);
   }
@@ -1331,6 +1433,46 @@ export class OnlineLobby {
         ? t('Вы всё ещё в партии «%s». Вернуться?', room.name || room.code)
         : t('Вы всё ещё в комнате «%s». Вернуться?', room.name || room.code))
       : '';
+    if (room) this.layoutPendingBox();
+  }
+
+  // Баннер растёт по высоте и складывает кнопки в колонку, если крупный
+  // текст уже не помещается рядом. Фиксированная строка обрезала и подпись,
+  // и кнопку «Покинуть» при масштабе ×2.
+  private layoutPendingBox(): void {
+    if (!this.pendingRoomState) return;
+    const innerW = Math.max(120, this.avail - 24);
+    const labelFont = fs(13);
+    const labelH = estimateWrappedTextHeight(this.pendingLab.text, innerW, labelFont) + 4;
+    this.pendingLab.fontSize = labelFont;
+    this.pendingLab.width = px(innerW);
+    this.pendingLab.height = px(labelH);
+    this.pendingLab.left = px(12);
+    this.pendingLab.top = px(8);
+    this.pendingLab.resizeToFit = true;
+    const buttonFont = fs(13);
+    const buttonH = Math.max(SMALL_H, Math.ceil(buttonFont * 1.7));
+    const returnW = Math.max(96, Math.ceil(measureTextWidth(this.pendingReturnBtn.textBlock!.text, buttonFont)) + 28);
+    const leaveW = Math.max(88, Math.ceil(measureTextWidth(this.pendingLeaveBtn.textBlock!.text, buttonFont)) + 28);
+    const stacked = returnW + leaveW + 8 > innerW;
+    const buttonW = stacked ? innerW : Math.floor((innerW - 8) / 2);
+    const actionsH = stacked ? buttonH * 2 + 8 : buttonH;
+    this.pendingActions.isVertical = stacked;
+    this.pendingActions.spacing = 8;
+    this.pendingActions.width = px(innerW);
+    this.pendingActions.height = px(actionsH);
+    this.pendingActions.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    this.pendingActions.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    this.pendingActions.left = px(12);
+    this.pendingActions.top = px(8 + labelH + 6);
+    for (const b of [this.pendingReturnBtn, this.pendingLeaveBtn]) {
+      b.width = px(buttonW);
+      b.height = px(buttonH);
+      b.fontSize = buttonFont;
+      b.textBlock!.fontSize = buttonFont;
+      b.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+    }
+    this.pendingBox.height = px(8 + labelH + 6 + actionsH + 8);
   }
 
   // Вернуться: идущая партия — через game.rejoin, лобби — room.join.
@@ -1341,6 +1483,7 @@ export class OnlineLobby {
   async returnToPending(): Promise<void> {
     const room = this.pendingRoomState;
     if (!room || this.returning) return;
+    this.preparePendingReturn();
     this.returning = true;
     this.setBusy(t('Заходим в %s…', room.code));
     try {
@@ -1393,7 +1536,7 @@ export class OnlineLobby {
   // Серверный TOAST: показываем в busy-строке и прибираем через 4 с.
   showToast(text: string): void {
     if (this.busyFlag) return;
-    setNote(this.busyLab, text, false);
+    setNote(this.busyLab, t(text), false);
     if (this.toastTimer !== null) clearTimeout(this.toastTimer);
     this.toastTimer = setTimeout(() => {
       if (!this.busyFlag) setNote(this.busyLab, '', false);

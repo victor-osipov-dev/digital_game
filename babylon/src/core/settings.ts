@@ -65,9 +65,13 @@ export function loadSettings(): Settings {
   } catch {
     parsed = {};
   }
+  // Язык применяем ДО defaults(): имена игроков по умолчанию создаются
+  // через t() и должны быть на выбранном языке, а не на стартовом русском.
+  const lang = parsed.lang === 'en' || parsed.lang === 'ru' ? parsed.lang : 'ru';
+  setLang(lang);
   const d = defaults();
   const s: Settings = {
-    lang: parsed.lang === 'en' || parsed.lang === 'ru' ? parsed.lang : d.lang,
+    lang,
     sound: typeof parsed.sound === 'boolean' ? parsed.sound : d.sound,
     player_count: clampi(Number(parsed.player_count ?? d.player_count), MIN_PLAYERS, MAX_PLAYERS),
     require_30: typeof parsed.require_30 === 'boolean' ? parsed.require_30 : d.require_30,

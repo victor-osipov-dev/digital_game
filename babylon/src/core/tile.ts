@@ -1,3 +1,5 @@
+import { t } from './lang';
+
 export const RED = 0;
 export const BLUE = 1;
 export const BLACK = 2;
@@ -26,12 +28,12 @@ export function colorHex(c: number): string {
 
 export function colorName(c: number): string {
   switch (c) {
-    case RED: return 'красный';
-    case BLUE: return 'синий';
-    case BLACK: return 'чёрный';
-    case ORANGE: return 'оранжевый';
-    case YELLOW: return 'жёлтый';
-    case PURPLE: return 'фиолетовый';
+    case RED: return t('красный');
+    case BLUE: return t('синий');
+    case BLACK: return t('чёрный');
+    case ORANGE: return t('оранжевый');
+    case YELLOW: return t('жёлтый');
+    case PURPLE: return t('фиолетовый');
     default: return '?';
   }
 }
