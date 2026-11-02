@@ -13,7 +13,6 @@ import {
   TEXT_SCALE_NAMES,
   TILE_SIZE_NAMES,
 } from '../core/settings';
-import { rulesText } from '../core/rules';
 import {
   BUTTON_STYLE,
   checkboxRow,
@@ -25,24 +24,19 @@ import {
   hrow,
   mkButton,
   mkLabel,
-  modalOverlay,
   popupList,
   SKIN,
   softPanel,
   DropdownCtx,
   px,
 } from './uiskin';
+import { openRulesOverlay, openStatsOverlay } from './overlays';
 
 import type { MenuHost } from './ports';
+import { viewHeight, viewWidth } from './viewport';
 
 function px1(n: number): string {
   return `${n}px`;
-}
-
-// Помощник для inline-шейдеров: [Markdown]?? — в тексте правил остаются
-// болды; в Babylon они рисуются как обычный текст (без [b]).
-function rulesBB(): string {
-  return rulesText().replace(/\[\/?b\]/g, '');
 }
 
 export class MenuScreen {
@@ -52,8 +46,8 @@ export class MenuScreen {
   constructor(private host: MenuHost) {}
 
   build(root: Container): void {
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
+    const vw = viewWidth();
+    const vh = viewHeight();
     const avail = Math.max(200, Math.min(vw - 28, 470));
     // Колонка на 16px уже окна скролла: вертикальный скроллбар съедает
     // ширину клиентской области, и иначе включался горизонтальный.
@@ -90,8 +84,8 @@ export class MenuScreen {
     col.isVertical = true;
     col.width = px(colW);
     col.paddingLeft = '0px';
-    col.paddingTop = px(12);
-    col.spacing = 14;
+    col.paddingTop = px(8);
+    col.spacing = 6;
     scroll.addControl(col);
 
     this.popups = new Container('popups');
@@ -110,15 +104,20 @@ export class MenuScreen {
       color: SKIN.gold,
       fontSize: titleFont,
       width: '100%',
-      height: Math.max(52, estimateWrappedTextHeight(titleText, colW, titleFont) + 8),
+      height: Math.max(52, estimateWrappedTextHeight(titleText, colW, titleFont)),
       noWrap: false,
       vAlign: 'center',
     });
     col.addControl(title);
 
     const subtitleFont = fs(16);
-    const subtitle = mkLabel(t('числа · 4 цвета · джокеры'), {
-      color: '#ffffff8c', fontSize: subtitleFont, height: Math.ceil(subtitleFont * 1.5),
+    const subtitleText = t('числа · 4 цвета · джокеры');
+    // Высота по реальному переносу строк: на телефоне с крупным текстом
+    // подпись занимает несколько строк, и фиксированная высота резала её.
+    const subtitle = mkLabel(subtitleText, {
+      color: '#ffffff8c', fontSize: subtitleFont, width: colW,
+      height: estimateWrappedTextHeight(subtitleText, colW, subtitleFont),
+      align: 'center', hAlign: 'center', vAlign: 'center',
     });
     col.addControl(subtitle);
 
@@ -181,7 +180,7 @@ export class MenuScreen {
 
     col.addControl(gapControl(8));
 
-    this.addCountRow(col, S.player_count);
+    this.addCountRow(col, S.player_count, colW);
 
     col.addControl(mkLabel(t('Имена игроков:'), { fontSize: fs(17), color: '#ffffffE6' }));
 
@@ -195,17 +194,23 @@ export class MenuScreen {
     }
     col.addControl(names);
 
-    col.addControl(checkboxRow(t('Первый ход: от 30'), S.require_30, {
+    const req30 = checkboxRow(t('Первый ход: от 30'), S.require_30, {
       height: 34,
       fontSize: fs(15),
       onChange: (v) => saveSettings({ require_30: v }),
-    }).root);
+    });
+    req30.root.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    col.addControl(req30.root);
 
-    col.addControl(checkboxRow(t('Анимация бота'), S.bot_anim, {
+    const botAnim = checkboxRow(t('Анимация бота'), S.bot_anim, {
       height: 34,
       fontSize: fs(15),
       onChange: (v) => saveSettings({ bot_anim: v }),
-    }).root);
+    });
+    botAnim.root.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    col.addControl(botAnim.root);
+    // Отступ после «Анимация бота» перед блоком настроек.
+    col.addControl(gapControl(8));
 
     const optLblW = Math.max(
       measureTextWidth(t('Текст:'), fs(15)),
@@ -228,6 +233,8 @@ export class MenuScreen {
       saveSettings({ lang: i === 1 ? 'en' : 'ru' });
       this.host.rebuild();
     }, colW, optLblW);
+    // Отступ после настройки языка перед кнопкой «Начать».
+    col.addControl(gapControl(8));
 
     const startBtn = mkButton(t('Начать'), { fontSize: fs(20), height: 58, theme: BUTTON_STYLE.green });
     startBtn.width = '100%';
@@ -261,10 +268,19 @@ export class MenuScreen {
     col.addControl(bottom);
   }
 
-  private addCountRow(col: StackPanel, playerCount: number): void {
+  private addCountRow(col: StackPanel, playerCount: number, avail: number): void {
     const items: string[] = [];
     for (let n = MIN_PLAYERS; n <= MAX_PLAYERS; n += 1) items.push(String(n));
-    const dd = dropdownRow(t('Игроков:'), this.ctx, { height: 50, fontSize: fs(17), btnWidth: 110 });
+    const btnW = 110;
+    const labelW = measureTextWidth(t('Игроков:'), fs(17)) + 6;
+    const stacked = labelW + 10 + btnW > avail;
+    const dd = dropdownRow(t('Игроков:'), this.ctx, {
+      height: 50,
+      fontSize: fs(17),
+      btnWidth: btnW,
+      stacked,
+    });
+    if (!stacked) dd.root.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
     dd.setOptions(items, playerCount - MIN_PLAYERS, (i) => {
       setPlayerCount(Number(items[i]));
       saveSettings({});
@@ -285,7 +301,18 @@ export class MenuScreen {
     // Все ряды настроек получают одинаковую ширину метки (по самой
     // длинной), чтобы кнопки стояли ровной колонкой у левого края.
     const btnW = Math.min(Math.max(avail - lblW - 34, 130), 240);
-    const dd = dropdownRow(label, this.ctx, { height: 42, fontSize: fs(15), lblWidth: lblW, btnWidth: btnW });
+    // На узком экране (320) подпись и кнопка не помещаются в строку —
+    // кладём кнопку под подпись; в остальных случаях оставляем как было.
+    const stacked = avail < 300 || lblW + 10 + btnW > avail;
+    const dd = dropdownRow(label, this.ctx, {
+      height: 42,
+      fontSize: fs(15),
+      lblWidth: stacked ? avail : lblW,
+      // В перенесённом виде кнопка занимает всю доступную ширину — текст
+      // опций (например «Максимум») помещается целиком.
+      btnWidth: stacked ? avail : Math.min(btnW, avail),
+      stacked,
+    });
     dd.setOptions(names, current, onPick);
     col.addControl(dd.root);
   }
@@ -316,77 +343,14 @@ export class MenuScreen {
   }
 
   private openHelp(): void {
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    const { overlay, close } = modalOverlay(this.popups, 'help', { zIndex: 900 });
-    void close;
-    const panel = softPanel({
-      bg: SKIN.panelDark,
-      border: '#ffffff40',
-      thickness: 2,
-      corner: 14,
-      width: Math.min(vw - 20, 560),
-      height: Math.min(vh - 20, 700),
-    });
-    overlay.addControl(panel.root);
-    const pcol = new StackPanel('pcol');
-    pcol.isVertical = true;
-    pcol.spacing = 10;
-    pcol.width = '100%';
-    pcol.height = '100%';
-    panel.root.addControl(pcol);
-    const ttl = mkLabel(t('Правила игры'), { color: SKIN.gold, fontSize: fs(22) });
-    pcol.addControl(ttl);
-    const hscroll = new ScrollViewer('hscroll');
-    hscroll.thickness = 0;
-    hscroll.width = '100%';
-    hscroll.height = px(Math.max(120, Math.floor(vh - 190)));
-    enableSmoothScroll(hscroll);
-    pcol.addControl(hscroll);
-    const helpWidth = Math.min(vw - 60, 520);
-    const plainRules = rulesBB();
-    const rt = mkLabel(plainRules, {
-      fontSize: fs(15), color: '#ffffffE0', vAlign: 'top', hAlign: 'left', align: 'left',
-      width: helpWidth, height: estimateWrappedTextHeight(plainRules, helpWidth, fs(15)),
-    });
-    hscroll.addControl(rt);
-    window.requestAnimationFrame(() => {
-      rt.height = px(Math.ceil(rt.computeExpectedHeight()));
-    });
-    const cl = mkButton(t('Закрыть'), { fontSize: fs(17), height: 52, width: 200, theme: BUTTON_STYLE.green });
-    cl.onPointerUpObservable.add(close);
-    pcol.addControl(cl);
+    // Общая модалка правил: тот же отступ текста и заголовка, что и в игре.
+    openRulesOverlay(this.popups, () => {});
   }
 
   private openStats(): void {
-    const vw = window.innerWidth;
-    void vw;
-    const S = loadSettings();
-    const { overlay, close } = modalOverlay(this.popups, 'stats', { zIndex: 900 });
-    const panel = softPanel({
-      bg: SKIN.panelDark,
-      border: '#ffffff40',
-      thickness: 2,
-      corner: 14,
-      width: Math.min(window.innerWidth - 40, 360),
-      height: 280,
-    });
-    overlay.addControl(panel.root);
-    const pcol = new StackPanel('pcol');
-    pcol.isVertical = true;
-    pcol.spacing = 10;
-    pcol.width = '100%';
-    pcol.height = '100%';
-    panel.root.addControl(pcol);
-    pcol.addControl(gapControl(18));
-    pcol.addControl(mkLabel(t('Статистика'), { color: SKIN.gold, fontSize: fs(22) }));
-    pcol.addControl(mkLabel(t('Сыграно партий: %d', S.stat_games), { fontSize: fs(18) }));
-    pcol.addControl(mkLabel(t('Побед: %d', S.stat_wins), { fontSize: fs(18) }));
-    pcol.addControl(mkLabel(t('Поражений: %d', S.stat_losses), { fontSize: fs(18) }));
-    pcol.addControl(gapControl(8));
-    const cl = mkButton(t('Закрыть'), { fontSize: fs(17), height: 52, width: 200, theme: BUTTON_STYLE.green });
-    cl.onPointerUpObservable.add(close);
-    pcol.addControl(cl);
+    // Локальные и сетевые партии показаны раздельно, чтобы счётчики
+    // не смешивались: сетевые данные приходят с сервера.
+    openStatsOverlay(this.popups, { loadOnline: () => this.host.onlineStats() });
   }
 }
 

@@ -39,6 +39,7 @@ import {
   px,
 } from './uiskin';
 import { measureTextWidth } from './menu_screen';
+import { viewHeight, viewWidth } from './viewport';
 
 // Порт scripts/ui/online_lobby.gd: сетевое меню — единый экран с тремя
 // страницами (вход / комнаты / лобби комнаты), как в оригинале.
@@ -162,12 +163,9 @@ export class OnlineLobby {
   private pageRooms!: StackPanel;
   private pageLobby!: StackPanel;
 
-  private loginEdit!: InputText;
-  private passEdit!: InputText;
   private nickEdit!: InputText;
   private authNoteLab!: ReturnType<typeof mkLabel>;
   private loginBtn!: Button;
-  private registerBtn!: Button;
 
   private playBtn!: Button;
   private boardBtn!: Button;
@@ -236,8 +234,8 @@ export class OnlineLobby {
     this.stopTimers();
     root.clearControls();
 
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
+    const vw = viewWidth();
+    const vh = viewHeight();
     this.avail = Math.max(240, Math.min(vw - 28, 536));
 
     const bg = new Rectangle('onlBg');
@@ -348,7 +346,6 @@ export class OnlineLobby {
     const authed = Boolean(this.app.api.user);
     const dis = (b: Button, cond: boolean): void => { b.isEnabled = !cond; };
     dis(this.loginBtn, busy || !linked);
-    dis(this.registerBtn, busy || !linked);
     dis(this.refreshBtn, busy || this.roomsLoading || !linked);
     dis(this.createBtn, busy || !authed);
     dis(this.playBtn, busy || !authed);
@@ -374,20 +371,12 @@ export class OnlineLobby {
     page.isVisible = false;
 
     page.addControl(headerLabel(t('Вход'), fs(19)));
-    this.loginEdit = mkField(t('логин'));
-    page.addControl(this.loginEdit);
-    this.passEdit = mkField(t('пароль'), { secret: true });
-    page.addControl(this.passEdit);
-    page.addControl(headerLabel(t('Если аккаунта нет'), fs(15)));
     this.nickEdit = mkField(t('имя в игре'));
     page.addControl(this.nickEdit);
 
     this.loginBtn = accentButton(t('Войти'), BUTTON_STYLE.online, ROUND_H, fs(17));
-    this.loginBtn.onPointerUpObservable.add(() => void this.doLogin());
+    this.loginBtn.onPointerUpObservable.add(() => void this.doGuestLogin());
     page.addControl(this.loginBtn);
-    this.registerBtn = accentButton(t('Регистрация'), GREY_THEME, ROUND_H, fs(15));
-    this.registerBtn.onPointerUpObservable.add(() => void this.doRegister());
-    page.addControl(this.registerBtn);
 
     const an = mkNote();
     this.authNoteLab = an.lab;
@@ -564,17 +553,6 @@ export class OnlineLobby {
     this.pageNext.onPointerUpObservable.add(() => this.pageStep(1));
     this.pageRow.addControl(this.pageNext);
 
-    // --- выход из аккаунта
-    const logoutRow = hrow(8);
-    logoutRow.width = '100%';
-    logoutRow.height = px(SMALL_H);
-    page.addControl(logoutRow);
-    const out = greyButton(t('Выйти'), SMALL_H, fs(15),
-      Math.max(120, Math.round(measureTextWidth(t('Выйти'), fs(15))) + 30));
-    out.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
-    logoutRow.addControl(out);
-    out.onPointerUpObservable.add(() => void this.doLogout());
-
     return page;
   }
 
@@ -679,16 +657,15 @@ export class OnlineLobby {
 
   // =============================================================== вход
 
-  private async doLogin(): Promise<void> {
-    const login = this.loginEdit.text.trim();
-    const password = this.passEdit.text;
-    if (login === '' || password === '') {
-      setNote(this.authNoteLab, t('Заполните логин и пароль'), true);
+  private async doGuestLogin(): Promise<void> {
+    const nick = this.nickEdit.text.trim();
+    if (nick === '') {
+      setNote(this.authNoteLab, t('Введите ник'), true);
       return;
     }
     setNote(this.authNoteLab, t('Входим…'), false);
     try {
-      await this.app.api.login(login, password);
+      await this.app.api.guestLogin(nick);
       setNote(this.authNoteLab, t('Вход выполнен'), false);
       await this.gotoRooms();
     } catch (e) {
@@ -696,49 +673,25 @@ export class OnlineLobby {
     }
   }
 
-  private async doRegister(): Promise<void> {
-    const login = this.loginEdit.text.trim();
-    const password = this.passEdit.text;
-    const nick = this.nickEdit.text.trim();
-    if (login === '' || password === '' || nick === '') {
-      setNote(this.authNoteLab, t('Заполните логин, пароль и имя'), true);
-      return;
-    }
-    // Порог — как на сервере (accounts.js): минимум 6.
-    if (password.length < 6) {
-      setNote(this.authNoteLab, t('Пароль: минимум 6 символов'), true);
-      return;
-    }
-    setNote(this.authNoteLab, t('Создаём аккаунт…'), false);
-    try {
-      await this.app.api.register(login, password, nick);
-      setNote(this.authNoteLab, t('Аккаунт создан'), false);
-      await this.gotoRooms();
-    } catch (e) {
-      setNote(this.authNoteLab, t((e as Error).message) || t('Не удалось войти'), true);
-    }
-  }
-
-  private async doLogout(): Promise<void> {
-    try {
-      await this.app.api.logout();
-    } catch { /* fire and forget */ }
-    this.currentRoom = null;
-    this.loginEdit.text = '';
-    this.passEdit.text = '';
-    this.nickEdit.text = '';
-    setNote(this.authNoteLab, '', false);
-    this.setPage('auth');
-    this.updateButtons();
-  }
-
   // =============================================================== подключение
+
+  // Скрытый вход для вернувшегося игрока: логин/пароль сохранены в
+  // браузере — форма входа не показывается.
+  private async tryAutoLogin(): Promise<void> {
+    if (this.app.api.user || !this.app.api.hasSavedCredentials) return;
+    try {
+      await this.app.api.guestLogin(this.app.api.nick || '');
+    } catch {
+      // аккаунт не восстановился — показываем форму с именем
+    }
+  }
 
   // _enter-порт: связь уже есть — сразу по состоянию, иначе подключаемся.
   async enter(): Promise<void> {
     this.startTimers();
     this.updateStatus();
     if (this.app.api.isOpen) {
+      await this.tryAutoLogin();
       if (this.app.api.user) {
         if (this.currentRoom) {
           this.applyRoom(this.currentRoom);
@@ -756,9 +709,6 @@ export class OnlineLobby {
   }
 
   private fillAuthDefaults(): void {
-    // как в оригинале: запоминаем логин/пароль/ник и подставляем в форму
-    if (this.loginEdit.text === '') this.loginEdit.text = this.app.api.savedLogin;
-    if (this.passEdit.text === '') this.passEdit.text = this.app.api.savedPassword;
     if (this.nickEdit.text === '') this.nickEdit.text = this.app.api.nick;
   }
 
@@ -773,6 +723,7 @@ export class OnlineLobby {
     await this.app.waitForMenuConnection();
     if (this.app.api.isOpen) {
       this.updateStatus();
+      await this.tryAutoLogin();
       if (this.app.api.user) await this.gotoRooms();
       else {
         this.setPage('auth');
@@ -816,6 +767,7 @@ export class OnlineLobby {
       setNote(this.busyLab, lastErr === '' ? t('Нет связи с сервером') : t(lastErr), true);
       return;
     }
+    await this.tryAutoLogin();
     if (this.app.api.user) {
       await this.gotoRooms();
     } else {
@@ -1264,7 +1216,7 @@ export class OnlineLobby {
       bg: SKIN.panelDark,
       bgAlpha: 0.98,
       corner: 10,
-      width: Math.min(480, window.innerWidth - 32),
+      width: Math.min(480, viewWidth() - 32),
       height: 430,
     });
     overlay.addControl(panel.root);

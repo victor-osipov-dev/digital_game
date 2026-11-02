@@ -7,7 +7,7 @@ import { OfflineGame } from '../ui2/offline_game';
 import { OnlineLobby } from '../ui2/online_lobby';
 import { loadSettings } from '../core/settings';
 import { GameState } from '../core/game_state';
-import type { MenuHost, OfflineHost, ScreenName } from '../ui2/ports';
+import type { MenuHost, OfflineHost, OnlineStats, ScreenName } from '../ui2/ports';
 import { GameEnvelope, RoomLobbyView } from '../net/protocol';
 import { installGlobalTouchGuard } from '../ui2/uiskin';
 
@@ -31,7 +31,6 @@ export class App implements MenuHost, OfflineHost {
     this.menu = new MenuScreen(this);
     this.online = new OnlineLobby(this);
     this.wireApi();
-    window.addEventListener('resize', () => this.relayout());
     this.show('menu');
     this.startMenuConnection();
   }
@@ -80,6 +79,14 @@ export class App implements MenuHost, OfflineHost {
   }
 
   relayout(): void {
+    if (this.currentName === 'menu') {
+      // Меню строится в пикселях под конкретный размер экрана. При resize
+      // и особенно при открытии игры на весь экран его нужно пересобрать,
+      // иначе оно остаётся в габаритах прежнего маленького окна.
+      this.root.clearControls();
+      this.menu.build(this.root);
+      return;
+    }
     if (this.currentName === 'offline' && this.offline) this.offline.relayout();
     if (this.currentName === 'online') this.restoreOnline();
   }
@@ -217,6 +224,26 @@ export class App implements MenuHost, OfflineHost {
   // pending_room для баннера главного меню
   pendingRoom(): RoomLobbyView | null {
     return this.api.pendingRoom;
+  }
+
+  // Сетевая статистика для окна «Статистика». Источник — серверная
+  // таблица лидеров; локальные счётчики её не дублируют.
+  async onlineStats(): Promise<OnlineStats | null> {
+    const cached = this.api.user;
+    if (this.api.session.isOpen) {
+      try {
+        const res = await this.api.boardList();
+        if (res.me) {
+          return { games: res.me.games, wins: res.me.wins, rank: res.me.rank };
+        }
+      } catch {
+        // нет входа/связи — покажем кэш из auth, если он есть
+      }
+    }
+    if (cached && typeof cached.games === 'number') {
+      return { games: cached.games, wins: cached.wins ?? 0 };
+    }
+    return null;
   }
 
   onReturnToRoom(): void {

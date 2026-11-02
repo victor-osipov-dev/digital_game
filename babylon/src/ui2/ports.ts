@@ -1,3 +1,11 @@
+// Статистика сетевых партий приходит с сервера (таблица лидеров),
+// поэтому локальные счётчики и сетевые не смешиваются.
+export interface OnlineStats {
+  games: number;
+  wins: number;
+  rank?: number;
+}
+
 export interface MenuHost {
   rebuild(): void;
   onStart(): void;
@@ -6,6 +14,8 @@ export interface MenuHost {
   pendingRoom(): import('../net/protocol').RoomLobbyView | null;
   onReturnToRoom(): void;
   onDropRoom(): void;
+  // null — нет связи/входа или сервер не вернул данные
+  onlineStats(): Promise<OnlineStats | null>;
 }
 
 export interface OfflineHost {

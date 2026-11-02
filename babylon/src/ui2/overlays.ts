@@ -10,7 +10,6 @@ import {
   dropdownRow,
   enableSmoothScroll,
   estimateWrappedTextHeight,
-  gapControl,
   mkButton,
   mkLabel,
   modalOverlay,
@@ -18,6 +17,8 @@ import {
   softPanel,
   px,
 } from './uiskin';
+import { viewHeight, viewWidth } from './viewport';
+import type { OnlineStats } from './ports';
 
 // Полноэкранные модалки, общие для меню и игры: правила и настройки.
 
@@ -28,8 +29,8 @@ export function openRulesOverlay(parent: Host, _onClose: () => void): void {
 }
 
 function _openRules(host: import('@babylonjs/gui').Container): void {
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
+  const vw = viewWidth();
+  const vh = viewHeight();
   const panelWidth = Math.min(vw - 24, 560);
   const panelHeight = Math.min(vh - 24, 700);
   const { overlay, close } = modalOverlay(host, 'rulesOverlay', { zIndex: 800 });
@@ -87,40 +88,127 @@ function rulesPlain(): string {
 
 export function openStatsOverlay(
   parent: Host,
+  opts: { loadOnline?: () => Promise<OnlineStats | null> } = {},
 ): void {
-  const vw = window.innerWidth;
+  const vw = viewWidth();
+  const vh = viewHeight();
+  const panelWidth = Math.min(vw - 24, 420);
+  const panelHeight = Math.min(vh - 24, 560);
+  const contentWidth = Math.max(120, panelWidth - 68);
   const host = parent as import('@babylonjs/gui').Container;
-  const { overlay, close: closeOv } = modalOverlay(host, 'statsOverlay', { zIndex: 820 });
-  const vwq = vw - 40;
+  const { overlay, close } = modalOverlay(host, 'statsOverlay', { zIndex: 820 });
+  let closed = false;
+  const closeOv = (): void => {
+    closed = true;
+    close();
+  };
   const panel = softPanel({
     bg: SKIN.panelDark,
     border: '#ffffff40',
     thickness: 2,
     corner: 14,
-    width: Math.min(vwq, 360),
-    height: 280,
+    width: panelWidth,
+    height: panelHeight,
   });
-  panel.root.horizontalAlignment = 2;
-  panel.root.verticalAlignment = 2;
   overlay.addControl(panel.root);
   const pcol = new StackPanel('pcol');
   pcol.isVertical = true;
   pcol.spacing = 10;
   pcol.width = '100%';
   pcol.height = '100%';
+  pcol.paddingLeft = px(16);
+  pcol.paddingRight = px(16);
+  pcol.paddingTop = px(12);
+  pcol.paddingBottom = px(12);
   panel.root.addControl(pcol);
-  pcol.addControl(gapControl(18));
-  pcol.addControl(mkLabel(t('Статистика'), { color: SKIN.gold, fontSize: fs(22) }));
+  const titleHeight = Math.ceil(fs(22) * 1.45);
+  const closeHeight = Math.max(48, Math.ceil(fs(16) * 1.35) + 16);
+  pcol.addControl(mkLabel(t('Статистика'), { color: SKIN.gold, fontSize: fs(22), height: titleHeight }));
+  const scroll = new ScrollViewer('statsScroll');
+  scroll.thickness = 0;
+  scroll.width = '100%';
+  scroll.height = px(Math.max(80, panelHeight - titleHeight - closeHeight - 56));
+  enableSmoothScroll(scroll);
+  pcol.addControl(scroll);
+
+  const col = new StackPanel('statsCol');
+  col.isVertical = true;
+  col.width = '100%';
+  col.spacing = 6;
+  scroll.addControl(col);
+
+  const lineFont = fs(17);
+  const lineHeightFor = (text: string, size: number): number =>
+    Math.max(Math.ceil(size * 1.45), estimateWrappedTextHeight(text, contentWidth, size));
+  const addLine = (
+    text: string,
+    color = SKIN.text,
+    size = lineFont,
+  ): ReturnType<typeof mkLabel> => {
+    const lab = mkLabel(text, {
+      fontSize: size,
+      color,
+      width: contentWidth,
+      height: lineHeightFor(text, size),
+      align: 'left',
+      hAlign: 'left',
+      vAlign: 'top',
+      noWrap: false,
+    });
+    col.addControl(lab);
+    return lab;
+  };
+  const setLine = (lab: ReturnType<typeof mkLabel>, text: string, size = lineFont): void => {
+    lab.text = text;
+    lab.height = px(lineHeightFor(text, size));
+  };
+  // Единый блок: локальные и сетевые партии объединены в общие числа.
   const S = loadSettings();
-  pcol.addControl(mkLabel(t('Сыграно партий: %d', S.stat_games), { fontSize: fs(18) }));
-  pcol.addControl(mkLabel(t('Побед: %d', S.stat_wins), { fontSize: fs(18) }));
-  pcol.addControl(mkLabel(t('Поражений: %d', S.stat_losses), { fontSize: fs(18) }));
-  pcol.addControl(gapControl(8));
-  const close = mkButton(t('Закрыть'), { fontSize: fs(16), height: 48, width: 180, theme: BUTTON_STYLE.green });
-  close.onPointerUpObservable.add(() => {
-    closeOv();
+  const gamesLab = addLine(t('Сыграно партий: %d', S.stat_games));
+  const winsLab = addLine(t('Побед: %d', S.stat_wins));
+  const lossesLab = addLine(t('Поражений: %d', S.stat_losses));
+  const unfinished = Math.max(0, S.stat_games - S.stat_wins - S.stat_losses);
+  if (unfinished > 0) addLine(t('Незавершённых: %d', unfinished), '#ffffff8c', fs(15));
+  const noteLab = addLine(t('Загружаем статистику сети…'), '#ffffff8c', fs(14));
+
+  const applyMerged = (st: OnlineStats | null): void => {
+    const games = S.stat_games + (st ? st.games : 0);
+    const wins = S.stat_wins + (st ? st.wins : 0);
+    const losses = S.stat_losses + (st ? Math.max(0, st.games - st.wins) : 0);
+    setLine(gamesLab, t('Сыграно партий: %d', games));
+    setLine(winsLab, t('Побед: %d', wins));
+    setLine(lossesLab, t('Поражений: %d', losses));
+    if (st && st.rank !== undefined) {
+      setLine(noteLab, t('Место в таблице: %d', st.rank), fs(14));
+      noteLab.isVisible = true;
+    } else if (st) {
+      noteLab.isVisible = false;
+    } else {
+      setLine(noteLab, t('Нет данных о сетевых партиях'), fs(14));
+      noteLab.isVisible = true;
+    }
+  };
+
+  if (opts.loadOnline) {
+    void opts.loadOnline().then((st) => {
+      if (closed) return;
+      applyMerged(st);
+    }).catch(() => {
+      if (closed) return;
+      applyMerged(null);
+    });
+  } else {
+    applyMerged(null);
+  }
+
+  const closeBtn = mkButton(t('Закрыть'), {
+    fontSize: fs(16),
+    height: closeHeight,
+    width: Math.min(200, contentWidth),
+    theme: BUTTON_STYLE.green,
   });
-  pcol.addControl(close);
+  closeBtn.onPointerUpObservable.add(closeOv);
+  pcol.addControl(closeBtn);
 }
 
 export function openSettingsOverlay(
@@ -129,8 +217,8 @@ export function openSettingsOverlay(
   onDone: () => void,
   onRebuild: () => void,
 ): void {
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
+  const vw = viewWidth();
+  const vh = viewHeight();
   const panelWidth = Math.min(vw - 24, 440);
   const panelHeight = Math.min(vh - 24, 560);
   const contentWidth = panelWidth - 36;

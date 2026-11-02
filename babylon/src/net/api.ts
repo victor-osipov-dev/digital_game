@@ -107,6 +107,39 @@ export class Api {
     return localStorage.getItem(PENDING_SERVER_KEY) ?? '';
   }
 
+  get hasSavedCredentials(): boolean {
+    return this.savedLogin !== '' && this.savedPassword !== '';
+  }
+
+  // Единый вход: у вернувшегося игрока есть сохранённые логин/пароль —
+  // входим молча. Новому игроку логин и пароль генерируем сами и
+  // сохраняем в браузере: этап входа больше не нужен.
+  async guestLogin(nick: string): Promise<AuthOkMsg> {
+    if (this.hasSavedCredentials) {
+      try {
+        return await this.login(this.savedLogin, this.savedPassword);
+      } catch (e) {
+        if (e instanceof AuthError) {
+          // аккаунт удалён/пароль изменён — создаём свежий под новым логином
+          localStorage.removeItem(LOGIN_KEY);
+          localStorage.removeItem(PASS_KEY);
+        } else {
+          // сетевая ошибка: credentials не трогаем, пробуем заново
+          throw e;
+        }
+      }
+    }
+    let lastErr: unknown = null;
+    for (let i = 0; i < 3; i++) {
+      try {
+        return await this.register(genLogin(), genPassword(), nick);
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    throw lastErr instanceof Error ? lastErr : new AuthError('Ошибка регистрации');
+  }
+
   get isOpen(): boolean {
     return this.session.isOpen;
   }
@@ -436,6 +469,22 @@ function roomReply(pkt: ServerPacket): RoomLobbyEnvelope {
 
 export function applyBootstrapLanguage(): void {
   loadSettings();
+}
+
+// Случайный логин: латиница/цифры, 3–20 символов (accounts.js LOGIN_RE).
+function genLogin(): string {
+  const abc = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  let out = 'p';
+  for (let i = 0; i < 10; i++) out += abc[Math.floor(Math.random() * abc.length)];
+  return out;
+}
+
+// Случайный пароль: минимум 6, максимум 200 символов (accounts.js checkPassword).
+function genPassword(): string {
+  const abc = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let out = '';
+  for (let i = 0; i < 16; i++) out += abc[Math.floor(Math.random() * abc.length)];
+  return out;
 }
 
 // Гонка с таймаутом: быстрый отказ, как probe серверов (servers.gd:140-231).

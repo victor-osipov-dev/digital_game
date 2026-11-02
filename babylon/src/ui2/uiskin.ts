@@ -76,6 +76,29 @@ export function abortTouchGestures(): void {
   }
 }
 
+// Открытые модальные слои (правила, статистика, настройки, dropdown-списки).
+// Жесты скролла слушают document в capture-фазе, поэтому при открытой
+// модалке палец попадает в прямоугольники и её скроллера, и скроллера на
+// заднем фоне — фон «прокручивался» бы одновременно. Скроллер, который не
+// принадлежит открытому слою, жест игнорирует.
+const modalLayers = new Set<Container>();
+function activeModalLayers(): Container[] {
+  for (const l of [...modalLayers]) if (!l.parent) modalLayers.delete(l);
+  return [...modalLayers];
+}
+function isAncestorOf(anc: Control, node: Control): boolean {
+  let c: Control | null = node;
+  while (c) {
+    if (c === anc) return true;
+    c = (c as unknown as { parent?: Control | null }).parent ?? null;
+  }
+  return false;
+}
+export function registerModalLayer(layer: Container): () => void {
+  modalLayers.add(layer);
+  return () => { modalLayers.delete(layer); };
+}
+
 // Единый инерционный скролл для мыши и touch. Babylon GUI не даёт нативной
 // кинетики на мобильном, поэтому работаем непосредственно с полосой прокрутки.
 export function enableSmoothScroll(sc: ScrollViewer, axis: ScrollAxis = 'vertical', opts: SmoothScrollOpts = {}): void {
@@ -94,6 +117,38 @@ export function enableSmoothScroll(sc: ScrollViewer, axis: ScrollAxis = 'vertica
     bar.value = next;
     bar.onValueChangedObservable?.notifyObservers(next);
   };
+  // Доступная для прокрутки область в пикселях: высота содержимого минус
+  // высота окна просмотра. Перевод пунктов бара (0…1) в реальные пиксели
+  // зависит от неё. Раньше шаг был фиксированной долей бара, и на разных
+  // размерах экрана один и тот же оборот колеса проезжал разные расстояния.
+  // Теперь скорость привязана к пикселям и одинакова на любом экране.
+  const scrollRangePx = (): number => {
+    const sv = sc as unknown as {
+      _window?: { _currentMeasure?: { height: number; width: number } };
+      _clientHeight?: number;
+      _clientWidth?: number;
+    };
+    const host = (sc as unknown as { host?: { idealRatio?: number } }).host;
+    const ratio = host?.idealRatio ?? 1;
+    const content = axis === 'vertical'
+      ? sv._window?._currentMeasure?.height
+      : sv._window?._currentMeasure?.width;
+    const view = axis === 'vertical' ? sv._clientHeight : sv._clientWidth;
+    if (typeof content !== 'number' || typeof view !== 'number'
+      || !Number.isFinite(content) || !Number.isFinite(view)) return 0;
+    return Math.max(0, (content - view) / ratio);
+  };
+  const valueFromPx = (px: number): number => {
+    const range = scrollRangePx();
+    return range > 0 ? px / range : 0;
+  };
+  // Потолок скорости инерции свайпов, пикселей за кадр (не зависит от экрана).
+  const MAX_VELOCITY_PX = 44;
+  // Один «щелчок» колеса — фиксированные 56px пути на любом экране.
+  // Прокрутка идёт коротким твином (≈7 кадров), без инерции, чтобы
+  // результат был одинаковым при любом размере окна.
+  const WHEEL_STEP_PX = 56;
+  const WHEEL_TWEEN_FRAMES = 7;
   const animate = (): void => {
     if (Math.abs(velocity) < 0.0002) {
       raf = 0;
@@ -106,6 +161,38 @@ export function enableSmoothScroll(sc: ScrollViewer, axis: ScrollAxis = 'vertica
   const startInertia = (): void => {
     if (raf === 0 && Math.abs(velocity) >= 0.0002) raf = requestAnimationFrame(animate);
   };
+  // Короткий твин колеса: из текущего значения в цель за фиксированное
+  // число кадров. У колеса нет инерции — иначе итоговый путь зависел бы
+  // от fps и размера экрана.
+  let wheelRaf = 0;
+  let wheelFrom = 0;
+  let wheelTo = 0;
+  let wheelT = 0;
+  const wheelTick = (): void => {
+    wheelT += 1;
+    const k = Math.min(1, wheelT / WHEEL_TWEEN_FRAMES);
+    const eased = 1 - Math.pow(1 - k, 3);
+    setValue(wheelFrom + (wheelTo - wheelFrom) * eased);
+    if (k < 1) wheelRaf = requestAnimationFrame(wheelTick);
+    else wheelRaf = 0;
+  };
+  const wheelStep = (sign: number): void => {
+    const step = valueFromPx(WHEEL_STEP_PX);
+    if (step === 0) return;
+    if (wheelRaf !== 0) {
+      cancelAnimationFrame(wheelRaf);
+      wheelRaf = 0;
+    }
+    if (raf !== 0) {
+      cancelAnimationFrame(raf);
+      raf = 0;
+      velocity = 0;
+    }
+    wheelFrom = bar.value;
+    wheelTo = Math.max(0, Math.min(1, wheelFrom + sign * step));
+    wheelT = 0;
+    wheelRaf = requestAnimationFrame(wheelTick);
+  };
   sc.onWheelObservable.add((pi) => {
     const raw = axis === 'vertical'
       ? Number((pi as unknown as { y?: number; event?: { deltaY?: number } }).y
@@ -114,9 +201,7 @@ export function enableSmoothScroll(sc: ScrollViewer, axis: ScrollAxis = 'vertica
         ?? (pi as unknown as { event?: { deltaX?: number; deltaY?: number } }).event?.deltaX
         ?? (pi as unknown as { event?: { deltaY?: number } }).event?.deltaY ?? 0);
     if (!Number.isFinite(raw) || raw === 0) return;
-    velocity += Math.sign(raw) * 0.045;
-    velocity = Math.max(-0.32, Math.min(0.32, velocity));
-    startInertia();
+    wheelStep(Math.sign(raw));
   });
   // Дочерние элементы ScrollViewer (текст, фишки, кнопки) перехватывают
   // Babylon-события. Для свайпа слушаем canvas в capture-фазе и проверяем
@@ -126,6 +211,7 @@ export function enableSmoothScroll(sc: ScrollViewer, axis: ScrollAxis = 'vertica
   const disposers: Array<() => void> = [];
   sc.onDisposeObservable.add(() => {
     controller.abort();
+    if (wheelRaf !== 0) cancelAnimationFrame(wheelRaf);
     for (const d of disposers) {
       try { d(); } catch { /* уже снят */ }
     }
@@ -200,6 +286,11 @@ export function enableSmoothScroll(sc: ScrollViewer, axis: ScrollAxis = 'vertica
   const axisPosition = (p: { x: number; y: number }): number => axis === 'vertical' ? p.y : p.x;
   const down = (event: PointerEvent): void => {
     if (event.pointerType !== 'touch') return;
+    // Модалка открыта, а этот скроллер не внутри неё — жест игнорируем,
+    // иначе палец прокручивал бы и фон.
+    for (const layer of activeModalLayers()) {
+      if (layer.isVisible && !isAncestorOf(layer, sc)) return;
+    }
     const p = position(event);
     if (!p || !canStartGesture(p)) return;
     pointerId = event.pointerId;
@@ -216,11 +307,15 @@ export function enableSmoothScroll(sc: ScrollViewer, axis: ScrollAxis = 'vertica
     const now = performance.now();
     const nextPos = axisPosition(p);
     const delta = lastPos - nextPos;
-    const extent = Math.max(120, axis === 'vertical' ? sc.heightInPixels : sc.widthInPixels);
-    const change = delta / extent;
+    // Палец ведёт содержимое 1:1: сдвиг в пикселях напрямую переводится
+    // в пункты бара через актуальный диапазон прокрутки. Раньше диапазон
+    // подменялся высотой окна, и на больших экранах тот же свайп ехал
+    // медленнее.
+    const change = valueFromPx(delta);
     setValue(bar.value + change);
     const elapsed = Math.max(8, now - lastTime);
-    velocity = Math.max(-0.32, Math.min(0.32, change * (16 / elapsed)));
+    const velPx = Math.max(-MAX_VELOCITY_PX, Math.min(MAX_VELOCITY_PX, delta * (16 / elapsed)));
+    velocity = valueFromPx(velPx);
     if (Math.abs(nextPos - lastPos) > 5) moved = true;
     lastPos = nextPos;
     lastTime = now;
@@ -303,6 +398,36 @@ export interface ButtonOpts {
   corner?: number;
 }
 
+// Реальная ширина текста при заданном размере шрифта (Arial).
+function textWidthPx(text: string, size: number): number {
+  const cv = document.createElement('canvas');
+  const ctx = cv.getContext('2d');
+  if (!ctx) return text.length * size * 0.58;
+  ctx.font = `${size}px Arial, sans-serif`;
+  return ctx.measureText(text).width;
+}
+
+// Если палец/мышь отжались ВНЕ кнопки, Babylon не шлёт ей pointerup, и она
+// остаётся в «зажатом» виде. Глобальный слушатель сбрасывает фон таких
+// кнопок при любом pointerup.
+const pressThemes = new WeakMap<Button, { base: string; press: string }>();
+const allButtons = new Set<Button>();
+let buttonResetInstalled = false;
+function installButtonReset(): void {
+  if (buttonResetInstalled) return;
+  buttonResetInstalled = true;
+  const reset = (): void => {
+    for (const b of allButtons) {
+      const theme = pressThemes.get(b);
+      if (theme && b.background === theme.press) b.background = theme.base;
+    }
+  };
+  // pointerup — обычное отжатие, pointercancel — прерванный жест (например,
+  // свайп или отпускание вне канваса): в обоих случаях сбрасываем press.
+  document.addEventListener('pointerup', reset, { capture: true });
+  document.addEventListener('pointercancel', reset, { capture: true });
+}
+
 export function mkButton(label: string, opts: ButtonOpts = {}): Button {
   const th = opts.theme ?? BUTTON_STYLE.deck;
   const b = Button.CreateSimpleButton('b', label);
@@ -324,11 +449,14 @@ export function mkButton(label: string, opts: ButtonOpts = {}): Button {
   b.fontFamily = FONT;
   const wantedFont = opts.fontSize ?? 16;
   // У кнопок с фиксированной шириной подпись важнее масштаба: уменьшаем
-  // только настолько, чтобы она целиком оставалась доступной для нажатия.
-  const fittingFont = opts.width === undefined
-    ? wantedFont
-    : Math.max(12, Math.floor((opts.width - 20) / Math.max(1, label.length * 0.58)));
-  b.fontSize = Math.min(wantedFont, fittingFont);
+  // шрифт по РЕАЛЬНОЙ ширине текста (а не по числу символов), чтобы он
+  // целиком помещался и не резался по бокам.
+  let fittingFont = wantedFont;
+  if (opts.width !== undefined) {
+    const avail = Math.max(10, opts.width - 20);
+    while (fittingFont > 10 && textWidthPx(label, fittingFont) > avail) fittingFont -= 1;
+  }
+  b.fontSize = fittingFont;
   b.hoverCursor = 'pointer';
   b.onPointerEnterObservable.add(() => {
     if (!b.isEnabled) return;
@@ -340,12 +468,30 @@ export function mkButton(label: string, opts: ButtonOpts = {}): Button {
   b.onPointerDownObservable.add(() => { b.background = th.press; });
   if (opts.onClick !== undefined) b.onPointerUpObservable.add(opts.onClick);
   b.onPointerUpObservable.add(() => { b.background = th.hover; });
+  pressThemes.set(b, { base: th.bg, press: th.press });
+  allButtons.add(b);
+  installButtonReset();
   return b;
 }
 
 export function setButtonLabel(b: Button, s: string): void {
   const tb = b.children.find((c) => c instanceof TextBlock) as TextBlock | undefined;
-  if (tb) tb.text = s;
+  if (!tb) return;
+  tb.text = s;
+  // Кнопки с фиксированной шириной: шрифт подбираем под НОВЫЙ текст,
+  // чтобы «Продолжить» и другие динамические подписи не резались по
+  // бокам при крупном масштабе.
+  const w = b.widthInPixels;
+  if (w > 0) {
+    const wanted = b.fontSizeInPixels || 16;
+    let f = wanted;
+    const avail = Math.max(10, w - 20);
+    while (f > 10 && textWidthPx(s, f) > avail) f -= 1;
+    if (f !== wanted) {
+      b.fontSize = f;
+      tb.fontSize = f;
+    }
+  }
 }
 
 // Отложенная активация: контрол (чекбокс/поле ввода) НЕ реагирует на
@@ -358,18 +504,63 @@ export function deferTapActivation(ctrl: Control, activate: () => void): void {
 
 // Поле ввода фокусируется только на «чистом» тапе (отжатие без движения),
 // а не при зажатии — зажатие позволяет скроллить без открытия клавиатуры.
+// Невидимый DOM-input для вызова нативной клавиатуры на телефонах:
+// Babylon рисует поле на канвасе и сам клавиатуру не поднимает.
+let domProxyEl: HTMLInputElement | null = null;
+let domProxyTarget: InputText | null = null;
+function onProxyInput(): void {
+  if (!domProxyTarget || !domProxyEl) return;
+  domProxyTarget.text = domProxyEl.value;
+}
+function ensureDomProxy(): HTMLInputElement {
+  if (domProxyEl && domProxyEl.isConnected) return domProxyEl;
+  const el = document.createElement('input');
+  el.id = 'dg-input-proxy';
+  el.setAttribute('autocapitalize', 'off');
+  el.setAttribute('autocomplete', 'off');
+  el.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0.01;'
+    + 'border:0;padding:0;margin:0;z-index:2147483647;pointer-events:none;background:transparent;';
+  document.body.appendChild(el);
+  domProxyEl = el;
+  return el;
+}
+
 export function focusInputOnTap(input: InputText): void {
   // Babylon assigns focus from pointerdown for tabIndex controls. Defer it
   // until a clean pointerup so a held press can become a scroll gesture.
   // Resolve _host at activation time; this helper runs before tree insertion.
   input.tabIndex = -1;
   input.isReadOnly = true;
+  // Отключаем нативный prompt браузера («Please enter text:»), который
+  // Babylon показывает при фокусе с touch.
+  (input as unknown as { disableMobilePrompt?: boolean }).disableMobilePrompt = true;
   deferTapActivation(input, () => {
     input.isReadOnly = false;
     const host = (input as unknown as { _host?: { moveFocusToControl?: (c: Control) => void } })._host;
     host?.moveFocusToControl?.(input);
+    // На мобильных поднимаем нативную клавиатуру: фокусируем скрытый
+    // DOM-input и зеркалим введённый текст в поле Babylon.
+    const el = ensureDomProxy();
+    el.value = input.text ?? '';
+    domProxyTarget = input;
+    el.removeEventListener('input', onProxyInput);
+    el.addEventListener('input', onProxyInput);
+    try {
+      el.focus({ preventScroll: true });
+    } catch {
+      el.focus();
+    }
   });
-  input.onBlurObservable.add(() => { input.isReadOnly = true; });
+  input.onBlurObservable.add(() => {
+    input.isReadOnly = true;
+    if (domProxyTarget === input) {
+      if (domProxyEl) {
+        domProxyEl.removeEventListener('input', onProxyInput);
+        domProxyEl.blur();
+      }
+      domProxyTarget = null;
+    }
+  });
 }
 
 // Глобальный touch-guard: если палец начал на элементе UI (кнопка, поле,
@@ -660,24 +851,41 @@ export interface DropdownCtx {
 export function dropdownRow(
   label: string,
   ctx: DropdownCtx,
-  opts: { height?: number; fontSize?: number; btnWidth?: number; lblWidth?: number },
+  opts: { height?: number; fontSize?: number; btnWidth?: number; lblWidth?: number; stacked?: boolean },
 ): DropdownHandle {
   const height = opts.height ?? 42;
   const fontSize = opts.fontSize ?? 16;
   const row = new StackPanel('dro');
-  row.isVertical = false;
-  row.height = px(height);
-  row.spacing = label ? 10 : 0;
-  row.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-  const lbl = mkLabel(label, { fontSize, noWrap: true, height, hAlign: 'left' });
-  if (!label) lbl.width = px(0);
-  else if (opts.lblWidth !== undefined) lbl.width = px(opts.lblWidth);
-  else lbl.resizeToFit = true;
+  row.isVertical = !!opts.stacked;
+  if (opts.stacked) {
+    // Узкий экран: подпись сверху, кнопка под ней — иначе ряд шире
+    // доступного места и уезжает за край модалки/меню.
+    row.width = '100%';
+    row.height = px(height * 2 + 4);
+    row.spacing = 4;
+  } else {
+    row.height = px(height);
+    row.spacing = label ? 10 : 0;
+    row.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+  }
+  // Подпись всегда прижата к левому краю своего места: раньше текст
+  // центрировался внутри фиксированной ширины метки и ряды «плясали».
+  const lbl = mkLabel(label, { fontSize, noWrap: true, height, hAlign: 'left', align: 'left' });
+  if (!label) {
+    lbl.width = px(0);
+  } else if (opts.stacked) {
+    lbl.width = '100%';
+  } else if (opts.lblWidth !== undefined) {
+    lbl.width = px(opts.lblWidth);
+  } else {
+    lbl.resizeToFit = true;
+  }
   let items: string[] = [];
   let cur = -1;
   let pick: (i: number) => void = () => {};
   const btn = mkButton('', { height, fontSize, theme: BUTTON_STYLE.deck });
   btn.width = px(opts.btnWidth ?? Math.round(height * 2.8));
+  if (opts.stacked) btn.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
   row.addControl(lbl);
   row.addControl(btn);
   btn.onPointerClickObservable.add(() => {
@@ -715,10 +923,12 @@ export function popupList(
   catcher.isPointerBlocker = true;
   catcher.zIndex = 1000;
   let closed = false;
+  const unregister = registerModalLayer(catcher);
   const closePopup = (): void => {
     if (closed) return;
     closed = true;
     rootOverlay.removeControl(catcher);
+    unregister();
     window.removeEventListener('wheel', onWheelClose);
     window.removeEventListener('keydown', onKeyClose);
   };
@@ -798,6 +1008,13 @@ export function modalOverlay(
   dim.height = '100%';
   dim.isPointerBlocker = true;
   overlay.addControl(dim);
+  const unregister = registerModalLayer(overlay);
   host.addControl(overlay);
-  return { overlay, close: () => host.removeControl(overlay) };
+  return {
+    overlay,
+    close: () => {
+      host.removeControl(overlay);
+      unregister();
+    },
+  };
 }

@@ -242,10 +242,26 @@ export class TileFigure {
       // Пока фишка летит, она скрыта (alpha 0) — «галочку» везёт призрак,
       // поэтому на месте не показываем её раньше карточки.
       const sc = scrollRectOf(this.root);
-      badge.isVisible = this.root.alpha > 0.05 && (!sc || (
+      let vis = this.root.alpha > 0.05 && (!sc || (
         rect.x - 12 < sc.x + sc.w && rect.x + rect.w + 12 > sc.x
         && rect.y - 12 < sc.y + sc.h && rect.y + rect.h + 12 > sc.y
       ));
+      if (vis && sc) {
+        // Быстрое растворение: галочка гаснет буквально за ~5px до
+        // границы (верх стола / верхняя панель), без плавного «хвоста».
+        const fade = 6;
+        const chromeBottom = 56; // верхний отступ 10 + панель 46
+        let a = 1;
+        const overChrome = chromeBottom - rect.y;
+        if (overChrome > 0) a = Math.min(a, Math.max(0, 1 - overChrome / fade));
+        const underTop = sc.y - rect.y;
+        if (underTop > 0) a = Math.min(a, Math.max(0, 1 - underTop / fade));
+        badge.alpha = a;
+        vis = a > 0.03;
+      } else if (badge.alpha !== 1) {
+        badge.alpha = 1;
+      }
+      badge.isVisible = vis;
       this.badgeRaf = window.requestAnimationFrame(tick);
     };
     this.badgeRaf = window.requestAnimationFrame(tick);
