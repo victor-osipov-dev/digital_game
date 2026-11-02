@@ -41,6 +41,7 @@ import {
   type ButtonTheme,
 } from './uiskin';
 import { openRulesOverlay, openSettingsOverlay } from './overlays';
+import { platform, withInterstitial } from '../platform';
 import { measureTextWidth } from './menu_screen';
 import { viewHeight, viewWidth } from './viewport';
 import type { OfflineHost } from './ports';
@@ -146,6 +147,9 @@ export class OfflineGame {
   private deckBtn!: Button;
   private saveBtn!: Button;
   private hintBtn!: Button;
+  // Значок «AD» на кнопке подсказки: виден, когда бесплатная подсказка
+  // использована и следующую можно получить только за просмотр рекламы.
+  private hintAdBadge!: Rectangle;
   private timerLab!: TextBlock;
   private allTopActionButtons: Button[] = [];
   private hiddenTopActionNames: string[] = [];
@@ -321,6 +325,27 @@ export class OfflineGame {
     this.restoreBtn = restore;
     const hint = mkTop(t('Подск.'), () => this.onHint());
     this.hintBtn = hint;
+    // Бейдж «AD» в правом верхнем углу кнопки подсказки.
+    const badge = new Rectangle('hintAdBadge');
+    badge.width = px(30);
+    badge.height = px(16);
+    badge.cornerRadius = 5;
+    badge.background = '#FFC107';
+    badge.color = '#00000000';
+    badge.thickness = 0;
+    badge.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
+    badge.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    badge.isPointerBlocker = false;
+    badge.isHitTestVisible = false;
+    const badgeText = new TextBlock('hintAdText', 'AD');
+    badgeText.color = '#1A1A1A';
+    badgeText.fontSize = 11;
+    badgeText.fontFamily = 'Arial, sans-serif';
+    badgeText.isHitTestVisible = false;
+    badge.addControl(badgeText);
+    badge.isVisible = false;
+    hint.addControl(badge);
+    this.hintAdBadge = badge;
     const help = mkTop('?', () => this.showRulesOverlay());
     const settings = mkTop(t('Настр.'), () => this.showSettingsOverlay());
     const menu = mkTop(t('Меню'), () => {
@@ -331,7 +356,7 @@ export class OfflineGame {
       }
       this.askConfirm(t('Выход в меню'), t('Выйти в главное меню?'), t('Выйти'), () => {
         this.running = false;
-        this.host.toMenu();
+        withInterstitial(() => this.host.toMenu());
       });
     });
     save.name = 'topSave';
@@ -709,6 +734,9 @@ export class OfflineGame {
     this.build(this.boardRoot ?? this.host.screenRoot());
     this.refresh();
     this.checkPassOrBot(true);
+    // Партия началась (локальная и сетевая через applyOnlineView) —
+    // разметка геймплея для площадок.
+    platform.gameplayStart();
   }
 
   // Локальная статистика ведётся только для «один человек против ботов».
@@ -1449,6 +1477,7 @@ export class OfflineGame {
 
   showWin(): void {
     this.clearOverlays();
+    platform.gameplayStop();
     this.running = false;
     this.stopTimers();
     const { overlay } = modalOverlay(this.popups, 'win', { alpha: 0.9, zIndex: 850 });
@@ -1485,11 +1514,13 @@ export class OfflineGame {
     }
     const again = mkButton(t('Заново'), { height: 54, width: 200, fontSize: fs(18), theme: BUTTON_STYLE.green });
     again.onPointerUpObservable.clear();
-    again.onPointerUpObservable.add(() => this.host.replay());
+    // Новая партия — логическая пауза: сначала interstitial площадки,
+    // затем запуск (действие выполняется всегда, даже без рекламы).
+    again.onPointerUpObservable.add(() => withInterstitial(() => this.host.replay()));
     col.addControl(again);
     const back = mkButton(t('В меню'), { height: 46, width: 200, fontSize: fs(16), theme: BUTTON_STYLE.blueOnline });
     back.onPointerUpObservable.clear();
-    back.onPointerUpObservable.add(() => this.host.toMenu());
+    back.onPointerUpObservable.add(() => withInterstitial(() => this.host.toMenu()));
     col.addControl(back);
   }
 
@@ -2008,7 +2039,12 @@ export class OfflineGame {
     this.setBtnEnabled(this.undoBtn, !locked && (placed || this.state.turn_dirty));
     this.setBtnEnabled(this.saveBtn, !locked && placed);
     this.setBtnEnabled(this.restoreBtn, !locked && this.state.checkpoints.length > 0);
-    this.setBtnEnabled(this.hintBtn, !locked && !this.hintsUsed.has(this.state.current));
+    // Подсказка: на площадках — всегда за рекламу (кнопка активна, горит
+    // значок «AD»); на своём сайте — одна бесплатная на игрока за партию.
+    const needAd = platform.supportsRewarded;
+    const hintUsed = this.hintsUsed.has(this.state.current);
+    this.setBtnEnabled(this.hintBtn, !locked && (needAd || !hintUsed));
+    if (this.hintAdBadge) this.hintAdBadge.isVisible = !locked && needAd;
     this.setBtnEnabled(this.deckBtn, !locked && !placed && this.state.canDraw());
     if (this.state.finished) {
       setButtonLabel(this.bottomBtn, t('Игра окончена'));
@@ -2061,11 +2097,35 @@ export class OfflineGame {
 
   private onHint(): void {
     if (!this.state || this.state.finished || this.currentPlayerIsBot()) return;
-    // Godot: одна подсказка на игрока за партию (_hints_used).
+    if (platform.supportsRewarded) {
+      // На площадках подсказка — только за просмотр rewarded-видео,
+      // с самого первого использования. Строго по согласию игрока.
+      this.askConfirm(
+        t('Реклама'),
+        t('Посмотреть рекламу и получить подсказку?'),
+        t('Смотреть'),
+        () => {
+          void platform.showRewarded().then((ok) => {
+            if (ok) this.giveHint(false);
+            else this.toast(t('Не удалось показать рекламу'));
+          });
+        },
+      );
+      return;
+    }
+    // Свой сайт / standalone: одна бесплатная подсказка на игрока за
+    // партию (как в оригинале Godot: _hints_used).
     if (this.hintsUsed.has(this.state.current)) {
       this.toast(t('Подсказка уже была использована'));
       return;
     }
+    this.giveHint(true);
+  }
+
+  // countAsUsed — засчитать в лимит бесплатных (только standalone;
+  // подсказки за рекламу не лимитируются).
+  private giveHint(countAsUsed: boolean): void {
+    if (!this.state || this.state.finished || this.currentPlayerIsBot()) return;
     const plan = this.planner.plan(this.state, LEVEL_IMPOSSIBLE);
     if (plan.action === 'draw') {
       this.toast(t('Подсказка: возьмите из колоды'));
@@ -2082,7 +2142,9 @@ export class OfflineGame {
           f.refreshMarks({ hint: true, drawn: f.face.id === drawnId });
         }
       }
-      this.hintsUsed.add(this.state.current);
+      // Подсказки за рекламу не лимитируются; бесплатная (standalone) —
+      // одноразовая.
+      if (countAsUsed) this.hintsUsed.add(this.state.current);
       this.toast(t('Подсказка: выложите %d чисел', plan.tiles.length));
       if (this.hintTimer) window.clearTimeout(this.hintTimer);
       this.hintTimer = window.setTimeout(() => {
@@ -2130,7 +2192,7 @@ export class OfflineGame {
         }
         this.askConfirm(t('Выход в меню'), t('Выйти в главное меню?'), t('Выйти'), () => {
           this.running = false;
-          this.host.toMenu();
+          withInterstitial(() => this.host.toMenu());
         });
       },
       theme: menuTheme,
@@ -2189,6 +2251,7 @@ export class OfflineGame {
 
   // Сетевая партия: временный выход ведёт в главное меню и сохраняет
   // место (game.gd _on_leave_to_menu: finished → room.drop, иначе room.leave).
+  // Выход — логическая пауза: сначала interstitial площадки, затем меню.
   private leaveToMenu(): void {
     this.running = false;
     this.stopTimers();
@@ -2199,7 +2262,7 @@ export class OfflineGame {
     } catch {
       /* комната может уже не существовать */
     }
-    this.host.toMenu();
+    withInterstitial(() => this.host.toMenu());
   }
 
   private showSettingsOverlay(): void {

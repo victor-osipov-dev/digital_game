@@ -1,4 +1,5 @@
 import { getLang, LangCode, setLang, t } from './lang';
+import { getPlatformInterfaceLang } from '../platform';
 
 const KEY = 'dg.settings';
 // Версия схемы настроек. v2: локальный дефолт — один человек против ботов,
@@ -74,7 +75,12 @@ export function loadSettings(): Settings {
   }
   // Язык применяем ДО defaults(): имена игроков по умолчанию создаются
   // через t() и должны быть на выбранном языке, а не на стартовом русском.
-  const lang = parsed.lang === 'en' || parsed.lang === 'ru' ? parsed.lang : 'ru';
+  // Для первого запуска (сохранений ещё нет) дефолт берём из языка
+  // интерфейса площадки (требование Яндекс Игр 2.14); ручная настройка
+  // всегда приоритетнее.
+  const storedLang = parsed.lang === 'en' || parsed.lang === 'ru' ? parsed.lang : null;
+  const platformLang = getPlatformInterfaceLang() === 'en' ? 'en' : null;
+  const lang = storedLang ?? platformLang ?? 'ru';
   setLang(lang);
   const d = defaults();
   const playerCount = clampi(Number(parsed.player_count ?? d.player_count), MIN_PLAYERS, MAX_PLAYERS);

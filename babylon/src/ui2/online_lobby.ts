@@ -40,6 +40,8 @@ import {
 } from './uiskin';
 import { measureTextWidth } from './menu_screen';
 import { viewHeight, viewWidth } from './viewport';
+import { platform } from '../platform';
+import { showDomToast } from './dom_toast';
 
 // Порт scripts/ui/online_lobby.gd: сетевое меню — единый экран с тремя
 // страницами (вход / комнаты / лобби комнаты), как в оригинале.
@@ -592,6 +594,19 @@ export class OnlineLobby {
     this.lobbySeats.resizeToFit = true;
     this.lobbySeats.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
     page.addControl(this.lobbySeats);
+
+    // Код комнаты удобно передать друзьям: копируем в буфер обмена
+    // (SDK площадки или браузерный фолбэк).
+    const copyText = t('Скопировать код');
+    const copyBtn = greyButton(
+      copyText,
+      SMALL_H,
+      fs(15),
+      Math.max(150, Math.round(measureTextWidth(copyText, fs(15))) + 32),
+    );
+    copyBtn.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    copyBtn.onPointerUpObservable.add(() => void this.doCopyCode());
+    page.addControl(copyBtn);
 
     this.lobbyPlayers = new StackPanel('onlPlayers');
     this.lobbyPlayers.isVertical = true;
@@ -1167,6 +1182,13 @@ export class OnlineLobby {
       ? t('Все на месте. %s', isHost ? t('Начинайте.') : t('Ждём, начнёт хост.'))
       : t('Ждём остальных игроков (%d из %d).', taken, room.seats), false);
     this.updateButtons();
+  }
+
+  private async doCopyCode(): Promise<void> {
+    const code = this.currentRoom?.code;
+    if (!code) return;
+    const ok = await platform.writeClipboard(code);
+    showDomToast(t(ok ? 'Код скопирован' : 'Не удалось скопировать'));
   }
 
   private enterGame(env: GameEnvelope): void {

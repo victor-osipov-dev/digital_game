@@ -10,6 +10,7 @@ import { GameState } from '../core/game_state';
 import type { MenuHost, OfflineHost, OnlineStats, ScreenName } from '../ui2/ports';
 import { GameEnvelope, RoomLobbyView } from '../net/protocol';
 import { installGlobalTouchGuard } from '../ui2/uiskin';
+import { platform } from '../platform';
 
 export class App implements MenuHost, OfflineHost {
   readonly adt: AdvancedDynamicTexture;
@@ -192,7 +193,12 @@ export class App implements MenuHost, OfflineHost {
       this.rebuild();
       return;
     }
+    // Уход с экрана партии — остановка геймплея для площадки.
+    if (this.currentName === 'offline') platform.gameplayStop();
     this.currentName = name;
+    // Sticky-баннер площадки: в меню/лобби показываем, во время партии
+    // скрываем — реклама не должна мешать активной игре (п. 4.4).
+    platform.setBannerVisible(name !== 'offline');
     this.root.clearControls();
     applyTitle();
     if (name === 'menu') {
@@ -275,6 +281,7 @@ export class App implements MenuHost, OfflineHost {
 
   // OfflineHost
   toMenu(): void {
+    platform.gameplayStop();
     if (this.offline?.onlineMode) {
       this.online.resetAfterGameExit();
       this.lastLobby = null;
@@ -289,6 +296,7 @@ export class App implements MenuHost, OfflineHost {
 
   // Сетевая партия кончилась — возврат в лобби комнаты (ROOM_STATE).
   toLobby(): void {
+    platform.gameplayStop();
     if (this.offline) {
       this.offline.running = false;
       this.offline.stopTimers();
@@ -333,6 +341,11 @@ export class App implements MenuHost, OfflineHost {
 
   get current(): ScreenName | null {
     return this.currentName;
+  }
+
+  /** Партия реально идёт (для возобновления gameplay после сворачивания). */
+  isPlaying(): boolean {
+    return !!this.offline?.running;
   }
 }
 

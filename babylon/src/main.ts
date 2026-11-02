@@ -1,14 +1,19 @@
 import { ArcRotateCamera, Engine, Scene, Vector3 } from '@babylonjs/core';
 import { loadSettings } from './core/settings';
+import { initPlatform, platform } from './platform';
 import { App } from './ui/app';
 
-function main(): void {
+async function main(): Promise<void> {
   const canvas = document.getElementById('canvas') as HTMLCanvasElement | null;
   if (!canvas) return;
   const engine = new Engine(canvas, true, { stencil: false, preserveDrawingBuffer: false });
   const scene = new Scene(engine);
   const camera = new ArcRotateCamera('bootCam', -Math.PI / 2, 1.1, 20, Vector3.Zero(), scene);
   camera.detachControl();
+  // Платформа инициализируется ДО настроек: автоопределение языка
+  // площадки используется как дефолт для первого запуска. Таймаут внутри,
+  // игра стартует даже без сети/SDK.
+  await initPlatform({ timeoutMs: 1500 });
   loadSettings();
   const app = new App(scene, canvas);
   (window as unknown as Record<string, unknown>).__app = app;
@@ -52,14 +57,35 @@ function main(): void {
 
   // Прячем стартовый лоадер после первого отрисованного кадра: движок и
   // весь UI к этому моменту уже построены, пустого экрана не видно.
+  // Здесь же сообщаем площадке, что игра готова (Yandex Game Ready и аналоги).
   scene.onAfterRenderObservable.addOnce(() => {
     const loader = document.getElementById('boot-loader');
     if (!loader) return;
     loader.classList.add('is-hidden');
     window.setTimeout(() => loader.remove(), 400);
+    platform.gameReady();
+  });
+
+  // Вкладка скрыта/свернута — игровой процесс останавливается для площадки.
+  // При возврате возобновляем, только если партия реально идёт.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) platform.gameplayStop();
+    else if (app.isPlaying()) platform.gameplayStart();
+  });
+  window.addEventListener('blur', () => platform.gameplayStop());
+  window.addEventListener('focus', () => {
+    if (app.isPlaying()) platform.gameplayStart();
+  });
+
+  // Платформенные события паузы/возобновления: платформа сама сообщает о
+  // показе рекламы (включая автоматический стартовый interstitial Яндекса)
+  // и сворачивании вкладки — размечаем геймплей теми же методами.
+  platform.onPause(() => platform.gameplayStop());
+  platform.onResume(() => {
+    if (app.isPlaying()) platform.gameplayStart();
   });
 
   engine.runRenderLoop(() => scene.render());
 }
 
-main();
+void main();
