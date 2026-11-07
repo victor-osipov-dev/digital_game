@@ -9,7 +9,7 @@ import { loadSettings } from '../core/settings';
 import { GameState } from '../core/game_state';
 import type { MenuHost, OfflineHost, OnlineStats, ScreenName } from '../ui2/ports';
 import { GameEnvelope, RoomLobbyView } from '../net/protocol';
-import { installGlobalTouchGuard } from '../ui2/uiskin';
+import { endInputSession, installGlobalTouchGuard, isInputSessionActive, onInputSessionEnd } from '../ui2/uiskin';
 import { platform } from '../platform';
 
 export class App implements MenuHost, OfflineHost {
@@ -21,6 +21,14 @@ export class App implements MenuHost, OfflineHost {
   private root = new Container('root');
   private currentName: ScreenName | null = null;
   private menuConnectionTask: Promise<void> | null = null;
+  // Пересборка, отложенная на время ввода: открытие мобильной клавиатуры
+  // меняет размер canvas, но пересоздавать экран нельзя — вместе с полем
+  // пропадут фокус и каретка.
+  private pendingRelayout = false;
+  private pendingRebuild = false;
+  private relayoutTimer: number | null = null;
+  private builtWidth = 0;
+  private builtHeight = 0;
 
   constructor(
     readonly scene: Scene,
@@ -32,6 +40,7 @@ export class App implements MenuHost, OfflineHost {
     this.menu = new MenuScreen(this);
     this.online = new OnlineLobby(this);
     this.wireApi();
+    onInputSessionEnd(() => this.schedulePendingRelayout());
     this.show('menu');
     this.startMenuConnection();
   }
@@ -64,6 +73,12 @@ export class App implements MenuHost, OfflineHost {
 
   // MenuHost: меню и оверлеи пересобираются при смене языка/масштабов.
   rebuild(): void {
+    // Пересборка во время ввода уничтожила бы поле (ввод уходил бы в уже
+    // удалённый контрол). Откладываем до конца ввода.
+    if (isInputSessionActive()) {
+      this.pendingRebuild = true;
+      return;
+    }
     applyTitle();
     if (this.currentName === 'offline' && this.offline) {
       this.offline.build(this.root);
@@ -80,16 +95,52 @@ export class App implements MenuHost, OfflineHost {
   }
 
   relayout(): void {
+    // Пока игрок печатает, экран не пересобираем: на телефоне открытие
+    // клавиатуры меняет высоту canvas, а пересборка уничтожила бы поле
+    // вместе с фокусом и кареткой. Вернёмся к ней после конца ввода.
+    if (isInputSessionActive()) {
+      this.pendingRelayout = true;
+      return;
+    }
     if (this.currentName === 'menu') {
       // Меню строится в пикселях под конкретный размер экрана. При resize
       // и особенно при открытии игры на весь экран его нужно пересобрать,
       // иначе оно остаётся в габаритах прежнего маленького окна.
       this.root.clearControls();
       this.menu.build(this.root);
-      return;
+    } else if (this.currentName === 'offline' && this.offline) {
+      this.offline.relayout();
+    } else if (this.currentName === 'online') {
+      this.restoreOnline();
     }
-    if (this.currentName === 'offline' && this.offline) this.offline.relayout();
-    if (this.currentName === 'online') this.restoreOnline();
+    this.builtWidth = this.canvas.clientWidth;
+    this.builtHeight = this.canvas.clientHeight;
+  }
+
+  // Отложенная пересборка выполняется после blur поля, но не мгновенно:
+  // тап по кнопке сразу после ввода должен успеть дойти до контрола.
+  private schedulePendingRelayout(): void {
+    if ((!this.pendingRelayout && !this.pendingRebuild) || this.relayoutTimer !== null) return;
+    this.relayoutTimer = window.setTimeout(() => {
+      this.relayoutTimer = null;
+      if (!this.pendingRelayout && !this.pendingRebuild) return;
+      // Успели перейти в другое поле — ждём конца ввода.
+      if (isInputSessionActive()) return;
+      if (this.pendingRebuild) {
+        this.pendingRebuild = false;
+        this.pendingRelayout = false;
+        this.rebuild();
+        this.builtWidth = this.canvas.clientWidth;
+        this.builtHeight = this.canvas.clientHeight;
+        return;
+      }
+      this.pendingRelayout = false;
+      // Размер вернулся к тому, под который экран уже построен (клавиатура
+      // закрылась) — пересобирать нечего.
+      if (Math.round(this.canvas.clientWidth) === this.builtWidth
+        && Math.round(this.canvas.clientHeight) === this.builtHeight) return;
+      this.relayout();
+    }, 150);
   }
 
   // Пересборка сетевого экрана (смена языка, поворот) не должна терять
@@ -189,6 +240,9 @@ export class App implements MenuHost, OfflineHost {
   }
 
   show(name: ScreenName): void {
+    // Смена экрана очищает дерево контролов — активный ввод нужно корректно
+    // завершить, иначе поле исчезнет вместе с набранным текстом.
+    if (isInputSessionActive()) endInputSession();
     if (this.currentName === name) {
       this.rebuild();
       return;

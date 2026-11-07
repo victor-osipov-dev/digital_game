@@ -98,7 +98,54 @@ function isAncestorOf(anc: Control, node: Control): boolean {
 }
 export function registerModalLayer(layer: Container): () => void {
   modalLayers.add(layer);
-  return () => { modalLayers.delete(layer); };
+  type RemovalObserver = Parameters<Container['onControlRemovedObservable']['remove']>[0];
+  const subscriptions: Array<{ container: Container; observer: RemovalObserver }> = [];
+  let active = true;
+  const unregister = (): void => {
+    if (!active) return;
+    active = false;
+    modalLayers.delete(layer);
+    for (const entry of subscriptions) entry.container.onControlRemovedObservable.remove(entry.observer);
+    subscriptions.length = 0;
+  };
+  let ancestor: Control | null = layer.parent;
+  while (ancestor) {
+    if (ancestor instanceof Container) {
+      const container = ancestor;
+      const observer = container.onControlRemovedObservable.add((removed) => {
+        if (removed && (removed === layer || isAncestorOf(removed, layer))) unregister();
+      });
+      subscriptions.push({ container, observer });
+    }
+    ancestor = ancestor.parent;
+  }
+  return unregister;
+}
+
+/** Прокрутить ScrollViewer на заданное число экранных пикселей. */
+export function scrollViewerByPixels(sc: ScrollViewer, axis: ScrollAxis, deltaPx: number): number {
+  if (!Number.isFinite(deltaPx) || deltaPx === 0) return 0;
+  const sv = sc as unknown as {
+    _verticalBar?: { value: number };
+    _horizontalBar?: { value: number };
+    _window?: { _currentMeasure?: { height: number; width: number } };
+    _clientHeight?: number;
+    _clientWidth?: number;
+    host?: { idealRatio?: number };
+  };
+  const bar = axis === 'vertical' ? sv._verticalBar : sv._horizontalBar;
+  if (!bar) return 0;
+  const content = axis === 'vertical'
+    ? sv._window?._currentMeasure?.height
+    : sv._window?._currentMeasure?.width;
+  const view = axis === 'vertical' ? sv._clientHeight : sv._clientWidth;
+  const ratio = sv.host?.idealRatio ?? 1;
+  if (typeof content !== 'number' || typeof view !== 'number' || !Number.isFinite(ratio) || ratio <= 0) return 0;
+  const range = Math.max(0, (content - view) / ratio);
+  if (range <= 0) return 0;
+  const before = bar.value;
+  bar.value = Math.max(0, Math.min(1, before + deltaPx / range));
+  return (bar.value - before) * range;
 }
 
 // Единый инерционный скролл для мыши и touch. Babylon GUI не даёт нативной
@@ -117,7 +164,6 @@ export function enableSmoothScroll(sc: ScrollViewer, axis: ScrollAxis = 'vertica
   const setValue = (value: number): void => {
     const next = Math.max(0, Math.min(1, value));
     bar.value = next;
-    bar.onValueChangedObservable?.notifyObservers(next);
   };
   // Доступная для прокрутки область в пикселях: высота содержимого минус
   // высота окна просмотра. Перевод пунктов бара (0…1) в реальные пиксели
@@ -195,7 +241,7 @@ export function enableSmoothScroll(sc: ScrollViewer, axis: ScrollAxis = 'vertica
     wheelT = 0;
     wheelRaf = requestAnimationFrame(wheelTick);
   };
-  sc.onWheelObservable.add((pi) => {
+  const wheelObserver = sc.onWheelObservable.add((pi) => {
     const raw = axis === 'vertical'
       ? Number((pi as unknown as { y?: number; event?: { deltaY?: number } }).y
         ?? (pi as unknown as { event?: { deltaY?: number } }).event?.deltaY ?? 0)
@@ -211,13 +257,45 @@ export function enableSmoothScroll(sc: ScrollViewer, axis: ScrollAxis = 'vertica
   const canvas = document.getElementById('canvas') as HTMLCanvasElement | null;
   const controller = new AbortController();
   const disposers: Array<() => void> = [];
-  sc.onDisposeObservable.add(() => {
+  let cleaned = false;
+  type RemovalObserver = Parameters<Container['onControlRemovedObservable']['remove']>[0];
+  const removalSubscriptions: Array<{ container: Container; observer: RemovalObserver }> = [];
+  const cleanup = (): void => {
+    if (cleaned) return;
+    cleaned = true;
     controller.abort();
+    for (const entry of removalSubscriptions) {
+      entry.container.onControlRemovedObservable.remove(entry.observer);
+    }
+    removalSubscriptions.length = 0;
+    sc.onWheelObservable.remove(wheelObserver);
+    if (raf !== 0) cancelAnimationFrame(raf);
+    raf = 0;
+    velocity = 0;
     if (wheelRaf !== 0) cancelAnimationFrame(wheelRaf);
+    wheelRaf = 0;
+    dragging = false;
+    pointerId = null;
     for (const d of disposers) {
       try { d(); } catch { /* уже снят */ }
     }
-  });
+    disposers.length = 0;
+  };
+  sc.onDisposeObservable.add(cleanup);
+  // clearControls/removeControl отсоединяет контрол, но не вызывает dispose.
+  // Слушаем все контейнеры-предки: модалки часто удаляют вложенное поддерево
+  // из popups, а не из корня экрана.
+  let ancestor: Control | null = sc.parent;
+  while (ancestor) {
+    if (ancestor instanceof Container) {
+      const container = ancestor;
+      const observer = container.onControlRemovedObservable.add((removed) => {
+        if (removed && (removed === sc || isAncestorOf(removed, sc))) cleanup();
+      });
+      removalSubscriptions.push({ container, observer });
+    }
+    ancestor = ancestor.parent;
+  }
   let pointerId: number | null = null;
   let moved = false;
   const position = (event: PointerEvent): { x: number; y: number } | null => {
@@ -384,6 +462,43 @@ export function estimateWrappedTextHeight(text: string, width: number, fontSize:
   return Math.ceil(lines * fontSize * 1.38 + fontSize * 0.5);
 }
 
+// TextBlock.WordWrap разбивает строки по пробелам, но не умеет переносить
+// длинное название комнаты/ник без пробелов. В таких местах заранее
+// вставляем переносы по фактической ширине, чтобы текст не вылезал из плашки.
+export function wrapTextToWidth(text: string, width: number, fontSize: number): string {
+  const cv = document.createElement('canvas');
+  const context = cv.getContext('2d');
+  if (!context || width <= 0) return text;
+  context.font = `${fontSize}px ${FONT}`;
+  const measure = (value: string): number => context.measureText(value).width;
+  return text.split('\n').map((paragraph) => {
+    const words = paragraph.split(/\s+/).filter(Boolean);
+    const lines: string[] = [];
+    let line = '';
+    for (const word of words) {
+      if (measure(word) > width) {
+        if (line) { lines.push(line); line = ''; }
+        let part = '';
+        for (const char of Array.from(word)) {
+          if (part && measure(part + char) > width) {
+            lines.push(part);
+            part = char;
+          } else part += char;
+        }
+        line = part;
+        continue;
+      }
+      const candidate = line ? `${line} ${word}` : word;
+      if (line && measure(candidate) > width) {
+        lines.push(line);
+        line = word;
+      } else line = candidate;
+    }
+    if (line || lines.length === 0) lines.push(line);
+    return lines.join('\n');
+  }).join('\n');
+}
+
 export interface ButtonTheme {
   bg: string;
   hover: string;
@@ -544,6 +659,18 @@ let domProxyTarget: InputText | null = null;
 const inputBlurHandlers = new WeakMap<InputText, Array<() => void>>();
 // Ограничение длины ввода: у InputText нет maxLength, поэтому режем по факту.
 const inputMaxLen = new WeakMap<InputText, number>();
+// Подписчики «сессия ввода закончилась» (экран может отложить пересборку).
+const sessionEndHandlers: Array<() => void> = [];
+
+/** Идёт ли сейчас ввод через зеркальный DOM-input (клавиатура открыта). */
+export function isInputSessionActive(): boolean {
+  return domProxyTarget !== null;
+}
+
+/** Подписка на завершение сессии ввода (blur скрытого input). */
+export function onInputSessionEnd(cb: () => void): void {
+  sessionEndHandlers.push(cb);
+}
 
 /** Максимальная длина текста в поле (обрезается прямо при вводе). */
 export function setInputMaxLength(input: InputText, max: number): void {
@@ -562,32 +689,89 @@ function syncCaretToBabylon(): void {
 }
 
 // Поставить каретку по месту тапа: Babylon сам вычислит _cursorOffset из
-// координаты при ближайшем draw, затем переносим позицию в скрытый input.
+// координаты при ближайшем draw (для этого нужно, чтобы поле было в фокусе),
+// затем переносим позицию в скрытый input. Babylon обнуляет _clickedCoordinate
+// сразу после обработки — по этому признаку понимаем, что пересчёт состоялся,
+// и повторяем попытку, если кадр ещё не был отрисован.
 function applyTapCaret(input: InputText, el: HTMLInputElement, x: number): void {
-  const rec = input as unknown as { _clickedCoordinate?: number | null; _cursorOffset?: number };
+  const rec = input as unknown as {
+    _clickedCoordinate?: number | null;
+    _cursorOffset?: number;
+    _isFocused?: boolean;
+    _markAsDirty?: () => void;
+  };
+  const host = (input as unknown as { _host?: { moveFocusToControl?: (c: Control) => void } })._host;
   const len = (input.text ?? '').length;
-  rec._clickedCoordinate = x;
-  window.requestAnimationFrame(() => {
+  let tries = 0;
+  const step = (): void => {
     if (domProxyTarget !== input) return;
-    const caret = Math.max(0, Math.min(len, len - (rec._cursorOffset ?? 0)));
+    // Если Babylon успел снять фокус (blur canvas при открытии клавиатуры),
+    // возвращаем его — без фокуса координата тапа не обрабатывается.
+    if (!rec._isFocused) host?.moveFocusToControl?.(input);
+    rec._clickedCoordinate = x;
+    rec._markAsDirty?.();
+    window.requestAnimationFrame(() => {
+      if (domProxyTarget !== input) return;
+      if (rec._clickedCoordinate != null && tries < 8) {
+        tries++;
+        step();
+        return;
+      }
+      const caret = Math.max(0, Math.min(len, len - (rec._cursorOffset ?? 0)));
+      try {
+        el.setSelectionRange(caret, caret);
+      } catch {
+        /* ignore */
+      }
+    });
+  };
+  step();
+}
+
+// Программный фокус на скрытом input иногда «теряется» на мобильных
+// (например, если пришёлся на момент открытия клавиатуры). Пока сессия та же,
+// повторяем фокус пару кадров; новый тап в другое место завершит сессию и
+// остановит повторы сам.
+function ensureDomFocus(input: InputText, el: HTMLInputElement): void {
+  const host = (input as unknown as { _host?: { moveFocusToControl?: (c: Control) => void } })._host;
+  let attempts = 0;
+  const step = (): void => {
+    if (domProxyTarget !== input) return;
+    if (document.activeElement === el || attempts >= 6) return;
+    attempts++;
     try {
-      el.setSelectionRange(caret, caret);
+      el.focus({ preventScroll: true });
     } catch {
-      /* ignore */
+      el.focus();
     }
-  });
+    host?.moveFocusToControl?.(input);
+    window.requestAnimationFrame(step);
+  };
+  window.requestAnimationFrame(step);
 }
 
 function onProxyInput(): void {
   if (!domProxyTarget || !domProxyEl) return;
-  const max = inputMaxLen.get(domProxyTarget);
-  let value = domProxyEl.value;
-  if (max !== undefined && value.length > max) {
-    value = value.slice(0, max);
-    domProxyEl.value = value;
-  }
-  domProxyTarget.text = value;
+  domProxyTarget.text = readProxyValue(domProxyTarget, domProxyEl);
   syncCaretToBabylon();
+}
+
+// Значение скрытого input с учётом лимита длины.
+function readProxyValue(target: InputText, el: HTMLInputElement): string {
+  const max = inputMaxLen.get(target);
+  let value = el.value;
+  if (max !== undefined && value.length > max) {
+    const caret = typeof el.selectionStart === 'number' ? el.selectionStart : value.length;
+    value = value.slice(0, max);
+    el.value = value;
+    const pos = Math.min(caret, max);
+    try {
+      el.setSelectionRange(pos, pos);
+    } catch {
+      /* ignore */
+    }
+  }
+  return value;
 }
 
 function fireInputBlur(input: InputText): void {
@@ -607,9 +791,54 @@ function fireInputBlur(input: InputText): void {
 function finalizeProxySession(): void {
   const target = domProxyTarget;
   domProxyTarget = null;
+  stopProxyPoll();
   if (!target) return;
+  // Не теряем последний ввод, если событие не дошло до поля Babylon
+  // (мобильные IME/автозамена, вставка из буфера): досинхронизируем.
+  if (domProxyEl && domProxyEl.value !== target.text) {
+    target.text = readProxyValue(target, domProxyEl);
+  }
   target.isReadOnly = true;
   fireInputBlur(target);
+  for (const h of sessionEndHandlers) {
+    try {
+      h();
+    } catch {
+      /* подписчик не должен ломать сессию */
+    }
+  }
+}
+
+/** Принудительно завершить ввод (например, перед сменой экрана). */
+export function endInputSession(): void {
+  if (domProxyEl && document.activeElement === domProxyEl) {
+    domProxyEl.blur(); // обработчик blur сам вызовет finalizeProxySession
+  } else {
+    finalizeProxySession();
+  }
+}
+
+// Пока сессия жива, раз в 150 мс сверяем значение: часть мобильных
+// клавиатур/IME обновляет текст без события input (или присылает его
+// после blur). Это страховка, чтобы введённое всегда появлялось в поле.
+let proxyPollTimer: number | null = null;
+
+function startProxyPoll(): void {
+  stopProxyPoll();
+  proxyPollTimer = window.setInterval(() => {
+    if (!domProxyTarget || !domProxyEl) {
+      stopProxyPoll();
+      return;
+    }
+    if (domProxyEl.value !== domProxyTarget.text) onProxyInput();
+  }, 150);
+}
+
+function stopProxyPoll(): void {
+  if (proxyPollTimer !== null) {
+    window.clearInterval(proxyPollTimer);
+    proxyPollTimer = null;
+  }
 }
 
 function ensureDomProxy(): HTMLInputElement {
@@ -622,6 +851,10 @@ function ensureDomProxy(): HTMLInputElement {
     + 'border:0;padding:0;margin:0;z-index:2147483647;pointer-events:none;background:transparent;';
   // Слушатели навешиваются один раз и живут, пока элемент в DOM.
   el.addEventListener('input', onProxyInput);
+  // Мобильные IME/автозамена могут менять текст только composition-событием.
+  el.addEventListener('compositionupdate', onProxyInput);
+  el.addEventListener('compositionend', onProxyInput);
+  el.addEventListener('change', onProxyInput);
   el.addEventListener('blur', finalizeProxySession);
   // Стрелки/перемещение каретки меняют selection без события input.
   el.addEventListener('keyup', syncCaretToBabylon);
@@ -657,10 +890,24 @@ export function focusInputOnTap(input: InputText): void {
   });
   deferTapActivation(input, () => {
     const host = (input as unknown as { _host?: { moveFocusToControl?: (c: Control) => void } })._host;
+    const x = tap._dgTapX;
+    tap._dgTapX = undefined;
+    // Повторный тап, когда сессия этого же поля ещё жива: не перезапускаем
+    // её (blur+focus на мобильных срабатывает нестабильно), а только двигаем
+    // каретку — ровно как в нативном поле.
+    if (domProxyTarget === input && domProxyEl && document.activeElement === domProxyEl) {
+      input.isReadOnly = false;
+      if (typeof x === 'number') applyTapCaret(input, domProxyEl, x);
+      else syncCaretToBabylon();
+      return;
+    }
     // Переход между полями без blur скрытого input: завершаем прошлую сессию.
     finalizeProxySession();
     const el = ensureDomProxy();
     el.value = input.text ?? '';
+    input.isReadOnly = false;
+    domProxyTarget = input;
+    startProxyPoll();
     // 1) Фокус на скрытый input — поднимает нативную клавиатуру на телефонах.
     //    Браузер при этом снимает фокус с canvas.
     try {
@@ -670,12 +917,9 @@ export function focusInputOnTap(input: InputText): void {
     }
     // 2) Возвращаем визуальный фокус полю Babylon (каретка/подсветка) и
     //    включаем зеркалирование — уже после возможного сброса фокуса canvas.
-    input.isReadOnly = false;
     host?.moveFocusToControl?.(input);
-    domProxyTarget = input;
+    ensureDomFocus(input, el);
     // 3) Каретка — по месту тапа (Babylon считает индекс), иначе в конец.
-    const x = tap._dgTapX;
-    tap._dgTapX = undefined;
     if (typeof x === 'number') {
       applyTapCaret(input, el, x);
     } else {
@@ -1063,7 +1307,7 @@ export function popupList(
   catcher.isPointerBlocker = true;
   catcher.zIndex = 1000;
   let closed = false;
-  const unregister = registerModalLayer(catcher);
+  let unregister = (): void => undefined;
   const closePopup = (): void => {
     if (closed) return;
     closed = true;
@@ -1134,6 +1378,7 @@ export function popupList(
   }
   catcher.addControl(list);
   rootOverlay.addControl(catcher);
+  unregister = registerModalLayer(catcher);
 }
 
 // Модальный оверлей: Container-корень (иначе дети-кнопки не получают
@@ -1156,8 +1401,8 @@ export function modalOverlay(
   dim.height = '100%';
   dim.isPointerBlocker = true;
   overlay.addControl(dim);
-  const unregister = registerModalLayer(overlay);
   host.addControl(overlay);
+  const unregister = registerModalLayer(overlay);
   return {
     overlay,
     close: () => {

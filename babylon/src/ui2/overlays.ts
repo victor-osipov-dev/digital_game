@@ -60,8 +60,8 @@ function _openRules(host: import('@babylonjs/gui').Container): void {
   scroll.thickness = 0;
   scroll.width = '100%';
   scroll.height = px(Math.max(90, panelHeight - titleHeight - buttonHeight - 54));
-  enableSmoothScroll(scroll);
   pcol.addControl(scroll);
+  enableSmoothScroll(scroll);
   const rulesWidth = panelWidth - 68;
   const plainRules = rulesPlain();
   const rich = mkLabel(rulesPlain(), {
@@ -128,8 +128,8 @@ export function openStatsOverlay(
   scroll.thickness = 0;
   scroll.width = '100%';
   scroll.height = px(Math.max(80, panelHeight - titleHeight - closeHeight - 56));
-  enableSmoothScroll(scroll);
   pcol.addControl(scroll);
+  enableSmoothScroll(scroll);
 
   const col = new StackPanel('statsCol');
   col.isVertical = true;
@@ -253,8 +253,8 @@ export function openSettingsOverlay(
   scroll.thickness = 0;
   scroll.width = '100%';
   scroll.height = px(Math.max(80, panelHeight - titleHeight - closeHeight - 56));
-  enableSmoothScroll(scroll);
   pcol.addControl(scroll);
+  enableSmoothScroll(scroll);
   const fields = new StackPanel('settingsFields');
   fields.isVertical = true;
   fields.width = '100%';

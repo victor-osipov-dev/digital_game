@@ -277,8 +277,8 @@ export class OnlineLobby {
     scroll.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
     scroll.width = px(this.avail + 6);
     scroll.height = px(vh - 24);
-    enableSmoothScroll(scroll);
     margin.addControl(scroll);
+    enableSmoothScroll(scroll);
 
     const col = new StackPanel('onlCol');
     col.isVertical = true;
@@ -1287,8 +1287,8 @@ export class OnlineLobby {
     scroll.barSize = 2;
     scroll.width = '100%';
     scroll.height = px(DEFAULT_LIST_H);
-    enableSmoothScroll(scroll);
     box.addControl(scroll);
+    enableSmoothScroll(scroll);
 
     const grid = new StackPanel('boardGrid');
     grid.isVertical = true;

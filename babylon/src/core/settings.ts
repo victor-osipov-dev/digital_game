@@ -17,7 +17,7 @@ export const MAX_NAME_LEN = 24;
 export const TEXT_SCALES = [1.0, 1.3, 2.0];
 export const FS_MIN = 12;
 export const TILE_WIDTHS = [32, 40, 48, 60, 66, 72];
-export const BOT_LEVEL_NAMES = ['Лёгкий', 'Средний', 'Сложный', 'Невозможный'];
+export const BOT_LEVEL_NAMES = ['Невозможный'];
 
 export const TEXT_SCALE_NAMES = ['Маленький', 'Средний', 'Большой'];
 export const TILE_SIZE_NAMES = ['Крошечный', 'Маленький', 'Средний', 'Крупный', 'Большой', 'Максимум'];
@@ -56,7 +56,7 @@ function defaults(): Settings {
     player_is_bot: [false, true],
     text_scale: 1,
     tile_step: 5,
-    bot_level: 2,
+    bot_level: 0,
     bot_anim: true,
     stat_games: 0,
     stat_wins: 0,

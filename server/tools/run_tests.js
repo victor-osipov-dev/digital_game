@@ -25,6 +25,7 @@ const { Accounts, verifyToken, signToken, tokenHash } = require('../src/accounts
 const { Cluster } = require('../src/cluster');
 const { Rooms } = require('../src/rooms');
 const { GameState } = require('../src/engine/game_state');
+const { planGame } = require('../src/engine/bot');
 const Rules = require('../src/engine/rules');
 const catalog = require('../src/engine/catalog');
 const views = require('../src/views');
@@ -431,6 +432,28 @@ test('если выбыли все, активного нет', () => {
   s.dropPlayer(0);
   s.dropPlayer(1);
   assert.strictEqual(s.nextActiveSeat(0), -1);
+});
+
+group('== Бот невозможной сложности ==');
+
+test('серверный бот находит и применяет выкладку из руки в 40 фишек', () => {
+  const g = GameState.create(2, ['Бот', 'Игрок'], false);
+  g.current = 0;
+  g.firstTurn = false;
+  g.require30 = false;
+  const hand = [1, 3, 5]; // 1, 2, 3 одного цвета
+  for (let id = 1; id <= 106 && hand.length < 40; id += 1) {
+    if (!hand.includes(id)) hand.push(id);
+  }
+  g.players[0].handIds = hand;
+
+  const plan = planGame(g);
+  assert.ok(plan && plan.ops.length > 0, 'бот должен предложить выкладку');
+  g.beginTurn();
+  assert.strictEqual(g.applyOps(plan.ops), true, 'план проходит через серверный движок');
+  assert.strictEqual(g.endTurn().ok, true, 'ход с планом принимается по правилам');
+  g.commit();
+  assert.ok(g.handSize(0) < 40, 'бот выложил часть руки вместо взятия');
 });
 
 // ================================================================ аккаунты

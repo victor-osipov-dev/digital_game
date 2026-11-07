@@ -9,6 +9,8 @@ export const LEVEL_IMPOSSIBLE = 3;
 
 const BUDGET_MEDIUM = 8000;
 const BUDGET_HARD = 40000;
+// Жёсткий лимит ограничивает задержку одного хода и в браузере, и на сервере.
+const PLANNER_TIME_MS = [16, 20, 26, 80];
 
 const CAP_EASY = 60;
 const CAP_MEDIUM = 80;
@@ -91,6 +93,7 @@ export class TurnPlanner {
   private _best: any = {};
   private _suffix: number[] = [];
   private _cover: Set<number>[] = [];
+  private _deadline = Number.POSITIVE_INFINITY;
 
   private _rb_budget = 0;
   private _rb_emitted = 0;
@@ -116,6 +119,7 @@ export class TurnPlanner {
   plan(state: GameState, level: number): PlanResult {
     this._state = state;
     this._level = Math.min(Math.max(level, 0), 3);
+    this._deadline = nowMs() + PLANNER_TIME_MS[this._level];
     this.setupRebuildParams();
     if (state.finished) return { ...END_PLAN };
     this._base_points = state.openingPoints();
@@ -137,9 +141,26 @@ export class TurnPlanner {
         tiles: this._best.tiles,
       };
     }
+    // Если общий перебор упёрся в лимит, не объявляем ход невозможным,
+    // когда генератор уже нашёл заведомо допустимую выкладку. Это особенно
+    // важно при большой руке: иначе бот мог брать фишки, хотя ход есть.
+    const fallback = this._candidates.find((c) =>
+      !this._need30 || this._base_points + c.hand_points >= OPENING_POINTS);
+    if (fallback) {
+      return {
+        action: 'place',
+        ops: [...fallback.ops],
+        points: fallback.points,
+        tiles: [...fallback.hand_ids],
+      };
+    }
     if (state.canDraw()) return { action: 'draw', ops: [], points: 0, tiles: [] };
     if (state.canSkip()) return { action: 'skip', ops: [], points: 0, tiles: [] };
     return { ...END_PLAN };
+  }
+
+  private outOfTime(): boolean {
+    return nowMs() >= this._deadline;
   }
 
   mk(kind: string, refs: string[], ops: any[], handIds: number[], points: number,
@@ -218,9 +239,14 @@ export class TurnPlanner {
 
   packCandidates(hand: TileFace[]): void {
     const n = hand.length;
-    if (n < 3 || n > 16) return;
+    if (n < 3) return;
+    if (n > 16) {
+      this.packCandidatesLargeHand(hand);
+      return;
+    }
     const limit = 1 << n;
     for (let mask = 1; mask < limit; mask += 1) {
+      if ((mask & 7) === 0 && this.outOfTime()) return;
       const subset: TileFace[] = [];
       for (let i = 0; i < n; i += 1) {
         if ((mask & (1 << i)) !== 0) subset.push(hand[i]);
@@ -239,15 +265,137 @@ export class TurnPlanner {
     }
   }
 
+  // Полный набор вариантов новых рядов для больших рук. Перебор всех
+  // 2^N подмножеств становится непригоден уже после 16 фишек, поэтому
+  // строим серии по цвету/значению, а наборы по значению/цвету. Все
+  // физические дубликаты и варианты с джокерами рассматриваются до общего
+  // дедлайна планировщика.
+  packCandidatesLargeHand(hand: TileFace[]): void {
+    const byColorValue = new Map<string, TileFace[]>();
+    const jokers = hand.filter((tile) => tile.is_joker);
+    for (const tile of hand) {
+      if (tile.is_joker) continue;
+      const key = `${tile.color}:${tile.value}`;
+      const list = byColorValue.get(key) ?? [];
+      list.push(tile);
+      byColorValue.set(key, list);
+    }
+
+    const emitted = new Set<string>();
+    const addGroup = (tiles: TileFace[]): void => {
+      if (this.outOfTime() || tiles.length < MIN_TILES || tiles.length > MAX_VALUE) return;
+      const key = idsOf(tiles).slice().sort((a, b) => a - b).join(',');
+      if (emitted.has(key)) return;
+      const validation = validateRow(tiles);
+      if (!validation.ok) return;
+      emitted.add(key);
+      const ref = this.nextNRef();
+      const ops = tiles.map((tile, index) => ({ op: 'place', tile: tile.id, to: ref, index }));
+      const points = rowPoints(tiles);
+      this._candidates.push(this.mk('new', [ref], ops, idsOf(tiles), points,
+        handPointsOf(tiles, validation), 0, jokerCount(tiles)));
+    };
+
+    // Наборы: один реальный тайл каждого выбранного цвета и от 0 до 2
+    // джокеров. Копии одной пары (цвет/значение) перебираются отдельно.
+    for (let value = MIN_VALUE; value <= MAX_VALUE && !this.outOfTime(); value += 1) {
+      for (let mask = 1; mask < (1 << 4) && !this.outOfTime(); mask += 1) {
+        const colors: number[] = [];
+        const choices: TileFace[][] = [];
+        let possible = true;
+        for (let color = 0; color < 4; color += 1) {
+          if ((mask & (1 << color)) === 0) continue;
+          const found = byColorValue.get(`${color}:${value}`);
+          if (!found || found.length === 0) { possible = false; break; }
+          colors.push(color);
+          choices.push(found);
+        }
+        if (!possible || colors.length > MAX_SET) continue;
+        for (const totalSize of [3, 4]) {
+          const jokerN = totalSize - colors.length;
+          if (jokerN < 0 || jokerN > jokers.length || jokerN > 2) continue;
+          const chosen: TileFace[] = [];
+          const chooseJokers = (at: number, left: number): void => {
+            if (this.outOfTime()) return;
+            if (left === 0) { addGroup(chosen); return; }
+            for (let i = at; i <= jokers.length - left; i += 1) {
+              chosen.push(jokers[i]);
+              chooseJokers(i + 1, left - 1);
+              chosen.pop();
+              if (this.outOfTime()) return;
+            }
+          };
+          const chooseColors = (i: number): void => {
+            if (this.outOfTime()) return;
+            if (i === choices.length) { chooseJokers(0, jokerN); return; }
+            for (const tile of choices[i]) {
+              chosen.push(tile);
+              chooseColors(i + 1);
+              chosen.pop();
+              if (this.outOfTime()) return;
+            }
+          };
+          chooseColors(0);
+        }
+      }
+    }
+
+    // Серии: каждая позиция либо закрывается реальным числом, либо одним
+    // из имеющихся джокеров. Поэтому сохраняются и варианты, где джокер
+    // выгоднее придержать или оставить обычную копию для другого ряда.
+    for (let color = 0; color < 4 && !this.outOfTime(); color += 1) {
+      for (let start = MIN_VALUE; start <= MAX_VALUE - 2 && !this.outOfTime(); start += 1) {
+        for (let end = start + 2; end <= MAX_VALUE && !this.outOfTime(); end += 1) {
+          const values: number[] = [];
+          let possible = true;
+          for (let value = start; value <= end; value += 1) {
+            values.push(value);
+            if (!byColorValue.has(`${color}:${value}`) && jokers.length === 0) {
+              possible = false;
+              break;
+            }
+          }
+          if (!possible) continue;
+          const chosen: TileFace[] = [];
+          const usedJokers = new Set<number>();
+          const fill = (i: number): void => {
+            if (this.outOfTime()) return;
+            if (i === values.length) { addGroup(chosen); return; }
+            const value = values[i];
+            for (const tile of byColorValue.get(`${color}:${value}`) ?? []) {
+              chosen.push(tile);
+              fill(i + 1);
+              chosen.pop();
+              if (this.outOfTime()) return;
+            }
+            if (usedJokers.size >= 2) return;
+            for (const joker of jokers) {
+              if (usedJokers.has(joker.id)) continue;
+              usedJokers.add(joker.id);
+              chosen.push(joker);
+              fill(i + 1);
+              chosen.pop();
+              usedJokers.delete(joker.id);
+              if (this.outOfTime()) return;
+            }
+          };
+          fill(0);
+        }
+      }
+    }
+  }
+
   extendCandidates(hand: TileFace[]): void {
     if (hand.length === 0) return;
     const combos = this.combos(hand, 1, 3);
     for (const r of this._state.table) {
+      if (this.outOfTime()) return;
       if (r.tiles.length === 0) continue;
       const oldRes = validateRow(r.tiles);
       const oldPts = oldRes.ok ? rowPoints(r.tiles) : 0;
       const ref = `r${r.id}`;
       for (const combo of combos) {
+        if (this.outOfTime()) return;
         if (!shapeOk([...r.tiles, ...combo])) continue;
         let done = false;
         for (const order of this.orders(combo)) {
@@ -281,6 +429,7 @@ export class TurnPlanner {
       const idx: number[] = [];
       for (let i = 0; i < comboSize; i += 1) idx.push(i);
       while (true) {
+        if ((out.length & 31) === 0 && this.outOfTime()) return out;
         out.push(idx.map((i) => hand[i]));
         let p = comboSize - 1;
         while (p >= 0 && idx[p] === n - comboSize + p) p -= 1;
@@ -335,12 +484,14 @@ export class TurnPlanner {
     if (hand.length < 2) return;
     const combos = this.combos(hand, 2, 3);
     for (const r of this._state.table) {
+      if (this.outOfTime()) return;
       if (r.tiles.length < 4) continue;
       const oldRes = validateRow(r.tiles);
       if (!oldRes.ok) continue;
       const oldPts = rowPoints(r.tiles);
       const srcRef = `r${r.id}`;
       for (let ti = 0; ti < r.tiles.length; ti += 1) {
+        if (this.outOfTime()) return;
         const t = r.tiles[ti];
         const rest = [...r.tiles];
         rest.splice(ti, 1);
@@ -348,6 +499,7 @@ export class TurnPlanner {
         if (!validateRow(rest).ok) continue;
         const restPts = rowPoints(rest);
         for (const combo of combos) {
+          if (this.outOfTime()) return;
           if (!this.stealPrefilter(t, combo)) continue;
           const pool: TileFace[] = [...combo, t];
           if (!shapeOk(pool)) continue;
@@ -393,13 +545,16 @@ export class TurnPlanner {
     if (hand.length === 0) return;
     const runs: any[] = [];
     for (const r of this._state.table) {
+      if (this.outOfTime()) return;
       if (r.tiles.length < 3) continue;
       if (r.tiles[0].is_joker || r.tiles[r.tiles.length - 1].is_joker) continue;
       const res = validateRow(r.tiles);
       if (res.ok && res.kind === 'run') runs.push(r);
     }
     for (let i = 0; i < runs.length; i += 1) {
+      if (this.outOfTime()) return;
       for (let j = 0; j < runs.length; j += 1) {
+        if ((j & 15) === 0 && this.outOfTime()) return;
         if (i === j) continue;
         const A = runs[i];
         const B = runs[j];
@@ -478,11 +633,13 @@ export class TurnPlanner {
       if (r.tiles.length > 0) rows.push(r);
     }
     for (let i = 0; i < rows.length; i += 1) {
+      if (this.outOfTime()) return;
       if (this._rb_emitted >= this._rb_cand_cap) return;
       const ri = rows[i];
       if (ri.tiles.length <= this._rb_pool_max) this.rebuildTry([ri], hand);
       if (!this._rb_pairs) continue;
       for (let j = i + 1; j < rows.length; j += 1) {
+        if ((j & 15) === 0 && this.outOfTime()) return;
         if (this._rb_emitted >= this._rb_cand_cap) return;
         const rj = rows[j];
         if (ri.tiles.length + rj.tiles.length <= this._rb_pool_max) this.rebuildTry([ri, rj], hand);
@@ -542,14 +699,14 @@ export class TurnPlanner {
 
   rbCover(): void {
     this._rb_budget -= 1;
-    if (this._rb_budget <= 0) return;
+    if (this._rb_budget <= 0 || this.outOfTime()) return;
     if (this._rb_mand.length === 0) {
       if (this._rb_used_opt >= 1) this.rbEmit();
       return;
     }
     const tMin = this._rb_mand[0];
     for (const g of this.rbGroupsFor(tMin)) {
-      if (this._rb_budget <= 0) return;
+      if (this._rb_budget <= 0 || this.outOfTime()) return;
       const gIds = new Set(g.map((t) => t.id));
       const newMand = this._rb_mand.filter((t) => !gIds.has(t.id));
       const newOpt: TileFace[] = [];
@@ -610,7 +767,7 @@ export class TurnPlanner {
       const cand: TileFace[] = [...reals, ...jokers];
       for (let size = MIN_TILES; size <= MAX_SET; size += 1) {
         if (size > cand.length) break;
-        for (const subset of rbSubsets(cand, size)) {
+        for (const subset of rbSubsets(cand, size, () => this.outOfTime() || this._rb_budget <= 0)) {
           this._rb_budget -= 1;
           if (this._rb_budget <= 0) return out;
           if (!validateRow(subset).ok) continue;
@@ -681,7 +838,7 @@ export class TurnPlanner {
           if (reals.length > REBUILD_GROUP_MAX) continue;
           for (let m = holes.length; m <= Math.min(dj, holes.length + 2); m += 1) {
             if (reals.length + m > REBUILD_GROUP_MAX) continue;
-            for (const subset of rbSubsets(jokers, m)) {
+            for (const subset of rbSubsets(jokers, m, () => this.outOfTime() || this._rb_budget <= 0)) {
               this._rb_budget -= 1;
               if (this._rb_budget <= 0) return out;
               const extra = m - holes.length;
@@ -789,7 +946,7 @@ export class TurnPlanner {
   bt(i: number, usedHand: Set<number>, usedRefs: Set<string>, chosen: Candidate[],
     handPoints: number, curScore: number): void {
     this._budget -= 1;
-    if (this._budget <= 0) return;
+    if (this._budget <= 0 || this.outOfTime()) return;
     if (i >= this._candidates.length) {
       this.leaf(chosen, usedHand, handPoints, curScore);
       return;
@@ -853,22 +1010,29 @@ export class TurnPlanner {
   }
 }
 
-function rbSubsets(items: TileFace[], k: number): TileFace[][] {
+function rbSubsets(items: TileFace[], k: number, stop: () => boolean = () => false): TileFace[][] {
   const out: TileFace[][] = [];
   if (k <= 0) return [[]];
   if (items.length < k) return out;
-  rbSubsetsRec(items, 0, [], k, out);
+  rbSubsetsRec(items, 0, [], k, out, stop);
   return out;
 }
 
-function rbSubsetsRec(items: TileFace[], start: number, cur: TileFace[], k: number, out: TileFace[][]): void {
+function rbSubsetsRec(items: TileFace[], start: number, cur: TileFace[], k: number, out: TileFace[][],
+  stop: () => boolean): void {
+  if (stop()) return;
   if (cur.length === k) {
     out.push([...cur]);
     return;
   }
   for (let i = start; i <= items.length - (k - cur.length); i += 1) {
+    if ((i & 7) === 0 && stop()) return;
     cur.push(items[i]);
-    rbSubsetsRec(items, i + 1, cur, k, out);
+    rbSubsetsRec(items, i + 1, cur, k, out, stop);
     cur.pop();
   }
+}
+
+function nowMs(): number {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now();
 }

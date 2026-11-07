@@ -30,6 +30,7 @@ import {
   setInputMaxLength,
   SKIN,
   softPanel,
+  wrapTextToWidth,
   DropdownCtx,
   px,
 } from './uiskin';
@@ -133,7 +134,8 @@ export class MenuScreen {
         : t('Вы всё ещё в комнате «%s»', pending.name || pending.code);
       const innerW = Math.max(120, colW - 20);
       const labelFont = fs(14);
-      const labelH = estimateWrappedTextHeight(message, innerW, labelFont) + 4;
+      const wrappedMessage = wrapTextToWidth(message, innerW, labelFont);
+      const labelH = estimateWrappedTextHeight(wrappedMessage, innerW, labelFont) + 4;
       const buttonFont = fs(14);
       const buttonH = Math.max(40, Math.ceil(buttonFont * 1.7));
       const backText = t('Вернуться');
@@ -152,7 +154,7 @@ export class MenuScreen {
       bcol.paddingLeft = px(10);
       bcol.paddingTop = px(6);
       box.root.addControl(bcol);
-      const pendingLabel = mkLabel(message, {
+      const pendingLabel = mkLabel(wrappedMessage, {
         fontSize: labelFont,
         color: SKIN.noteGold,
         width: innerW,
@@ -186,7 +188,9 @@ export class MenuScreen {
 
     this.addCountRow(col, S.player_count, colW);
 
-    col.addControl(mkLabel(t('Имена игроков:'), { fontSize: fs(17), color: '#ffffffE6' }));
+    col.addControl(mkLabel(t('Имена игроков:'), {
+      fontSize: fs(17), color: '#ffffffE6', height: Math.max(30, Math.ceil(fs(17) * 1.45)),
+    }));
 
     const names = new StackPanel('namesBox');
     names.isVertical = true;

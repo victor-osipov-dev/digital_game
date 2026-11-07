@@ -35,7 +35,9 @@ import {
   modalOverlay,
   popupList,
   setButtonLabel,
+  scrollViewerByPixels,
   SKIN,
+  wrapTextToWidth,
   softPanel,
   px,
   type ButtonTheme,
@@ -122,6 +124,7 @@ export class OfflineGame {
   private presentQueue: Array<
     | { kind: 'title'; seat: number; text: string }
     | { kind: 'steps'; seat: number; ids: number[] }
+    | { kind: 'draft'; seat: number; ids: number[]; rowId: number }
   > = [];
   private presentBusy = false;
   private presentGen = 0;
@@ -131,6 +134,9 @@ export class OfflineGame {
   private titlePendingSeat = -1;
   private titleShownFor = -1;
   private pendingSteps: { ids: number[]; seat: number }[] = [];
+  private tableScrollRaf = 0;
+  private tableScrollGeneration = 0;
+  private tableScrollDone: (() => void) | null = null;
   private lastWaitEnv: GameEnvelope | null = null;
   // локальная статистика: партия считается, только если за столом ровно
   // один живой игрок (остальные — боты). Hot-seat не учитывается.
@@ -151,9 +157,20 @@ export class OfflineGame {
   // использована и следующую можно получить только за просмотр рекламы.
   private hintAdBadge!: Rectangle;
   private timerLab!: TextBlock;
+  private timerOverflowRow!: Container;
+  private timerOverflowLab!: TextBlock;
+  private timerText = '';
+  private timerSample = '';
+  private timerName = '';
+  private timerMine = false;
+  private timerOverflowByFit = false;
+  private timerSecond = 0;
+  private timerInOverflow = false;
+  private timerOverflowHeight = 0;
   private allTopActionButtons: Button[] = [];
   private hiddenTopActionNames: string[] = [];
   private chipsRow!: StackPanel;
+  private chipsScroll!: ScrollViewer;
   private rowsScroll!: ScrollViewer;
   private rowsInner!: StackPanel;
   private handPanel!: Container;
@@ -176,6 +193,10 @@ export class OfflineGame {
   private rowSlots: { root: Container; fill: Rectangle; at: number }[] = [];
   private handFigs: TileFigure[] = [];
   private dragData: DragData | null = null;
+  private dragPointer: { x: number; y: number } | null = null;
+  private dragPointerAbort: AbortController | null = null;
+  private dragAutoScrollRaf = 0;
+  private dragAutoScrollLast = 0;
   private hintTimer = 0;
   private hintsUsed = new Set<number>();
   private toastHost: Container | null = null;
@@ -200,6 +221,9 @@ export class OfflineGame {
   }
 
   build(root: Container): void {
+    this.cancelActiveDrag();
+    this.cancelTableScroll();
+    this.layoutAnimationId += 1;
     this.boardRoot = root;
     root.clearControls();
     // панель ожидания жила в прежнем дереве — ссылки больше не валидны
@@ -304,8 +328,8 @@ export class OfflineGame {
     this.topRow.addControl(this.deckBtn);
 
     // таймер хода (только сетевая партия)
-    this.timerLab = mkLabel(' ', { fontSize: fs(14), color: SKIN.gold, width: 130, height: 46, noWrap: false, vAlign: 'center' });
-    this.timerLab.textWrapping = true;
+    this.timerLab = mkLabel('', { fontSize: fs(14), color: SKIN.gold, width: 130, height: 46, noWrap: true, vAlign: 'center' });
+    this.timerLab.textWrapping = false;
     this.topRow.addControl(this.timerLab);
 
 
@@ -356,27 +380,45 @@ export class OfflineGame {
   }
 
   // Узкий экран: три «переполняющих» действия прячем в бургер.
-  private syncTopBar(): void {
+  private syncTopBar(): boolean {
     const vw = viewWidth();
     const actions = this.topActions;
-    if (!actions) return;
-    this.timerLab.width = px(Math.min(170, Math.max(96, Math.floor(vw * 0.28))));
+    if (!actions) return false;
     const sep = 6;
-    const widthOf = (b: Control): number => (b as Button).widthInPixels || 60;
-    const fits = (list: Control[], burger: boolean): boolean => {
+    const widthOf = (b: Control): number => {
+      const measured = b.widthInPixels;
+      const configured = Number.parseFloat(String(b.width));
+      return measured || (Number.isFinite(configured) ? configured : 0) || 60;
+    };
+    const desiredTimerW = this.timerSample
+      ? Math.ceil(measureTextWidth(this.timerSample, fs(14))) + 12
+      : 0;
+    const widthFor = (list: Control[], burger: boolean): number => {
       const actionWidth = list.reduce((acc, b) => acc + widthOf(b), 0)
         + Math.max(0, list.length - 1) * sep
         + (burger ? 60 + (list.length ? sep : 0) : 0);
-      const timerW = this.timerLab.widthInPixels || 130;
-      const need = actionWidth + widthOf(this.deckBtn) + timerW + 2 * sep;
-      return need <= vw - SIDE_PAD * 2;
+      return actionWidth + widthOf(this.deckBtn) + 2 * sep;
     };
-    let shown = [...this.allTopActionButtons];
-    let hasBurger = false;
-    while (shown.length > 0 && !fits(shown, hasBurger)) {
-      shown.pop();
-      hasBurger = true;
+    const chooseActions = (timerW: number): { shown: Button[]; hasBurger: boolean } => {
+      let shown = [...this.allTopActionButtons];
+      let hasBurger = false;
+      const fits = (): boolean => widthFor(shown, hasBurger) + timerW <= vw - SIDE_PAD * 2;
+      while (shown.length > 0 && !fits()) {
+        shown.pop();
+        hasBurger = true;
+      }
+      return { shown, hasBurger };
+    };
+    let { shown, hasBurger } = chooseActions(desiredTimerW);
+    // Сначала сохраняем таймер в верхней строке и убираем лишние действия
+    // в бургер. Только если даже с одним бургером не хватает ширины —
+    // переносим таймер и возвращаем максимум кнопок в строку.
+    this.timerOverflowByFit = !!this.timerSample
+      && widthFor(shown, hasBurger) + desiredTimerW > vw - SIDE_PAD * 2;
+    if (this.timerOverflowByFit) {
+      ({ shown, hasBurger } = chooseActions(0));
     }
+    this.timerLab.width = px(this.timerOverflowByFit ? 0 : desiredTimerW);
     this.hiddenTopActionNames = this.allTopActionButtons
       .filter((b) => !shown.includes(b))
       .map((b) => b.name ?? '');
@@ -417,7 +459,7 @@ export class OfflineGame {
     actions.clearControls();
     for (const c of list) actions.addControl(c);
     actions.width = px(list.reduce((acc, b) => acc + widthOf(b), 0) + Math.max(0, list.length - 1) * sep);
-    this.resizeTimerLayout();
+    return this.resizeTimerLayout();
   }
 
   private resetDrawMark(): void {
@@ -431,6 +473,8 @@ export class OfflineGame {
     this.draftNewIds.clear();
     this.draftFrom = -1;
     this.lastDraftPayload = '';
+    this.presentQueue = this.presentQueue.filter((segment) => segment.kind !== 'draft');
+    this.cancelTableScroll();
   }
 
   // Запомнить взятие (game.gd _note_draw): чип «· взял» у любого места,
@@ -480,18 +524,25 @@ export class OfflineGame {
     dim.isPointerBlocker = true;
     overlay.addControl(dim);
     const titleWidth = Math.max(180, viewWidth() - 48);
-    const desiredSize = fs(56);
-    // Подбираем размер так, чтобы строка целиком помещалась по ширине:
-    // иначе при крупном тексте «Ход: Игрок 1» режется справа и слева.
-    let titleSize = desiredSize;
-    const minSize = Math.max(fs(16), 18);
-    while (titleSize > minSize && measureTextWidth(text, titleSize) > titleWidth) titleSize -= 1;
-    const lab = mkLabel(text, {
+    let titleSize = fs(56);
+    const minSize = 18;
+    const maxTitleHeight = Math.max(72, Math.floor(viewHeight() * 0.46));
+    let wrappedTitle = text;
+    let titleHeight = 0;
+    // Сохраняем крупный титр, пока он укладывается в ширину/высоту. Для
+    // длинного имени переносим слова и лишь затем уменьшаем шрифт — никакой
+    // части «Ход» или суффикса «(бот)» не обрезаем.
+    while (true) {
+      wrappedTitle = wrapTextToWidth(text, titleWidth, titleSize);
+      titleHeight = estimateWrappedTextHeight(wrappedTitle, titleWidth, titleSize);
+      if (titleHeight <= maxTitleHeight || titleSize <= minSize) break;
+      titleSize = Math.max(minSize, titleSize - 2);
+    }
+    const lab = mkLabel(wrappedTitle, {
       fontSize: titleSize,
       color: SKIN.gold,
       width: titleWidth,
-      height: Math.ceil(titleSize * 1.55),
-      noWrap: true,
+      height: titleHeight,
     });
     overlay.addControl(lab);
     this.popups.addControl(overlay);
@@ -516,6 +567,7 @@ export class OfflineGame {
 
   private buildChipsRow(col: StackPanel): void {
     const scroll = new ScrollViewer('chipsScroll');
+    this.chipsScroll = scroll;
     scroll.thickness = 0;
     scroll.width = '100%';
     scroll.height = px(50);
@@ -523,8 +575,20 @@ export class OfflineGame {
     scroll.paddingRight = px(SIDE_PAD);
     // Тонкая полоска прокрутки (4px) вместо стандартной 20px.
     scroll.barSize = 4;
-    enableSmoothScroll(scroll, 'horizontal');
     col.addControl(scroll);
+    enableSmoothScroll(scroll, 'horizontal');
+    this.timerOverflowRow = new Container('timerOverflowRow');
+    this.timerOverflowRow.width = '100%';
+    this.timerOverflowRow.height = px(0);
+    this.timerOverflowRow.isVisible = false;
+    this.timerOverflowRow.isHitTestVisible = false;
+    this.timerOverflowLab = mkLabel('', {
+      fontSize: fs(14), color: SKIN.gold, width: Math.max(120, viewWidth() - 24),
+      height: 0, noWrap: true, hAlign: 'center', align: 'center', vAlign: 'center',
+    });
+    this.timerOverflowLab.isHitTestVisible = false;
+    this.timerOverflowRow.addControl(this.timerOverflowLab);
+    col.addControl(this.timerOverflowRow);
     const box = new StackPanel('chips');
     box.isVertical = false;
     box.spacing = 6;
@@ -537,7 +601,7 @@ export class OfflineGame {
   // Фиксированная вертикаль: верхний отступ колонки, верхняя панель,
   // ряд игроков и нижние кнопки.
   private fixedVSpace(): number {
-    return TOP_PAD + 46 + 50 + 58;
+    return TOP_PAD + 46 + 50 + this.timerOverflowHeight + 58;
   }
 
   // Минимальная высота стола: на очень низких окнах стол ужимается,
@@ -565,8 +629,8 @@ export class OfflineGame {
     // вправо и обрезал их. Прячем полосу и запрещаем её появление.
     (this.rowsScroll as unknown as { _horizontalBar: Control })._horizontalBar.isVisible = false;
     (this.rowsScroll as unknown as { _forceHorizontalBar: boolean })._forceHorizontalBar = false;
-    enableSmoothScroll(this.rowsScroll, 'vertical', { tileDragAllowed: () => this.canInteract() });
     col.addControl(this.rowsScroll);
+    enableSmoothScroll(this.rowsScroll, 'vertical', { tileDragAllowed: () => this.canInteract() });
     const innerHolder = new StackPanel('innerHolder');
     innerHolder.isVertical = true;
     // Не даём вертикальному StackPanel сжать окно контента до ширины ряда.
@@ -598,21 +662,32 @@ export class OfflineGame {
   // их так, чтобы вся рука влезала на экран целиком.
   private handTileSize(): { x: number; y: number } {
     const ts = tileSize();
-    const vh = viewHeight();
     const availW = this.handAvailW();
-    const g = flowGap(ts);
-    // Максимум высоты руки: экран минус верхняя панель, ряд игроков,
-    // минимальный стол и нижние кнопки.
-    const maxHandH = Math.max(120, vh - TOP_PAD - 46 - 50 - 120 - 6 - 58);
-    const perRow = Math.max(1, Math.floor((availW + g) / (ts.x + g)));
-    const rows = Math.ceil(14 / perRow);
-    const need = rows * (ts.y + g) - g;
-    if (need <= maxHandH) return ts;
-    const scale = Math.max(0.55, maxHandH / need);
-    return {
-      x: Math.max(20, Math.round(ts.x * scale)),
-      y: Math.max(24, Math.round(ts.y * scale)),
+    // Сохраняем минимум высоты стола, кнопки и отступы. Уменьшение
+    // пересчитывает число карточек в ряду — важно: при крупном размере
+    // достаточно уменьшить ширину, чтобы 14 фишек уместились в 2–3 ряда.
+    const maxHandH = Math.max(1, viewHeight() - this.fixedVSpace()
+      - OfflineGame.MIN_TABLE_H - 26);
+    const layoutAt = (scale: number): { size: { x: number; y: number }; height: number } => {
+      const size = {
+        x: Math.max(18, Math.round(ts.x * scale)),
+        y: Math.max(22, Math.round(ts.y * scale)),
+      };
+      const gap = flowGap(size);
+      const perRow = Math.max(1, Math.floor((availW + gap) / (size.x + gap)));
+      const rows = Math.ceil(14 / perRow);
+      return { size, height: rows * (size.y + gap) - gap };
     };
+    const full = layoutAt(1);
+    if (full.height <= maxHandH) return ts;
+    let low = 0.05;
+    let high = 1;
+    for (let i = 0; i < 16; i += 1) {
+      const mid = (low + high) / 2;
+      if (layoutAt(mid).height <= maxHandH) low = mid;
+      else high = mid;
+    }
+    return layoutAt(low).size;
   }
 
   private buildHandArea(col: StackPanel): void {
@@ -748,6 +823,9 @@ export class OfflineGame {
   // сервер подтверждает их (commit) либо отклоняет (GAME_ERROR).
   applyOnlineView(env: GameEnvelope): void {
     this.onlineMode = true;
+    // Серверное состояние может прийти пока палец держит фишку. Старый
+    // источник нельзя оставлять в отсоединённом дереве во время refresh.
+    if (this.dragData) this.cancelActiveDrag();
     const view = env.state;
     const continuing = this.running && !!this.state && !this.state.finished
       && this.roomCode === view.code;
@@ -774,6 +852,7 @@ export class OfflineGame {
     // lastTurnTileIds до следующего перехода хода.
     if (this.draftFrom >= 0 && (view.finished || curSeat !== this.draftFrom)) {
       this.clearDraftPresentation();
+      this.cancelTableScroll();
     }
     const moverSeat = (view.lastTurn ?? []).length === 0
       ? curSeat
@@ -923,6 +1002,12 @@ export class OfflineGame {
     this.presentBusy = true;
     const gen = this.presentGen;
     while (this.presentQueue.length > 0 && gen === this.presentGen && this.running) {
+      // Немедленный DRAFT может проигрываться, пока эта очередь ждёт титр;
+      // не запускаем следующий committed-сегмент поверх его анимации.
+      if (this.flightActive) {
+        await new Promise<void>((r) => window.requestAnimationFrame(() => r()));
+        continue;
+      }
       const seg = this.presentQueue.shift()!;
       if (seg.kind === 'title') {
         if (this.titleFresh(seg.seat)) {
@@ -932,22 +1017,18 @@ export class OfflineGame {
         }
       } else {
         this.showSeat(seg.seat);
-        this.flightActive = true;
+        if (seg.kind === 'draft') {
+          if (this.draftFrom !== seg.seat || !this.state || this.state.myTurn()) {
+            if (!this.finishPresentedSegment(gen)) return;
+            continue;
+          }
+          this.flightActive = true;
+          await this.scrollTableToRow(seg.rowId, gen);
+          if (gen !== this.presentGen || !this.running) return;
+        }
+        else this.flightActive = true;
         await this.playQueuedSteps(seg.ids, gen, seg.seat);
-        this.flightActive = false;
-        if (gen !== this.presentGen) return;
-        // пересборка/титр, заказанные посреди полёта
-        if (this.refreshPending) {
-          this.refreshPending = false;
-          this.refresh();
-        }
-        const pending = this.pendingSteps.splice(0);
-        for (const p of pending) this.enqueueSteps(p.ids, p.seat);
-        if (this.titlePendingSeat >= 0) {
-          const s = this.titlePendingSeat;
-          this.titlePendingSeat = -1;
-          this.appendTurnTitle(s);
-        }
+        if (!this.finishPresentedSegment(gen)) return;
       }
     }
     if (gen === this.presentGen) {
@@ -955,6 +1036,103 @@ export class OfflineGame {
       this.presentBusy = false;
       this.showSeat(-1);
     }
+  }
+
+  private finishPresentedSegment(gen: number): boolean {
+    this.flightActive = false;
+    if (gen !== this.presentGen) return false;
+    if (this.refreshPending) {
+      this.refreshPending = false;
+      this.refresh();
+    }
+    const pending = this.pendingSteps.splice(0);
+    for (const p of pending) this.enqueueSteps(p.ids, p.seat);
+    if (this.titlePendingSeat >= 0) {
+      const seat = this.titlePendingSeat;
+      this.titlePendingSeat = -1;
+      this.appendTurnTitle(seat);
+    }
+    return true;
+  }
+
+  private async playDraftPreview(seg: { seat: number; ids: number[]; rowId: number }): Promise<void> {
+    const gen = this.presentGen;
+    this.showSeat(seg.seat);
+    this.flightActive = true;
+    await this.scrollTableToRow(seg.rowId, gen);
+    if (gen !== this.presentGen || !this.running) return;
+    if (this.draftFrom !== seg.seat || !this.state || this.state.myTurn()) {
+      if (this.finishPresentedSegment(gen)) void this.pumpPresent();
+      return;
+    }
+    await this.playQueuedSteps(seg.ids, gen, seg.seat);
+    if (!this.finishPresentedSegment(gen)) return;
+    void this.pumpPresent();
+  }
+
+  private cancelTableScroll(): void {
+    this.tableScrollGeneration += 1;
+    if (this.tableScrollRaf) window.cancelAnimationFrame(this.tableScrollRaf);
+    this.tableScrollRaf = 0;
+    const done = this.tableScrollDone;
+    this.tableScrollDone = null;
+    done?.();
+  }
+
+  private scrollTableToRow(rowId: number, gen: number): Promise<void> {
+    this.cancelTableScroll();
+    if (rowId < 0) return Promise.resolve();
+    const token = this.tableScrollGeneration + 1;
+    this.tableScrollGeneration = token;
+    return new Promise<void>((resolve) => {
+      this.tableScrollDone = resolve;
+      let layoutFrames = 0;
+      let last = performance.now();
+      const finish = (): void => {
+        if (this.tableScrollGeneration !== token) return;
+        if (this.tableScrollRaf) window.cancelAnimationFrame(this.tableScrollRaf);
+        this.tableScrollRaf = 0;
+        this.tableScrollDone = null;
+        resolve();
+      };
+      const tick = (now: number): void => {
+        this.tableScrollRaf = 0;
+        if (token !== this.tableScrollGeneration || gen !== this.presentGen || !this.running) {
+          finish();
+          return;
+        }
+        const row = this.rowFigs.find((fig) => !fig.hintZone && fig.rowId === rowId);
+        const target = row ? rectOf(row.root) : { x: 0, y: 0, w: 0, h: 0 };
+        const viewport = rectOf(this.rowsScroll);
+        if (!row || target.w <= 0 || target.h <= 0 || viewport.h <= 0) {
+          if (layoutFrames++ < 6) this.tableScrollRaf = window.requestAnimationFrame(tick);
+          else finish();
+          return;
+        }
+        const margin = Math.min(18, viewport.h * 0.08);
+        let delta = 0;
+        if (target.h >= viewport.h - margin * 2) {
+          delta = target.y - (viewport.y + margin);
+        } else if (target.y < viewport.y + margin) {
+          delta = target.y - (viewport.y + margin);
+        } else if (target.y + target.h > viewport.y + viewport.h - margin) {
+          delta = target.y + target.h - (viewport.y + viewport.h - margin);
+        }
+        if (Math.abs(delta) < 2) {
+          finish();
+          return;
+        }
+        const elapsed = Math.max(8, Math.min(34, now - last));
+        last = now;
+        const step = Math.sign(delta) * Math.min(Math.abs(delta), 720 * elapsed / 1000);
+        if (Math.abs(scrollViewerByPixels(this.rowsScroll, 'vertical', step)) < 0.1) {
+          finish();
+          return;
+        }
+        this.tableScrollRaf = window.requestAnimationFrame(tick);
+      };
+      this.tableScrollRaf = window.requestAnimationFrame(tick);
+    });
   }
 
   // Пошаговый прилёт фишек из очереди: прячем их и «привозим» по одной,
@@ -993,6 +1171,10 @@ export class OfflineGame {
       for (const f of figs) f.root.alpha = f.rgbaAlpha;
       return;
     }
+    const sourceChip = this.chipsRow.children[seat];
+    if (sourceChip) this.ensureSeatChipVisible(sourceChip);
+    await new Promise<void>((r) => window.requestAnimationFrame(() => window.requestAnimationFrame(() => r())));
+    if (gen !== this.presentGen || !this.running) return;
     const spawn = this.chipSpawnRect(seat, ts);
     let maxEnd = 0;
     targets.forEach(({ fig, to }, i) => {
@@ -1015,6 +1197,18 @@ export class OfflineGame {
     const r = chip ? rectOf(chip) : { x: 0, y: 0, w: 0, h: 0 };
     if (r.w > 1 && r.h > 1) return { x: r.x + r.w / 2 - ts.x / 2, y: r.y + r.h / 2 - ts.y / 2 };
     return { x: viewWidth() - 40, y: -60 };
+  }
+
+  private ensureSeatChipVisible(chip: Control): void {
+    const row = rectOf(this.chipsScroll);
+    const item = rectOf(chip);
+    if (row.w <= 0 || item.w <= 0) return;
+    const margin = 8;
+    if (item.x < row.x + margin) {
+      scrollViewerByPixels(this.chipsScroll, 'horizontal', item.x - row.x - margin);
+    } else if (item.x + item.w > row.x + row.w - margin) {
+      scrollViewerByPixels(this.chipsScroll, 'horizontal', item.x + item.w - (row.x + row.w - margin));
+    }
   }
 
   // Входящий DRAFT: стол другого игрока подменяется его раскладкой.
@@ -1041,13 +1235,49 @@ export class OfflineGame {
     const payload = JSON.stringify(msg.rows);
     if (payload === this.lastDraftPayload) return;
     this.lastDraftPayload = payload;
-    this.draftNewIds = new Set<number>();
+    const previousRows = this.state.table.map((row, index) => ({
+      id: row.id,
+      index,
+      tiles: row.tiles.map((tile) => tile.id),
+    }));
+    const previousDraftIds = this.draftNewIds;
+    const nextDraftIds = new Set<number>();
     // фишки, которых нет в подтверждённом столе, — «черновые»
     const confirmed = new Set<number>();
     for (const r of this.lastConfirmedTable) for (const id of r.tiles) confirmed.add(id);
-    for (const r of msg.rows) for (const id of r.tiles) if (!confirmed.has(id)) this.draftNewIds.add(id);
+    for (const r of msg.rows) for (const id of r.tiles) if (!confirmed.has(id)) nextDraftIds.add(id);
+    const animatedIds = [...nextDraftIds].filter((id) => !previousDraftIds.has(id));
+    this.draftNewIds = nextDraftIds;
+    const oldRows = new Map(previousRows.map((row) => [row.id, row]));
+    const changedRows = msg.rows.filter((row, index) => {
+      const previous = oldRows.get(row.id);
+      return !previous || previous.index !== index
+        || previous.tiles.length !== row.tiles.length
+        || previous.tiles.some((id, i) => id !== row.tiles[i]);
+    });
+    const targetRowId = msg.rows.find((row) => animatedIds.some((id) => row.tiles.includes(id)))?.id
+      ?? changedRows[0]?.id ?? -1;
     this.applyServerRows(msg.rows);
     this.refresh();
+    const segment = {
+      kind: 'draft',
+      seat: msg.from,
+      ids: animatedIds,
+      rowId: targetRowId,
+    } as const;
+    if (this.flightActive) this.enqueueDraftSegment(segment);
+    else void this.playDraftPreview(segment);
+  }
+
+  private enqueueDraftSegment(segment: { seat: number; ids: number[]; rowId: number }): void {
+    const last = this.presentQueue[this.presentQueue.length - 1];
+    if (last?.kind === 'draft' && last.seat === segment.seat) {
+      last.ids = [...new Set([...last.ids, ...segment.ids])];
+      last.rowId = segment.rowId;
+    } else {
+      this.presentQueue.push({ kind: 'draft', ...segment });
+    }
+    void this.pumpPresent();
   }
 
   // GAME_ERROR: причина в тосте; красная подсветка рядов по errors[row].
@@ -1137,23 +1367,32 @@ export class OfflineGame {
     if (!this.onlineMode || !this.state || this.state.finished
       || (env && (env.paused || env.waiting || (env.grace ?? 0) > 0))
       || seconds === null || !Number.isFinite(seconds) || seconds <= 0) {
-      this.timerLab.text = '';
-      this.resizeTimerLayout();
+      this.timerText = '';
+      this.timerSample = '';
+      this.timerName = '';
+      this.timerMine = false;
+      const changed = this.syncTopBar();
+      if (changed && this.state && this.running && this.rowsScroll) this.refresh();
       return;
     }
     // «Ваш ход — N с» / «Ход: X — N с» (game.gd:1994-2014)
-    const curName = this.state ? this.state.playerName(currentSeat) : '';
+    this.timerName = this.state.playerName(currentSeat);
+    this.timerMine = mine;
+    this.timerSample = this.formatTimerText(888);
+    const topLayoutChanged = this.syncTopBar();
     let left = Math.max(0, seconds);
     const render = (): void => {
       const sec = Math.max(1, left); // «0 с» не показываем
-      this.timerLab.text = mine
-        ? t('Ваш ход — %d с', sec)
-        : t('Ход: %s — %d с', curName, sec);
-      this.timerLab.fontSize = fs(14);
-      this.timerLab.color = left <= 10 ? SKIN.flag : SKIN.gold;
-      this.resizeTimerLayout();
+      this.timerSecond = sec;
+      this.timerText = this.formatTimerText(sec);
+      const changed = this.resizeTimerLayout();
+      const color = left <= 10 ? SKIN.flag : SKIN.gold;
+      this.timerLab.color = color;
+      this.timerOverflowLab.color = color;
+      if (changed && this.state && this.running && this.rowsScroll) this.refresh();
     };
     render();
+    if (topLayoutChanged && this.state && this.running && this.rowsScroll) this.refresh();
     this.onlineTimer = setInterval(() => {
       left -= 1;
       if (left <= 0 && this.onlineTimer) {
@@ -1164,24 +1403,54 @@ export class OfflineGame {
     }, 1000);
   }
 
-  private resizeTimerLayout(): void {
-    if (!this.timerLab || !this.topRow) return;
+  private formatTimerText(seconds: number, name = this.timerName): string {
+    return this.timerMine
+      ? t('Ваш ход — %d с', seconds)
+      : t('Ход: %s — %d с', name, seconds);
+  }
+
+  private resizeTimerLayout(): boolean {
+    if (!this.timerLab || !this.topRow || !this.timerOverflowRow || !this.timerOverflowLab) return false;
     const font = fs(14);
     this.timerLab.fontSize = font;
-    this.timerLab.textWrapping = true;
-    const width = this.timerLab.widthInPixels || Math.min(170, Math.max(96, Math.floor(viewWidth() * 0.28)));
-    const contentH = this.timerLab.text.trim()
-      ? estimateWrappedTextHeight(this.timerLab.text, width, font) + 6
-      : 46;
-    const rowH = Math.max(46, contentH);
-    this.timerLab.height = px(rowH);
-    this.topRow.height = px(rowH);
+    this.timerLab.textWrapping = false;
+    const overflow = !!this.timerText && this.timerOverflowByFit;
+    const fullWidth = Math.max(120, viewWidth() - 24);
+    let overflowFont = font;
+    let overflowName = this.timerName;
+    if (overflow) {
+      while (overflowFont > 11
+        && measureTextWidth(this.formatTimerText(888, overflowName), overflowFont) > fullWidth - 12) {
+        overflowFont -= 1;
+      }
+      while (overflowName.length > 1
+        && measureTextWidth(this.formatTimerText(888, overflowName), overflowFont) > fullWidth - 12) {
+        overflowName = overflowName.slice(0, -1);
+      }
+      if (overflowName !== this.timerName) overflowName = `${overflowName}…`;
+    }
+    const overflowHeight = overflow ? Math.ceil(overflowFont * 1.7) + 6 : 0;
+    const changed = overflow !== this.timerInOverflow || overflowHeight !== this.timerOverflowHeight;
+    this.timerInOverflow = overflow;
+    this.timerOverflowHeight = overflowHeight;
+    this.timerLab.text = overflow ? '' : this.timerText;
+    this.timerLab.isVisible = !overflow;
+    this.timerLab.height = px(46);
+    this.topRow.height = px(46);
+    this.timerOverflowRow.isVisible = overflow;
+    this.timerOverflowRow.height = px(overflowHeight);
+    this.timerOverflowLab.text = overflow ? this.formatTimerText(this.timerSecond, overflowName) : '';
+    this.timerOverflowLab.fontSize = overflowFont;
+    this.timerOverflowLab.width = px(fullWidth);
+    this.timerOverflowLab.height = px(overflowHeight);
+    this.timerOverflowLab.textWrapping = false;
     this.deckBtn.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
     const actions = this.topRow.children.find((c) => c.name === 'topActions') as StackPanel | undefined;
     if (actions) {
-      actions.height = px(rowH);
+      actions.height = px(46);
       actions.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
     }
+    return changed;
   }
 
   // Панель ожидания: пауза/ожидание соперника/восстановление связи.
@@ -1232,13 +1501,20 @@ export class OfflineGame {
     // Панель ожидания НЕ модальная: это пояснение «почему нельзя ходить»,
   // а не блокировка интерфейса — меню/выход должны оставаться доступны.
   private showWaitPanel(text: string): void {
+    const width = Math.min(viewWidth() - 24, 460);
+    const font = fs(15);
+    const contentW = Math.max(120, width - 24);
+    const wrapped = wrapTextToWidth(text, contentW, font);
+    const height = Math.max(44, estimateWrappedTextHeight(wrapped, contentW, font) + 8);
     if (this.waitHost && this.waitLab) {
-      this.waitLab.text = text;
+      this.waitLab.text = wrapped;
+      this.waitLab.height = px(height - 8);
+      this.waitHost.height = px(height);
       return;
     }
     const host = new Container('wait');
-    host.width = px(Math.min(viewWidth() - 24, 460));
-    host.height = px(44);
+    host.width = px(width);
+    host.height = px(height);
     host.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
     host.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
     host.top = px(112);
@@ -1250,7 +1526,9 @@ export class OfflineGame {
     fill.root.height = '100%';
     fill.root.isHitTestVisible = false;
     host.addControl(fill.root);
-    const lab = mkLabel(text, { fontSize: fs(15), color: '#FFFFFF', noWrap: false, height: 40 });
+    const lab = mkLabel(wrapped, {
+      fontSize: font, color: '#FFFFFF', width: contentW, height: height - 8, noWrap: false,
+    });
     lab.isHitTestVisible = false;
     host.addControl(lab);
     this.boardRoot.addControl(host);
@@ -1308,9 +1586,15 @@ export class OfflineGame {
 
   // Останов таймеров при уходе с экрана (без утечек interval).
   stopTimers(): void {
+    this.cancelActiveDrag();
+    this.cancelTableScroll();
     this.stopRejoinLoop();
     this.stopDraftResend();
     this.stopGraceCountdown();
+    if (this.flashTimer) {
+      window.clearTimeout(this.flashTimer);
+      this.flashTimer = 0;
+    }
     // показа прерываем: смена экрана/уход не должны доигрывать очередь
     this.presentGen += 1;
     this.presentQueue = [];
@@ -1396,31 +1680,48 @@ export class OfflineGame {
 
   private showPass(title: string, name: string, onReady: () => void): void {
     const { overlay, close } = modalOverlay(this.popups, 'pass', { alpha: 0.88, zIndex: 800 });
+    const passW = Math.max(160, Math.floor(viewWidth() * 0.86));
+    const passScrollH = Math.max(120, viewHeight() - 24);
+    const scroll = new ScrollViewer('passScroll');
+    scroll.thickness = 0;
+    scroll.barSize = 4;
+    scroll.width = px(passW);
+    scroll.height = px(passScrollH);
+    scroll.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+    scroll.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+    overlay.addControl(scroll);
+    enableSmoothScroll(scroll);
     const col = new StackPanel('passCol');
     col.isVertical = true;
     col.spacing = 16;
     // Ширина колонки = ширина меток: иначе при крупном тексте метка шире
     // колонки и первая буква режется слева.
-    col.width = px(Math.max(160, Math.floor(viewWidth() * 0.86)));
+    col.width = '100%';
     col.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
-    col.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
-    overlay.addControl(col);
+    const passTitleH = estimateWrappedTextHeight(title, passW, fs(18));
+    const wrappedName = wrapTextToWidth(name, passW, fs(30));
+    const passNameH = estimateWrappedTextHeight(wrappedName, passW, fs(30));
+    const passButtonH = 56;
+    const passContentH = passTitleH + passNameH + 24 + passButtonH + 16 * 3;
+    col.verticalAlignment = passContentH <= passScrollH
+      ? Control.VERTICAL_ALIGNMENT_CENTER
+      : Control.VERTICAL_ALIGNMENT_TOP;
+    scroll.addControl(col);
     // Высота по реальному переносу строк: на телефоне с крупным текстом
     // заголовок/имя занимают несколько строк, и фиксированная высота
     // резала их сверху и снизу.
-    const passW = Math.max(160, Math.floor(viewWidth() * 0.86));
     const titleLab = mkLabel(title, {
       fontSize: fs(18),
       color: '#ffffffCC',
       width: passW,
-      height: estimateWrappedTextHeight(title, passW, fs(18)),
+      height: passTitleH,
     });
     col.addControl(titleLab);
-    const nameLab = mkLabel(name, {
+    const nameLab = mkLabel(wrappedName, {
       fontSize: fs(30),
       color: SKIN.gold,
       width: passW,
-      height: estimateWrappedTextHeight(name, passW, fs(30)),
+      height: passNameH,
     });
     col.addControl(nameLab);
     // Точная высота после реального переноса глифов (оценка выше нужна
@@ -1430,6 +1731,10 @@ export class OfflineGame {
       if (th > 0) titleLab.height = px(Math.max(titleLab.heightInPixels, th));
       const nh = Math.ceil(nameLab.computeExpectedHeight());
       if (nh > 0) nameLab.height = px(Math.max(nameLab.heightInPixels, nh));
+      const actualContentH = titleLab.heightInPixels + nameLab.heightInPixels + 24 + passButtonH + 16 * 3;
+      col.verticalAlignment = actualContentH <= passScrollH
+        ? Control.VERTICAL_ALIGNMENT_CENTER
+        : Control.VERTICAL_ALIGNMENT_TOP;
     });
     col.addControl(gapControl(24));
     const go = mkButton(t('Готов(-а)'), { height: 56, width: 220, fontSize: fs(20), theme: BUTTON_STYLE.green });
@@ -1465,23 +1770,35 @@ export class OfflineGame {
     this.running = false;
     this.stopTimers();
     const { overlay } = modalOverlay(this.popups, 'win', { alpha: 0.9, zIndex: 850 });
+    const winW = Math.max(160, Math.floor(viewWidth() * 0.86));
+    const scroll = new ScrollViewer('winScroll');
+    scroll.thickness = 0;
+    scroll.barSize = 4;
+    scroll.width = px(winW);
+    scroll.height = px(Math.max(120, viewHeight() - 24));
+    scroll.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+    scroll.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+    overlay.addControl(scroll);
+    enableSmoothScroll(scroll);
     const col = new StackPanel('wincol');
     col.isVertical = true;
-    col.spacing = 20;
-    col.width = '80%';
+    col.spacing = Math.max(8, Math.min(20, Math.floor(viewHeight() / 28)));
+    col.width = '100%';
     col.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
-    col.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
-    overlay.addControl(col);
+    scroll.addControl(col);
     const winnerName = this.state && this.state.winner >= 0 ? this.state.playerName(this.state.winner) : '—';
-    col.addControl(mkLabel(t('Победил %s', winnerName), {
+    const winnerText = wrapTextToWidth(t('Победил %s', winnerName), winW - 12, fs(28));
+    col.addControl(mkLabel(winnerText, {
       fontSize: fs(28),
       color: SKIN.gold,
-      height: Math.ceil(fs(28) * 1.5),
+      width: '100%',
+      height: estimateWrappedTextHeight(winnerText, winW - 12, fs(28)),
     }));
     col.addControl(gapControl(10));
     // «Посмотреть стол»: закрыть оверлей и оставить финальный расклад
     // с плавающей кнопкой «Результат» (game.gd:2226-2237, 2268-2292)
-    const peek = mkButton(t('Посмотреть стол'), { height: 44, width: 220, fontSize: fs(15), theme: BUTTON_STYLE.deck });
+    const actionW = Math.max(120, Math.min(220, winW - 20));
+    const peek = mkButton(t('Посмотреть стол'), { height: 44, width: actionW, fontSize: fs(15), theme: BUTTON_STYLE.deck });
     peek.onPointerUpObservable.clear();
     peek.onPointerUpObservable.add(() => {
       this.clearOverlays();
@@ -1490,19 +1807,19 @@ export class OfflineGame {
     col.addControl(peek);
     if (this.onlineMode) {
       // сетевая партия: покинуть комнату (место освобождается) и в лобби
-      const back = mkButton(t('В меню'), { height: 54, width: 200, fontSize: fs(18), theme: BUTTON_STYLE.green });
+      const back = mkButton(t('В меню'), { height: 54, width: actionW, fontSize: fs(18), theme: BUTTON_STYLE.green });
       back.onPointerUpObservable.clear();
       back.onPointerUpObservable.add(() => this.leaveToMenu());
       col.addControl(back);
       return;
     }
-    const again = mkButton(t('Заново'), { height: 54, width: 200, fontSize: fs(18), theme: BUTTON_STYLE.green });
+    const again = mkButton(t('Заново'), { height: 54, width: actionW, fontSize: fs(18), theme: BUTTON_STYLE.green });
     again.onPointerUpObservable.clear();
     // Новая партия — логическая пауза: сначала interstitial площадки,
     // затем запуск (действие выполняется всегда, даже без рекламы).
     again.onPointerUpObservable.add(() => withInterstitial(() => this.host.replay()));
     col.addControl(again);
-    const back = mkButton(t('В меню'), { height: 46, width: 200, fontSize: fs(16), theme: BUTTON_STYLE.blueOnline });
+    const back = mkButton(t('В меню'), { height: 46, width: actionW, fontSize: fs(16), theme: BUTTON_STYLE.blueOnline });
     back.onPointerUpObservable.clear();
     back.onPointerUpObservable.add(() => withInterstitial(() => this.host.toMenu()));
     col.addControl(back);
@@ -2404,9 +2721,14 @@ export class OfflineGame {
     }
     // высота под фактическое число строк (перенос длинных сообщений)
     const size = fs(18);
-    const lineH = estimateWrappedTextHeight(s, Math.min(viewWidth() - 64, 456), size);
+    const boxW = Math.max(120, Math.min(viewWidth() - 40, 480));
+    const textW = Math.max(100, boxW - 24);
+    s = wrapTextToWidth(s, textW, size);
+    const lineH = estimateWrappedTextHeight(s, textW, size);
     const h = Math.max(52, lineH + 20);
+    this.toastHost.width = px(boxW);
     this.toastHost.height = px(h);
+    this.toastLabel.width = px(textW);
     this.toastLabel.height = px(h - 12);
     this.toastLabel.text = s;
     this.toastHost.isVisible = true;
@@ -2434,8 +2756,9 @@ export class OfflineGame {
     const textSize = fs(16);
     // Высоты по РЕАЛЬНОМУ переносу строк: на телефоне с крупным текстом
     // строки занимают несколько линий, иначе текст режется сверху/снизу.
-    const titleH = estimateWrappedTextHeight(title, contentW, titleSize);
-    const lines = text.split('\n');
+    const wrappedTitle = wrapTextToWidth(title, contentW, titleSize);
+    const titleH = estimateWrappedTextHeight(wrappedTitle, contentW, titleSize);
+    const lines = text.split('\n').map((line) => wrapTextToWidth(line, contentW, textSize));
     const lineHs = lines.map((line) => estimateWrappedTextHeight(line, contentW, textSize));
     const btnH = 52;
     const okW = Math.max(120, Math.min(contentW, measureTextWidth(okText, fs(16)) + 40));
@@ -2450,8 +2773,22 @@ export class OfflineGame {
     panel.root.width = px(panelWidth);
     panel.root.height = px(ph);
     panel.root.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
-    panel.root.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
-    m.overlay.addControl(panel.root);
+    const confirmScrollH = Math.max(120, viewHeight() - 24);
+    // Короткое подтверждение центрируем; длинное оставляем от верхнего края,
+    // чтобы прокрутка начиналась с заголовка и не уводила его выше экрана.
+    panel.root.verticalAlignment = ph <= confirmScrollH
+      ? Control.VERTICAL_ALIGNMENT_CENTER
+      : Control.VERTICAL_ALIGNMENT_TOP;
+    const scroll = new ScrollViewer('confirmScroll');
+    scroll.thickness = 0;
+    scroll.barSize = 4;
+    scroll.width = px(panelWidth);
+    scroll.height = px(confirmScrollH);
+    scroll.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+    scroll.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+    m.overlay.addControl(scroll);
+    scroll.addControl(panel.root);
+    enableSmoothScroll(scroll);
     const col = new StackPanel('confirmBox');
     col.isVertical = true;
     col.width = '100%';
@@ -2460,7 +2797,7 @@ export class OfflineGame {
     col.paddingRight = pxa(20);
     col.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
     panel.root.addControl(col);
-    col.addControl(mkLabel(title, {
+    col.addControl(mkLabel(wrappedTitle, {
       fontSize: titleSize, color: SKIN.gold, width: contentW, height: titleH,
     }));
     lines.forEach((line, i) => {
@@ -2559,18 +2896,9 @@ export class OfflineGame {
         case PointerEventTypes.POINTERMOVE:
           {
             const g = guiPointer(scene, pi);
-            previewHost.left = pxa(Math.round(g.x - ts.x / 2));
-            previewHost.top = pxa(Math.round(g.y - ts.y / 2));
-            const handRect = rectOf(this.handPanel);
-            if (g.y >= handRect.y) {
-              this.dragData.targetRow = -2;
-              this.dragData.index = -1;
-            } else {
-              const hit = this.rowsHit(g.x, g.y);
-              this.highlightSlot(hit && hit.rowId === -3 ? hit.index : -1);
-              this.dragData.targetRow = hit ? hit.rowId : undefined;
-              this.dragData.index = hit ? hit.index : undefined;
-            }
+            this.dragPointer = g;
+            this.updateDragHover(g);
+            this.scheduleDragAutoScroll();
           }
           break;
         case PointerEventTypes.POINTERUP:
@@ -2581,6 +2909,22 @@ export class OfflineGame {
       }
     });
     this.dragData = { face: f.face, src, previewHost, targetRow: undefined, index: undefined, obs: unified! };
+    // На touch-у некоторых браузеров Babylon не присылает непрерывный
+    // POINTERMOVE удерживаемой фишки (особенно у края canvas). Дублируем
+    // слежение нативным событием окна, привязанным к тому же указателю.
+    this.dragPointerAbort?.abort();
+    this.dragPointerAbort = new AbortController();
+    const activePointerId = nativePointer.pointerId;
+    window.addEventListener('pointermove', (event) => {
+      if (!this.dragData || (activePointerId !== null && event.pointerId !== activePointerId)) return;
+      const canvas = scene.getEngine().getRenderingCanvas();
+      if (!canvas) return;
+      const bounds = canvas.getBoundingClientRect();
+      const point = { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
+      this.dragPointer = point;
+      this.updateDragHover(point);
+      this.scheduleDragAutoScroll();
+    }, { capture: true, signal: this.dragPointerAbort.signal });
     const rect0 = rectOf(this.boardRoot);
     const np = lastNativePointer();
     const g0 = (np.x !== 0 || np.y !== 0)
@@ -2588,6 +2932,97 @@ export class OfflineGame {
       : canvasToGui(scene, scene.pointerX, scene.pointerY);
     previewHost.left = pxa(Math.max(rect0.x + 10, g0.x - ts.x / 2));
     previewHost.top = pxa(Math.max(rect0.y + 10, g0.y - ts.y / 2));
+    this.dragPointer = g0;
+    this.updateDragHover(g0);
+    this.scheduleDragAutoScroll();
+  }
+
+  private updateDragHover(g: { x: number; y: number }): void {
+    const dd = this.dragData;
+    if (!dd) return;
+    const ts = tileSize();
+    dd.previewHost.left = pxa(Math.round(g.x - ts.x / 2));
+    dd.previewHost.top = pxa(Math.round(g.y - ts.y / 2));
+    const handRect = rectOf(this.handPanel);
+    if (g.y >= handRect.y) {
+      dd.targetRow = -2;
+      dd.index = -1;
+    } else {
+      const hit = this.rowsHit(g.x, g.y);
+      this.highlightSlot(hit && hit.rowId === -3 ? hit.index : -1);
+      dd.targetRow = hit ? hit.rowId : undefined;
+      dd.index = hit ? hit.index : undefined;
+    }
+  }
+
+  private dragEdgeIntent(): { direction: number; strength: number } | null {
+    const p = this.dragPointer;
+    const r = rectOf(this.rowsScroll);
+    if (!p || r.w <= 0 || r.h <= 0 || p.x < r.x - 8 || p.x > r.x + r.w + 8) return null;
+    const edge = Math.min(64, Math.max(16, r.h * 0.18));
+    const topDistance = p.y - r.y;
+    const bottomDistance = r.y + r.h - p.y;
+    if (topDistance <= edge && topDistance <= bottomDistance) {
+      return { direction: -1, strength: Math.max(0, Math.min(1, 1 - topDistance / edge)) };
+    }
+    if (bottomDistance <= edge) {
+      return { direction: 1, strength: Math.max(0, Math.min(1, 1 - bottomDistance / edge)) };
+    }
+    return null;
+  }
+
+  private scheduleDragAutoScroll(): void {
+    if (!this.dragData) return;
+    if (this.dragAutoScrollRaf) return;
+    this.dragAutoScrollLast = performance.now();
+    const tick = (now: number): void => {
+      this.dragAutoScrollRaf = 0;
+      if (!this.dragData) return;
+      const intent = this.dragEdgeIntent();
+      if (!intent) {
+        // Keep watching while the tile is held: the pointer can enter an edge
+        // zone without another Babylon GUI event on touch devices.
+        this.dragAutoScrollLast = now;
+        this.dragAutoScrollRaf = window.requestAnimationFrame(tick);
+        return;
+      }
+      const elapsed = Math.max(0, Math.min(40, now - this.dragAutoScrollLast));
+      this.dragAutoScrollLast = now;
+      const speed = 140 + 560 * intent.strength;
+      const moved = scrollViewerByPixels(this.rowsScroll, 'vertical', intent.direction * speed * elapsed / 1000);
+      // При неподвижном пальце фишка должна продолжать наводиться на ряд,
+      // который под ней оказался после прокрутки.
+      if (this.dragPointer) this.updateDragHover(this.dragPointer);
+      // Не завершаем цикл на границе прокрутки: пользователь может отвести
+      // стол от края, не отпуская фишку, и продолжить прокрутку.
+      if (Math.abs(moved) < 0.01) {
+        this.dragAutoScrollRaf = window.requestAnimationFrame(tick);
+        return;
+      }
+      this.dragAutoScrollRaf = window.requestAnimationFrame(tick);
+    };
+    this.dragAutoScrollRaf = window.requestAnimationFrame(tick);
+  }
+
+  private stopDragAutoScroll(): void {
+    if (this.dragAutoScrollRaf) window.cancelAnimationFrame(this.dragAutoScrollRaf);
+    this.dragAutoScrollRaf = 0;
+    this.dragPointer = null;
+    this.dragPointerAbort?.abort();
+    this.dragPointerAbort = null;
+  }
+
+  private cancelActiveDrag(): void {
+    this.stopDragAutoScroll();
+    const dd = this.dragData;
+    if (!dd) return;
+    this.dragData = null;
+    this.host.getScene().onPointerObservable.remove(dd.obs);
+    this.clearSlotHighlight();
+    if (dd.previewHost.parent) dd.previewHost.parent.removeControl(dd.previewHost);
+    const source = [...this.handFigs, ...this.rowFigs.flatMap((row) => row.figures)]
+      .find((fig) => fig.face.id === dd.face.id);
+    if (source) source.root.alpha = source.rgbaAlpha;
   }
 
   private rowsHit(pxx: number, pyy: number): { rowId: number; index: number } | null {
@@ -2662,6 +3097,7 @@ export class OfflineGame {
   private dragEnd(): void {
     const dd = this.dragData;
     this.dragData = null;
+    this.stopDragAutoScroll();
     if (!dd) return;
     const previewRect = rectOf(dd.previewHost);
     if (dd.previewHost.parent) dd.previewHost.parent.removeControl(dd.previewHost);
@@ -2711,12 +3147,11 @@ export class OfflineGame {
   private runBotTurn(): void {
     if (!this.running || !this.state || this.state.finished) return;
     const s = loadSettings();
-    const level = s.bot_level;
     const anim = s.bot_anim;
     this.flashTurnTitle(this.turnTitleText());
     window.setTimeout(() => {
       if (!this.running || !this.state || this.state.finished) return;
-      const plan = this.planner.plan(this.state, level);
+      const plan = this.planner.plan(this.state, LEVEL_IMPOSSIBLE);
       this.playPlan(plan.ops, plan.action, plan.tiles, anim);
     }, BOT_THINK_MS);
   }
@@ -2871,7 +3306,7 @@ function guiPointer(scene: Scene, pi: import('@babylonjs/core').PointerInfo): { 
 // в момент захвата фишки превью ставилось в точку ПРОШЛОГО движения мыши
 // (справа-снизу). Держим свежие CSS-координаты из нативных событий в
 // фазе захвата — до того, как обработчик Babylon начнёт drag.
-const nativePointer = { x: 0, y: 0 };
+const nativePointer: { x: number; y: number; pointerId: number | null } = { x: 0, y: 0, pointerId: null };
 if (typeof window !== 'undefined') {
   const update = (e: PointerEvent): void => {
     try {
@@ -2881,6 +3316,10 @@ if (typeof window !== 'undefined') {
       const r = cv.getBoundingClientRect();
       nativePointer.x = e.clientX - r.left;
       nativePointer.y = e.clientY - r.top;
+      if (e.type === 'pointerdown') nativePointer.pointerId = e.pointerId;
+      else if ((e.type === 'pointerup' || e.type === 'pointercancel') && nativePointer.pointerId === e.pointerId) {
+        nativePointer.pointerId = null;
+      }
     } catch {
       // экран ещё не построен — ignore
     }
