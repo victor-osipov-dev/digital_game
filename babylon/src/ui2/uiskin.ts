@@ -407,23 +407,34 @@ function textWidthPx(text: string, size: number): number {
   return ctx.measureText(text).width;
 }
 
-// Если палец/мышь отжались ВНЕ кнопки, Babylon не шлёт ей pointerup, и она
-// остаётся в «зажатом» виде. Глобальный слушатель сбрасывает фон таких
-// кнопок при любом pointerup.
+// Если палец/мышь отжались ВНЕ кнопки, Babylon не шлёт ей pointerup: она
+// остаётся «зажатой» — фон не возвращается. Глобальный слушатель сбрасывает
+// фон таких кнопок.
 const pressThemes = new WeakMap<Button, { base: string; press: string }>();
-const allButtons = new Set<Button>();
+const pressedButtons = new Set<Button>();
 let buttonResetInstalled = false;
 function installButtonReset(): void {
   if (buttonResetInstalled) return;
   buttonResetInstalled = true;
   const reset = (): void => {
-    for (const b of allButtons) {
-      const theme = pressThemes.get(b);
-      if (theme && b.background === theme.press) b.background = theme.base;
-    }
+    if (pressedButtons.size === 0) return;
+    // Микротаска: обычный pointerup Babylon обработает сам и снимет кнопку из
+    // набора — тогда сбрасывать нечего. Остаются только «залипшие» кнопки,
+    // у которых pointerup был отменён touch-guard'ом (жест/отпускание вне).
+    queueMicrotask(() => {
+      if (pressedButtons.size === 0) return;
+      for (const b of pressedButtons) {
+        const theme = pressThemes.get(b);
+        if (theme) b.background = theme.base;
+        b.scaleX = 1;
+        b.scaleY = 1;
+        b.alpha = 1;
+      }
+      pressedButtons.clear();
+    });
   };
   // pointerup — обычное отжатие, pointercancel — прерванный жест (например,
-  // свайп или отпускание вне канваса): в обоих случаях сбрасываем press.
+  // свайп или отпускание вне канваса): в обоих случаях чистим возможный press.
   document.addEventListener('pointerup', reset, { capture: true });
   document.addEventListener('pointercancel', reset, { capture: true });
 }
@@ -458,6 +469,14 @@ export function mkButton(label: string, opts: ButtonOpts = {}): Button {
   }
   b.fontSize = fittingFont;
   b.hoverCursor = 'pointer';
+  // Отключаем встроенные анимации Babylon: на pointerdown он уменьшает
+  // scaleX/scaleY и меняет alpha, а при отменённом жесте pointerup до кнопки
+  // не доходит — масштаб «залипает» или накапливается поверх нашего сброса.
+  // Визуальный отклик даём фоном (hover/press), он управляется надёжно.
+  b.pointerEnterAnimation = () => undefined;
+  b.pointerOutAnimation = () => undefined;
+  b.pointerDownAnimation = () => undefined;
+  b.pointerUpAnimation = () => undefined;
   b.onPointerEnterObservable.add(() => {
     if (!b.isEnabled) return;
     b.alpha = 1;
@@ -465,11 +484,16 @@ export function mkButton(label: string, opts: ButtonOpts = {}): Button {
     b.textBlock!.color = '#ffffff';
   });
   b.onPointerOutObservable.add(() => { b.background = th.bg; });
-  b.onPointerDownObservable.add(() => { b.background = th.press; });
+  b.onPointerDownObservable.add(() => {
+    b.background = th.press;
+    pressedButtons.add(b);
+  });
   if (opts.onClick !== undefined) b.onPointerUpObservable.add(opts.onClick);
-  b.onPointerUpObservable.add(() => { b.background = th.hover; });
+  b.onPointerUpObservable.add(() => {
+    pressedButtons.delete(b);
+    b.background = th.hover;
+  });
   pressThemes.set(b, { base: th.bg, press: th.press });
-  allButtons.add(b);
   installButtonReset();
   return b;
 }
@@ -506,12 +530,44 @@ export function deferTapActivation(ctrl: Control, activate: () => void): void {
 // а не при зажатии — зажатие позволяет скроллить без открытия клавиатуры.
 // Невидимый DOM-input для вызова нативной клавиатуры на телефонах:
 // Babylon рисует поле на канвасе и сам клавиатуру не поднимает.
+//
+// Ввод идёт через скрытый input: он получает клавиатуру, а введённый текст
+// зеркалится в поле Babylon. Важно: фокус на скрытый input снимает фокус
+// с canvas, из-за чего Babylon сбрасывает focusedControl и вызывает у поля
+// onBlurObservable. Поэтому сессию завершаем не по blur поля Babylon, а по
+// blur самого скрытого input — иначе она рвётся сразу после открытия.
 let domProxyEl: HTMLInputElement | null = null;
 let domProxyTarget: InputText | null = null;
+// «Поле покинули» — аналог onBlurObservable для зеркального ввода.
+const inputBlurHandlers = new WeakMap<InputText, Array<() => void>>();
+
 function onProxyInput(): void {
   if (!domProxyTarget || !domProxyEl) return;
   domProxyTarget.text = domProxyEl.value;
 }
+
+function fireInputBlur(input: InputText): void {
+  const handlers = inputBlurHandlers.get(input);
+  if (!handlers) return;
+  for (const h of handlers) {
+    try {
+      h();
+    } catch {
+      /* подписчик не должен ломать остальные */
+    }
+  }
+}
+
+// Завершить текущую сессию ввода: поле снова только для чтения,
+// подписчики onInputBlur получают финальное значение.
+function finalizeProxySession(): void {
+  const target = domProxyTarget;
+  domProxyTarget = null;
+  if (!target) return;
+  target.isReadOnly = true;
+  fireInputBlur(target);
+}
+
 function ensureDomProxy(): HTMLInputElement {
   if (domProxyEl && domProxyEl.isConnected) return domProxyEl;
   const el = document.createElement('input');
@@ -520,9 +576,19 @@ function ensureDomProxy(): HTMLInputElement {
   el.setAttribute('autocomplete', 'off');
   el.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0.01;'
     + 'border:0;padding:0;margin:0;z-index:2147483647;pointer-events:none;background:transparent;';
+  // Слушатели навешиваются один раз и живут, пока элемент в DOM.
+  el.addEventListener('input', onProxyInput);
+  el.addEventListener('blur', finalizeProxySession);
   document.body.appendChild(el);
   domProxyEl = el;
   return el;
+}
+
+/** Подписка на «поле потеряло фокус» для зеркального DOM-ввода. */
+export function onInputBlur(input: InputText, cb: () => void): void {
+  const list = inputBlurHandlers.get(input) ?? [];
+  list.push(cb);
+  inputBlurHandlers.set(input, list);
 }
 
 export function focusInputOnTap(input: InputText): void {
@@ -535,33 +601,26 @@ export function focusInputOnTap(input: InputText): void {
   // Babylon показывает при фокусе с touch.
   (input as unknown as { disableMobilePrompt?: boolean }).disableMobilePrompt = true;
   deferTapActivation(input, () => {
-    input.isReadOnly = false;
     const host = (input as unknown as { _host?: { moveFocusToControl?: (c: Control) => void } })._host;
-    host?.moveFocusToControl?.(input);
-    // На мобильных поднимаем нативную клавиатуру: фокусируем скрытый
-    // DOM-input и зеркалим введённый текст в поле Babylon.
+    // Переход между полями без blur скрытого input: завершаем прошлую сессию.
+    finalizeProxySession();
     const el = ensureDomProxy();
     el.value = input.text ?? '';
-    domProxyTarget = input;
-    el.removeEventListener('input', onProxyInput);
-    el.addEventListener('input', onProxyInput);
+    // 1) Фокус на скрытый input — поднимает нативную клавиатуру на телефонах.
+    //    Браузер при этом снимает фокус с canvas.
     try {
       el.focus({ preventScroll: true });
     } catch {
       el.focus();
     }
-  });
-  input.onBlurObservable.add(() => {
-    input.isReadOnly = true;
-    if (domProxyTarget === input) {
-      if (domProxyEl) {
-        domProxyEl.removeEventListener('input', onProxyInput);
-        domProxyEl.blur();
-      }
-      domProxyTarget = null;
-    }
+    // 2) Возвращаем визуальный фокус полю Babylon (каретка/подсветка) и
+    //    включаем зеркалирование — уже после возможного сброса фокуса canvas.
+    input.isReadOnly = false;
+    host?.moveFocusToControl?.(input);
+    domProxyTarget = input;
   });
 }
+
 
 // Глобальный touch-guard: если палец начал на элементе UI (кнопка, поле,
 // чекбокс) и сдвинулся больше порога — это жест (скролл/свайп), и элемент

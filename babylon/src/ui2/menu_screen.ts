@@ -1,4 +1,4 @@
-import { Button, Container, Control, InputText, Rectangle, ScrollViewer, StackPanel } from '@babylonjs/gui';
+import { Container, Control, InputText, Rectangle, ScrollViewer, StackPanel } from '@babylonjs/gui';
 import { appName, t } from '../core/lang';
 import {
   BOT_LEVEL_NAMES,
@@ -24,16 +24,15 @@ import {
   hrow,
   mkButton,
   mkLabel,
+  onInputBlur,
   popupList,
   SKIN,
-  setButtonLabel,
   softPanel,
   DropdownCtx,
   px,
 } from './uiskin';
 import { openRulesOverlay, openStatsOverlay } from './overlays';
 import { platform } from '../platform';
-import { showDomToast } from './dom_toast';
 
 import type { MenuHost } from './ports';
 import { viewHeight, viewWidth } from './viewport';
@@ -45,14 +44,10 @@ function px1(n: number): string {
 export class MenuScreen {
   private popups!: Container;
   private ctx!: DropdownCtx;
-  // Токен сборки: асинхронные проверки площадки (оценка/ярлык) не должны
-  // добавлять кнопки в уже пересобранное меню.
-  private buildToken = 0;
 
   constructor(private host: MenuHost) {}
 
   build(root: Container): void {
-    const token = ++this.buildToken;
     const vw = viewWidth();
     const vh = viewHeight();
     const avail = Math.max(200, Math.min(vw - 28, 470));
@@ -261,9 +256,6 @@ export class MenuScreen {
     statsBtn.onPointerUpObservable.add(() => this.openStats());
     col.addControl(statsBtn);
 
-    // Кнопки площадки: полный экран, оценка игры, ярлык на рабочий стол.
-    this.addPlatformActions(col, colW, token);
-
     const bottom = hrow(14);
     bottom.width = '100%';
     bottom.height = px(50);
@@ -283,64 +275,6 @@ export class MenuScreen {
       bottom.addControl(quitBtn);
     }
     col.addControl(bottom);
-  }
-
-  /**
-   * Кнопки площадки в главном меню:
-   * - полный экран (браузерный или через SDK площадки);
-   * - «Оценить игру» и «Добавить на рабочий стол» — только если площадка
-   *   их поддерживает и они реально доступны этому игроку (проверка
-   *   асинхронная, поэтому кнопки появляются после ответа SDK).
-   */
-  private addPlatformActions(col: StackPanel, colW: number, token: number): void {
-    if (!platform.supportsFullscreen && !platform.supportsReview && !platform.supportsShortcut) return;
-    const grey = { bg: '#31363F', hover: '#3A404A', press: '#262B33' };
-    const box = new StackPanel('platformActions');
-    box.isVertical = true;
-    box.spacing = 8;
-    box.width = '100%';
-
-    if (platform.supportsFullscreen) {
-      const sync = (b: Button): void => {
-        setButtonLabel(b, t(platform.isFullscreen() ? 'Выйти из полного экрана' : 'На весь экран'));
-      };
-      const btn = mkButton('', { fontSize: fs(16), height: 46, width: colW, theme: grey });
-      sync(btn);
-      btn.onPointerUpObservable.clear();
-      btn.onPointerUpObservable.add(() => {
-        void platform.toggleFullscreen().then(() => sync(btn));
-      });
-      box.addControl(btn);
-    }
-    col.addControl(box);
-
-    if (platform.supportsReview) {
-      void platform.canReview().then((ok) => {
-        if (!ok || token !== this.buildToken) return;
-        const btn = mkButton(t('Оценить игру'), { fontSize: fs(16), height: 46, width: colW, theme: grey });
-        btn.onPointerUpObservable.clear();
-        btn.onPointerUpObservable.add(() => {
-          void platform.requestReview().then((sent) => {
-            showDomToast(t(sent ? 'Спасибо за оценку!' : 'Оценить игру можно позже'));
-          });
-        });
-        box.addControl(btn);
-      });
-    }
-
-    if (platform.supportsShortcut) {
-      void platform.canAddShortcut().then((ok) => {
-        if (!ok || token !== this.buildToken) return;
-        const btn = mkButton(t('Добавить на рабочий стол'), { fontSize: fs(16), height: 46, width: colW, theme: grey });
-        btn.onPointerUpObservable.clear();
-        btn.onPointerUpObservable.add(() => {
-          void platform.addShortcut().then((added) => {
-            showDomToast(t(added ? 'Ярлык добавлен. Спасибо!' : 'Не удалось добавить ярлык'));
-          });
-        });
-        box.addControl(btn);
-      });
-    }
   }
 
   private addCountRow(col: StackPanel, playerCount: number, avail: number): void {
@@ -405,7 +339,7 @@ export class MenuScreen {
     input.fontFamily = 'Arial, sans-serif';
     input.placeholderText = t('Игрок %d', i + 1);
     focusInputOnTap(input);
-    input.onBlurObservable.add(() => setPlayerName(i, input.text));
+    onInputBlur(input, () => setPlayerName(i, input.text));
     sp.addControl(input);
     const bot = checkboxRow(t('Бот'), loadSettings().player_is_bot[i] ?? false, {
       height: 46,

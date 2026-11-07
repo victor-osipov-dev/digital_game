@@ -118,8 +118,10 @@ function setNote(lab: ReturnType<typeof mkLabel>, text: string, warn: boolean): 
 
 // _apply_accent-порт: подложка акцентная, текст всегда белый.
 function accentButton(label: string, theme: ButtonTheme, height: number, fontSize: number, width?: number): Button {
-  const b = mkButton(label, { height, fontSize, theme, corner: 10 });
-  b.width = width !== undefined ? px(width) : '100%';
+  // width передаём в mkButton: он подгоняет шрифт под фиксированную ширину,
+  // иначе длинная подпись обрезается по бокам.
+  const b = mkButton(label, { height, fontSize, theme, corner: 10, width });
+  if (width === undefined) b.width = '100%';
   return b;
 }
 
@@ -238,7 +240,10 @@ export class OnlineLobby {
 
     const vw = viewWidth();
     const vh = viewHeight();
-    this.avail = Math.max(240, Math.min(vw - 28, 536));
+    // Контейнер-поля (padding 14) обрезает детей, а скролл берём на 6px шире
+    // колонки (запас под полосу прокрутки). Поэтому колонка на 6px уже
+    // доступной ширины: иначе скролл вылезает за поля и обрезается слева.
+    this.avail = Math.max(240, Math.min(vw - 28 - 6, 536));
 
     const bg = new Rectangle('onlBg');
     bg.background = '#12151C';
@@ -436,14 +441,18 @@ export class OnlineLobby {
     this.boardBtn.onPointerUpObservable.add(() => void this.openBoard());
     page.addControl(this.boardBtn);
 
-    // --- вкладки: видна только одна форма, в начале — ни одной
-    const tabs = hrow(8);
+    // --- вкладки: видна только одна форма, в начале — ни одной.
+    // На экране уже 360px — в колонку (подписи целиком); шире — в ряд.
+    const stackTabs = viewWidth() < 360;
+    const tabs = new StackPanel('onlTabs');
+    tabs.isVertical = stackTabs;
+    tabs.spacing = 8;
     tabs.width = '100%';
-    tabs.height = px(46);
+    tabs.height = px(stackTabs ? 46 * 2 + 8 : 46);
     tabs.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
     page.addControl(tabs);
-    this.tabCreateBtn = this.tabButton(t('Создать комнату'), 'create', tabs);
-    this.tabCodeBtn = this.tabButton(t('Войти по коду'), 'code', tabs);
+    this.tabCreateBtn = this.tabButton(t('Создать комнату'), 'create', tabs, !stackTabs);
+    this.tabCodeBtn = this.tabButton(t('Войти по коду'), 'code', tabs, !stackTabs);
 
     // --- создать (за вкладкой)
     this.createBox = new StackPanel('onlCreate');
@@ -558,9 +567,10 @@ export class OnlineLobby {
     return page;
   }
 
-  private tabButton(label: string, tab: 'create' | 'code', row: StackPanel): Button {
+  private tabButton(label: string, tab: 'create' | 'code', row: StackPanel, sideBySide: boolean): Button {
     const active = (): boolean => this.roomsTab === tab;
-    const w = Math.max(140, Math.round(measureTextWidth(label, fs(15))) + 56);
+    // В ряд — половина ширины; в колонке — вся ширина.
+    const w = sideBySide ? Math.max(90, Math.floor((this.avail - 8) / 2)) : this.avail;
     const b = greyButton(label, 46, fs(15), w);
     b.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
     b.onPointerEnterObservable.add(() => { b.background = active() ? TAB_ACTIVE.hover : GREY_THEME.hover; });
@@ -847,7 +857,12 @@ export class OnlineLobby {
   private layoutRoomsHeader(): void {
     if (!this.roomsNoteLab || !this.refreshBtn || !this.roomsHeader || !this.roomsRefreshRow) return;
     const noteFont = fs(15);
-    const noteH = this.roomsNoteLab.text
+    // Пустое примечание скрываем: иначе вертикальный StackPanel всё равно
+    // резервирует промежуток под этим ребёнком, а высоту шапки считали без
+    // него — кнопку «Обновить» срезало снизу на эти самые пиксели.
+    const hasNote = this.roomsNoteLab.text.trim() !== '';
+    this.roomsNoteLab.isVisible = hasNote;
+    const noteH = hasNote
       ? estimateWrappedTextHeight(this.roomsNoteLab.text, this.avail, noteFont) + 4
       : 0;
     this.roomsNoteLab.fontSize = noteFont;
@@ -865,7 +880,7 @@ export class OnlineLobby {
     this.refreshBtn.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
     this.roomsRefreshRow.height = px(buttonH);
     this.roomsRefreshRow.width = '100%';
-    this.roomsHeader.height = px(noteH + (noteH > 0 ? 4 : 0) + buttonH);
+    this.roomsHeader.height = px(noteH + (hasNote ? 4 : 0) + buttonH);
   }
 
   private async refreshRooms(quiet: boolean): Promise<void> {
@@ -1234,12 +1249,20 @@ export class OnlineLobby {
     this.boardOpen = true;
     const { overlay, close } = modalOverlay(this.popups, 'board', { alpha: 0.6, zIndex: 950 });
 
+    // Высота всего, кроме списка: отступы, заголовок, подпись, строка «ваше
+    // место», примечание и кнопка «Закрыть» (6 блоков + 5 промежутков).
+    const CHROME_H = 16 + 30 + 20 + 40 + 40 + 46 + 16 + 10 * 5;
+    const vh = viewHeight();
+    // Список скроллится и не может «съесть» экран: сервер отдаёт до 100 строк,
+    // поэтому фиксируем высоту видимой области, а «Закрыть» остаётся на месте.
+    const MAX_LIST_H = Math.max(80, vh - 24 - CHROME_H);
+    const DEFAULT_LIST_H = Math.min(MAX_LIST_H, 8 * 26 + 4);
     const panel = softPanel({
       bg: SKIN.panelDark,
       bgAlpha: 0.98,
       corner: 10,
       width: Math.min(480, viewWidth() - 32),
-      height: 430,
+      height: CHROME_H + DEFAULT_LIST_H,
     });
     overlay.addControl(panel.root);
 
@@ -1251,17 +1274,25 @@ export class OnlineLobby {
     box.paddingLeft = px(16);
     box.paddingRight = px(16);
     box.paddingTop = px(16);
+    box.paddingBottom = px(16);
     panel.root.addControl(box);
 
     box.addControl(mkLabel(t('Таблица лидеров'), { fontSize: fs(20), color: GOLD, height: 30 }));
     box.addControl(mkLabel(t('Количество побед'), { fontSize: fs(13), color: 'rgba(255,255,255,0.55)', height: 20 }));
 
+    const scroll = new ScrollViewer('boardScroll');
+    scroll.thickness = 0;
+    scroll.barSize = 2;
+    scroll.width = '100%';
+    scroll.height = px(DEFAULT_LIST_H);
+    enableSmoothScroll(scroll);
+    box.addControl(scroll);
+
     const grid = new StackPanel('boardGrid');
     grid.isVertical = true;
     grid.spacing = 4;
     grid.width = '100%';
-    grid.height = px(210);
-    box.addControl(grid);
+    scroll.addControl(grid);
 
     const meLab = mkLabel('', { fontSize: fs(15), color: '#90CAF9', width: '100%', height: 40 });
     box.addControl(meLab);
@@ -1289,19 +1320,20 @@ export class OnlineLobby {
       const res: BoardListMsg = await this.app.api.boardList();
       if (!open) return;
       this.renderBoard(res, grid, meLab, bn.lab);
-      // пустая таблица: сетка не нужна, панель ужимается
       const n = (res.entries ?? []).length;
       if (n === 0) {
-        grid.isVisible = false;
-        panel.root.height = px(300);
+        // пустая таблица: список не нужен, панель ужимается
+        scroll.isVisible = false;
+        panel.root.height = px(CHROME_H - 10);
       } else {
-        grid.height = px(Math.min(210, n * 26 + 4));
-        panel.root.height = px(Math.min(430, 150 + Math.min(210, n * 26 + 4) + 96));
+        const listH = Math.min(MAX_LIST_H, n * 26 + 4);
+        scroll.height = px(listH);
+        panel.root.height = px(CHROME_H + listH);
       }
     } catch (e) {
       if (!open) return;
-      grid.isVisible = false;
-      panel.root.height = px(300);
+      scroll.isVisible = false;
+      panel.root.height = px(CHROME_H - 10);
       setNote(bn.lab, t((e as Error).message) || t('Не удалось загрузить таблицу'), true);
     }
   }
@@ -1319,6 +1351,8 @@ export class OnlineLobby {
     const entries = res.entries ?? [];
     if (entries.length === 0) {
       setNote(noteLab, t('Нет сыгранных партий'), false);
+    } else {
+      setNote(noteLab, '', false);
     }
     const myNick = res.me?.nick ?? '';
     entries.forEach((e, i) => {
@@ -1557,7 +1591,10 @@ export class OnlineLobby {
   // _on_rooms_tick-порт: раз в 10 секунд молча освежаем список, пока на
   // него смотрим: только чтение и только в покое.
   private async onRoomsTick(): Promise<void> {
-    if (this.page !== 'rooms') return;
+    // Освежаем, только пока реально открыт экран комнат: таймер продолжает
+    // жить и после ухода из «Игры по сети», и без этой проверки шли бы
+    // лишние запросы в фоне.
+    if (this.app.current !== 'online' || this.page !== 'rooms') return;
     if (this.busyFlag || this.roomsLoading || !this.app.api.user) return;
     await this.loadRooms(true);
   }
