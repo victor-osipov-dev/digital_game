@@ -550,6 +550,34 @@ export function setInputMaxLength(input: InputText, max: number): void {
   inputMaxLen.set(input, max);
 }
 
+// Синхронизировать каретку Babylon с позицией в скрытом input: у Babylon
+// _cursorOffset считается от КОНЦА строки, у DOM selectionStart — от начала.
+function syncCaretToBabylon(): void {
+  if (!domProxyTarget || !domProxyEl) return;
+  const v = domProxyEl.value;
+  const caret = typeof domProxyEl.selectionStart === 'number' ? domProxyEl.selectionStart : v.length;
+  const target = domProxyTarget as unknown as { _cursorOffset?: number; _markAsDirty?: () => void };
+  target._cursorOffset = Math.max(0, v.length - caret);
+  target._markAsDirty?.();
+}
+
+// Поставить каретку по месту тапа: Babylon сам вычислит _cursorOffset из
+// координаты при ближайшем draw, затем переносим позицию в скрытый input.
+function applyTapCaret(input: InputText, el: HTMLInputElement, x: number): void {
+  const rec = input as unknown as { _clickedCoordinate?: number | null; _cursorOffset?: number };
+  const len = (input.text ?? '').length;
+  rec._clickedCoordinate = x;
+  window.requestAnimationFrame(() => {
+    if (domProxyTarget !== input) return;
+    const caret = Math.max(0, Math.min(len, len - (rec._cursorOffset ?? 0)));
+    try {
+      el.setSelectionRange(caret, caret);
+    } catch {
+      /* ignore */
+    }
+  });
+}
+
 function onProxyInput(): void {
   if (!domProxyTarget || !domProxyEl) return;
   const max = inputMaxLen.get(domProxyTarget);
@@ -559,6 +587,7 @@ function onProxyInput(): void {
     domProxyEl.value = value;
   }
   domProxyTarget.text = value;
+  syncCaretToBabylon();
 }
 
 function fireInputBlur(input: InputText): void {
@@ -594,6 +623,10 @@ function ensureDomProxy(): HTMLInputElement {
   // Слушатели навешиваются один раз и живут, пока элемент в DOM.
   el.addEventListener('input', onProxyInput);
   el.addEventListener('blur', finalizeProxySession);
+  // Стрелки/перемещение каретки меняют selection без события input.
+  el.addEventListener('keyup', syncCaretToBabylon);
+  el.addEventListener('click', syncCaretToBabylon);
+  el.addEventListener('select', syncCaretToBabylon);
   document.body.appendChild(el);
   domProxyEl = el;
   return el;
@@ -615,6 +648,13 @@ export function focusInputOnTap(input: InputText): void {
   // Отключаем нативный prompt браузера («Please enter text:»), который
   // Babylon показывает при фокусе с touch.
   (input as unknown as { disableMobilePrompt?: boolean }).disableMobilePrompt = true;
+  // Запоминаем координату тапа (абсолютная x Babylon): по ней поле поставит
+  // каретку в место нажатия, а не только в конец текста.
+  const tap = input as unknown as { _dgTapX?: number };
+  input.onPointerDownObservable.add((info) => {
+    const x = (info as unknown as { x?: number }).x;
+    if (typeof x === 'number' && Number.isFinite(x)) tap._dgTapX = x;
+  });
   deferTapActivation(input, () => {
     const host = (input as unknown as { _host?: { moveFocusToControl?: (c: Control) => void } })._host;
     // Переход между полями без blur скрытого input: завершаем прошлую сессию.
@@ -633,6 +673,19 @@ export function focusInputOnTap(input: InputText): void {
     input.isReadOnly = false;
     host?.moveFocusToControl?.(input);
     domProxyTarget = input;
+    // 3) Каретка — по месту тапа (Babylon считает индекс), иначе в конец.
+    const x = tap._dgTapX;
+    tap._dgTapX = undefined;
+    if (typeof x === 'number') {
+      applyTapCaret(input, el, x);
+    } else {
+      try {
+        el.setSelectionRange(el.value.length, el.value.length);
+      } catch {
+        /* ignore */
+      }
+      syncCaretToBabylon();
+    }
   });
 }
 
