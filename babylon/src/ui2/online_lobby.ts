@@ -1251,22 +1251,54 @@ export class OnlineLobby {
     this.boardOpen = true;
     const { overlay, close } = modalOverlay(this.popups, 'board', { alpha: 0.6, zIndex: 950 });
 
-    // Высота всего, кроме списка: отступы, заголовок, подпись, строка «ваше
-    // место», примечание и кнопка «Закрыть» (6 блоков + 5 промежутков).
+    // Таблица показывает максимум 10 строк. Если весь блок не помещается,
+    // прокручивается модалка целиком, а не вложенный список лидеров.
     const CHROME_H = 16 + 30 + 20 + 40 + 40 + 46 + 16 + 10 * 5;
     const vh = viewHeight();
-    // Список скроллится и не может «съесть» экран: сервер отдаёт до 100 строк,
-    // поэтому фиксируем высоту видимой области, а «Закрыть» остаётся на месте.
-    const MAX_LIST_H = Math.max(80, vh - 24 - CHROME_H);
-    const DEFAULT_LIST_H = Math.min(MAX_LIST_H, 8 * 26 + 4);
+    const ROW_H = 26;
+    const MAX_ENTRIES = 10;
+    const MAX_LIST_H = MAX_ENTRIES * ROW_H + 4;
+    const INITIAL_PANEL_H = CHROME_H + MAX_LIST_H;
+    const modalScrollH = Math.max(120, vh - 24);
     const panel = softPanel({
       bg: SKIN.panelDark,
       bgAlpha: 0.98,
       corner: 10,
       width: Math.min(480, viewWidth() - 32),
-      height: CHROME_H + DEFAULT_LIST_H,
+      height: INITIAL_PANEL_H,
     });
-    overlay.addControl(panel.root);
+    panel.root.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+    panel.root.verticalAlignment = INITIAL_PANEL_H <= modalScrollH
+      ? Control.VERTICAL_ALIGNMENT_CENTER
+      : Control.VERTICAL_ALIGNMENT_TOP;
+    let modalScroll: ScrollViewer | null = null;
+    if (INITIAL_PANEL_H <= modalScrollH) {
+      overlay.addControl(panel.root);
+    } else {
+      modalScroll = new ScrollViewer('boardModalScroll');
+      modalScroll.thickness = 0;
+      modalScroll.barSize = 4;
+      modalScroll.width = px(Math.min(480, viewWidth() - 32));
+      modalScroll.height = px(modalScrollH);
+      modalScroll.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+      modalScroll.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+      overlay.addControl(modalScroll);
+      modalScroll.addControl(panel.root);
+      enableSmoothScroll(modalScroll);
+    }
+    const setPanelHeight = (height: number): void => {
+      panel.root.height = px(height);
+      // Если фактический топ содержит меньше десяти строк, панель может
+      // оказаться достаточно короткой даже на маленьком экране: тогда
+      // убираем прокрутку целиком и центрируем уже саму модалку.
+      if (modalScroll && height <= modalScrollH) {
+        modalScroll.removeControl(panel.root);
+        overlay.removeControl(modalScroll);
+        modalScroll = null;
+        panel.root.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+        overlay.addControl(panel.root);
+      }
+    };
 
     const box = new StackPanel('boardBox');
     box.isVertical = true;
@@ -1282,19 +1314,12 @@ export class OnlineLobby {
     box.addControl(mkLabel(t('Таблица лидеров'), { fontSize: fs(20), color: GOLD, height: 30 }));
     box.addControl(mkLabel(t('Количество побед'), { fontSize: fs(13), color: 'rgba(255,255,255,0.55)', height: 20 }));
 
-    const scroll = new ScrollViewer('boardScroll');
-    scroll.thickness = 0;
-    scroll.barSize = 2;
-    scroll.width = '100%';
-    scroll.height = px(DEFAULT_LIST_H);
-    box.addControl(scroll);
-    enableSmoothScroll(scroll);
-
     const grid = new StackPanel('boardGrid');
     grid.isVertical = true;
     grid.spacing = 4;
     grid.width = '100%';
-    scroll.addControl(grid);
+    grid.height = px(MAX_LIST_H);
+    box.addControl(grid);
 
     const meLab = mkLabel('', { fontSize: fs(15), color: '#90CAF9', width: '100%', height: 40 });
     box.addControl(meLab);
@@ -1322,20 +1347,20 @@ export class OnlineLobby {
       const res: BoardListMsg = await this.app.api.boardList();
       if (!open) return;
       this.renderBoard(res, grid, meLab, bn.lab);
-      const n = (res.entries ?? []).length;
+      const n = Math.min(MAX_ENTRIES, (res.entries ?? []).length);
       if (n === 0) {
         // пустая таблица: список не нужен, панель ужимается
-        scroll.isVisible = false;
-        panel.root.height = px(CHROME_H - 10);
+        grid.isVisible = false;
+        setPanelHeight(CHROME_H - 10);
       } else {
-        const listH = Math.min(MAX_LIST_H, n * 26 + 4);
-        scroll.height = px(listH);
-        panel.root.height = px(CHROME_H + listH);
+        const listH = Math.min(MAX_LIST_H, n * ROW_H + 4);
+        grid.height = px(listH);
+        setPanelHeight(CHROME_H + listH);
       }
     } catch (e) {
       if (!open) return;
-      scroll.isVisible = false;
-      panel.root.height = px(CHROME_H - 10);
+      grid.isVisible = false;
+      setPanelHeight(CHROME_H - 10);
       setNote(bn.lab, t((e as Error).message) || t('Не удалось загрузить таблицу'), true);
     }
   }
@@ -1350,7 +1375,7 @@ export class OnlineLobby {
     grid.clearControls();
     const inner = Math.min(440, this.avail - 32);
     const nickW = Math.max(80, inner - 96);
-    const entries = res.entries ?? [];
+    const entries = (res.entries ?? []).slice(0, 10);
     if (entries.length === 0) {
       setNote(noteLab, t('Нет сыгранных партий'), false);
     } else {

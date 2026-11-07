@@ -2,7 +2,7 @@ import { ScrollViewer, StackPanel } from '@babylonjs/gui';
 import { t } from '../core/lang';
 import { fs, loadSettings, saveSettings } from '../core/settings';
 import { rulesText } from '../core/rules';
-import { BOT_LEVEL_NAMES, TEXT_SCALE_NAMES, TILE_SIZE_NAMES } from '../core/settings';
+import { TEXT_SCALE_NAMES, TILE_SIZE_NAMES } from '../core/settings';
 import {
   BUTTON_STYLE,
   checkboxRow,
@@ -282,11 +282,6 @@ export function openSettingsOverlay(
   ddTile.setOptions(TILE_SIZE_NAMES.map((s) => t(s)), S.tile_step, (i) => {
     saveSettings({ tile_step: i });
     onRebuild();
-  });
-  const ddBot = addDropdown(t('Сложность ботов:'));
-  void BOT_LEVEL_NAMES;
-  ddBot.setOptions(BOT_LEVEL_NAMES.map((s) => t(s)), S.bot_level, (i) => {
-    saveSettings({ bot_level: i });
   });
   const ddLang = addDropdown(t('Язык:'));
   ddLang.setOptions(['Русский', 'English'], S.lang === 'en' ? 1 : 0, (i) => {

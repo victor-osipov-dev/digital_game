@@ -1689,24 +1689,19 @@ export class OfflineGame {
     scroll.height = px(passScrollH);
     scroll.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
     scroll.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
-    overlay.addControl(scroll);
-    enableSmoothScroll(scroll);
     const col = new StackPanel('passCol');
     col.isVertical = true;
     col.spacing = 16;
-    // Ширина колонки = ширина меток: иначе при крупном тексте метка шире
-    // колонки и первая буква режется слева.
-    col.width = '100%';
+    col.width = px(passW);
+    col.height = px(1);
     col.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
     const passTitleH = estimateWrappedTextHeight(title, passW, fs(18));
     const wrappedName = wrapTextToWidth(name, passW, fs(30));
     const passNameH = estimateWrappedTextHeight(wrappedName, passW, fs(30));
     const passButtonH = 56;
-    const passContentH = passTitleH + passNameH + 24 + passButtonH + 16 * 3;
-    col.verticalAlignment = passContentH <= passScrollH
-      ? Control.VERTICAL_ALIGNMENT_CENTER
-      : Control.VERTICAL_ALIGNMENT_TOP;
-    scroll.addControl(col);
+    let passContentH = passTitleH + passNameH + 24 + passButtonH + 16 * 3;
+    col.height = px(passContentH);
+    let insideScroll = passContentH > passScrollH;
     // Высота по реальному переносу строк: на телефоне с крупным текстом
     // заголовок/имя занимают несколько строк, и фиксированная высота
     // резала их сверху и снизу.
@@ -1732,9 +1727,15 @@ export class OfflineGame {
       const nh = Math.ceil(nameLab.computeExpectedHeight());
       if (nh > 0) nameLab.height = px(Math.max(nameLab.heightInPixels, nh));
       const actualContentH = titleLab.heightInPixels + nameLab.heightInPixels + 24 + passButtonH + 16 * 3;
-      col.verticalAlignment = actualContentH <= passScrollH
-        ? Control.VERTICAL_ALIGNMENT_CENTER
-        : Control.VERTICAL_ALIGNMENT_TOP;
+      passContentH = actualContentH;
+      col.height = px(passContentH);
+      if (passContentH > passScrollH && !insideScroll) {
+        overlay.removeControl(col);
+        overlay.addControl(scroll);
+        scroll.addControl(col);
+        enableSmoothScroll(scroll);
+        insideScroll = true;
+      }
     });
     col.addControl(gapControl(24));
     const go = mkButton(t('Готов(-а)'), { height: 56, width: 220, fontSize: fs(20), theme: BUTTON_STYLE.green });
@@ -1744,6 +1745,17 @@ export class OfflineGame {
       onReady();
     });
     col.addControl(go);
+    if (insideScroll) {
+      overlay.addControl(scroll);
+      scroll.addControl(col);
+      enableSmoothScroll(scroll);
+      col.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    } else {
+      // Короткая плашка — прямой ребёнок полноэкранного слоя. Так Babylon
+      // центрирует весь блок, а не только окно ScrollViewer около верхнего края.
+      col.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+      overlay.addControl(col);
+    }
   }
 
   private clearOverlays(): void {
@@ -1771,28 +1783,21 @@ export class OfflineGame {
     this.stopTimers();
     const { overlay } = modalOverlay(this.popups, 'win', { alpha: 0.9, zIndex: 850 });
     const winW = Math.max(160, Math.floor(viewWidth() * 0.86));
-    const scroll = new ScrollViewer('winScroll');
-    scroll.thickness = 0;
-    scroll.barSize = 4;
-    scroll.width = px(winW);
-    scroll.height = px(Math.max(120, viewHeight() - 24));
-    scroll.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
-    scroll.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
-    overlay.addControl(scroll);
-    enableSmoothScroll(scroll);
+    const winScrollH = Math.max(120, viewHeight() - 24);
     const col = new StackPanel('wincol');
     col.isVertical = true;
-    col.spacing = Math.max(8, Math.min(20, Math.floor(viewHeight() / 28)));
-    col.width = '100%';
+    const winSpacing = Math.max(8, Math.min(20, Math.floor(viewHeight() / 28)));
+    col.spacing = winSpacing;
+    col.width = px(winW);
     col.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
-    scroll.addControl(col);
     const winnerName = this.state && this.state.winner >= 0 ? this.state.playerName(this.state.winner) : '—';
     const winnerText = wrapTextToWidth(t('Победил %s', winnerName), winW - 12, fs(28));
+    const winnerH = estimateWrappedTextHeight(winnerText, winW - 12, fs(28));
     col.addControl(mkLabel(winnerText, {
       fontSize: fs(28),
       color: SKIN.gold,
       width: '100%',
-      height: estimateWrappedTextHeight(winnerText, winW - 12, fs(28)),
+      height: winnerH,
     }));
     col.addControl(gapControl(10));
     // «Посмотреть стол»: закрыть оверлей и оставить финальный расклад
@@ -1811,18 +1816,38 @@ export class OfflineGame {
       back.onPointerUpObservable.clear();
       back.onPointerUpObservable.add(() => this.leaveToMenu());
       col.addControl(back);
-      return;
+    } else {
+      const again = mkButton(t('Заново'), { height: 54, width: actionW, fontSize: fs(18), theme: BUTTON_STYLE.green });
+      again.onPointerUpObservable.clear();
+      // Новая партия — логическая пауза: сначала interstitial площадки,
+      // затем запуск (действие выполняется всегда, даже без рекламы).
+      again.onPointerUpObservable.add(() => withInterstitial(() => this.host.replay()));
+      col.addControl(again);
+      const back = mkButton(t('В меню'), { height: 46, width: actionW, fontSize: fs(16), theme: BUTTON_STYLE.blueOnline });
+      back.onPointerUpObservable.clear();
+      back.onPointerUpObservable.add(() => withInterstitial(() => this.host.toMenu()));
+      col.addControl(back);
     }
-    const again = mkButton(t('Заново'), { height: 54, width: actionW, fontSize: fs(18), theme: BUTTON_STYLE.green });
-    again.onPointerUpObservable.clear();
-    // Новая партия — логическая пауза: сначала interstitial площадки,
-    // затем запуск (действие выполняется всегда, даже без рекламы).
-    again.onPointerUpObservable.add(() => withInterstitial(() => this.host.replay()));
-    col.addControl(again);
-    const back = mkButton(t('В меню'), { height: 46, width: actionW, fontSize: fs(16), theme: BUTTON_STYLE.blueOnline });
-    back.onPointerUpObservable.clear();
-    back.onPointerUpObservable.add(() => withInterstitial(() => this.host.toMenu()));
-    col.addControl(back);
+    const actionHeight = this.onlineMode ? 54 : 54 + 46;
+    const childCount = this.onlineMode ? 4 : 5;
+    const winContentH = winnerH + 10 + 44 + actionHeight + winSpacing * (childCount - 1);
+    col.height = px(winContentH);
+    if (winContentH <= winScrollH) {
+      col.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+      overlay.addControl(col);
+    } else {
+      const scroll = new ScrollViewer('winScroll');
+      scroll.thickness = 0;
+      scroll.barSize = 4;
+      scroll.width = px(winW);
+      scroll.height = px(winScrollH);
+      scroll.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+      scroll.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+      overlay.addControl(scroll);
+      scroll.addControl(col);
+      enableSmoothScroll(scroll);
+      col.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    }
   }
 
   // Плавающая кнопка «Результат» после «Посмотреть стол».
@@ -2774,21 +2799,9 @@ export class OfflineGame {
     panel.root.height = px(ph);
     panel.root.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
     const confirmScrollH = Math.max(120, viewHeight() - 24);
-    // Короткое подтверждение центрируем; длинное оставляем от верхнего края,
-    // чтобы прокрутка начиналась с заголовка и не уводила его выше экрана.
     panel.root.verticalAlignment = ph <= confirmScrollH
       ? Control.VERTICAL_ALIGNMENT_CENTER
       : Control.VERTICAL_ALIGNMENT_TOP;
-    const scroll = new ScrollViewer('confirmScroll');
-    scroll.thickness = 0;
-    scroll.barSize = 4;
-    scroll.width = px(panelWidth);
-    scroll.height = px(confirmScrollH);
-    scroll.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
-    scroll.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
-    m.overlay.addControl(scroll);
-    scroll.addControl(panel.root);
-    enableSmoothScroll(scroll);
     const col = new StackPanel('confirmBox');
     col.isVertical = true;
     col.width = '100%';
@@ -2829,6 +2842,23 @@ export class OfflineGame {
     row.addControl(ok);
     row.addControl(cancel);
     col.addControl(row);
+
+    if (ph <= confirmScrollH) {
+      // Короткий диалог размещаем прямо в полноэкранном overlay. Если
+      // положить его в ScrollViewer, Babylon выравнивает его у начала окна.
+      m.overlay.addControl(panel.root);
+    } else {
+      const scroll = new ScrollViewer('confirmScroll');
+      scroll.thickness = 0;
+      scroll.barSize = 4;
+      scroll.width = px(panelWidth);
+      scroll.height = px(confirmScrollH);
+      scroll.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+      scroll.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+      m.overlay.addControl(scroll);
+      scroll.addControl(panel.root);
+      enableSmoothScroll(scroll);
+    }
   }
 
   private closeConfirm(): void {

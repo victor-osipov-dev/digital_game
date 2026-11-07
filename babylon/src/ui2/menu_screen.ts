@@ -1,7 +1,6 @@
 import { Container, Control, InputText, Rectangle, ScrollViewer, StackPanel } from '@babylonjs/gui';
 import { appName, t } from '../core/lang';
 import {
-  BOT_LEVEL_NAMES,
   fs,
   loadSettings,
   MAX_PLAYERS,
@@ -223,7 +222,6 @@ export class MenuScreen {
     const optLblW = Math.max(
       measureTextWidth(t('Текст:'), fs(15)),
       measureTextWidth(t('Карточки:'), fs(15)),
-      measureTextWidth(t('Сложность ботов:'), fs(15)),
       measureTextWidth(t('Язык:'), fs(15)),
     ) + 6;
     this.optionRowStr(col, t('Текст:'), textScaleNamesLocalized(), S.text_scale, (i) => {
@@ -233,9 +231,6 @@ export class MenuScreen {
     this.optionRowStr(col, t('Карточки:'), tileSizeNamesLocalized(), S.tile_step, (i) => {
       saveSettings({ tile_step: i });
       this.host.rebuild();
-    }, colW, optLblW);
-    this.optionRowStr(col, t('Сложность ботов:'), botLevelNamesLocalized(), S.bot_level, (i) => {
-      saveSettings({ bot_level: i });
     }, colW, optLblW);
     this.optionRowStr(col, t('Язык:'), ['Русский', 'English'], S.lang === 'en' ? 1 : 0, (i) => {
       saveSettings({ lang: i === 1 ? 'en' : 'ru' });
@@ -380,10 +375,6 @@ function textScaleNamesLocalized(): string[] {
 
 function tileSizeNamesLocalized(): string[] {
   return TILE_SIZE_NAMES.map((s) => t(s));
-}
-
-function botLevelNamesLocalized(): string[] {
-  return BOT_LEVEL_NAMES.map((s) => t(s));
 }
 
 function fitFontSize(text: string, avail: number, base: number): number {

@@ -296,7 +296,7 @@ export class Api {
   }
 
   async boardList(): Promise<BoardListMsg> {
-    return (await this.session.request(C2S.BOARD_LIST, {}, [S2C.BOARD_LIST])) as unknown as BoardListMsg;
+    return (await this.session.request(C2S.BOARD_LIST, { limit: 10 }, [S2C.BOARD_LIST])) as unknown as BoardListMsg;
   }
 
   async createRoom(opts: { seats: number; require30: boolean; name: string; password: string }): Promise<RoomLobbyEnvelope> {
