@@ -2624,7 +2624,13 @@ export class OfflineGame {
   }
 
   private showSettingsOverlay(): void {
-    openSettingsOverlay(this.popups, this.ctx, () => this.host.rebuildScreen(), this.host.rebuildScreen);
+    openSettingsOverlay(this.popups, this.ctx, () => {}, () => {
+      // Масштаб текста, размер фишек и язык требуют пересборки контролов.
+      // Пересборка сохраняет GameState; после неё сразу открываем настройки
+      // заново, чтобы игрок мог менять несколько параметров подряд.
+      this.host.rebuildScreen();
+      this.showSettingsOverlay();
+    });
   }
 
   private onDeckButton(): void {
@@ -3176,11 +3182,12 @@ export class OfflineGame {
   // === Ход бота с анимацией ===
   private runBotTurn(): void {
     if (!this.running || !this.state || this.state.finished) return;
-    const s = loadSettings();
-    const anim = s.bot_anim;
     this.flashTurnTitle(this.turnTitleText());
     window.setTimeout(() => {
       if (!this.running || !this.state || this.state.finished) return;
+      // Читаем настройку непосредственно перед ходом: переключение анимации
+      // во время паузы «бот думает» должно примениться к этому ходу.
+      const anim = loadSettings().bot_anim;
       const plan = this.planner.plan(this.state, LEVEL_IMPOSSIBLE);
       this.playPlan(plan.ops, plan.action, plan.tiles, anim);
     }, BOT_THINK_MS);
