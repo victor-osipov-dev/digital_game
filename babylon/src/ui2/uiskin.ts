@@ -10,6 +10,8 @@ import {
   TextBlock,
 } from '@babylonjs/gui';
 
+import { viewWidth } from './viewport';
+
 const FONT = 'Arial, sans-serif';
 
 export const SKIN = {
@@ -540,10 +542,23 @@ let domProxyEl: HTMLInputElement | null = null;
 let domProxyTarget: InputText | null = null;
 // «Поле покинули» — аналог onBlurObservable для зеркального ввода.
 const inputBlurHandlers = new WeakMap<InputText, Array<() => void>>();
+// Ограничение длины ввода: у InputText нет maxLength, поэтому режем по факту.
+const inputMaxLen = new WeakMap<InputText, number>();
+
+/** Максимальная длина текста в поле (обрезается прямо при вводе). */
+export function setInputMaxLength(input: InputText, max: number): void {
+  inputMaxLen.set(input, max);
+}
 
 function onProxyInput(): void {
   if (!domProxyTarget || !domProxyEl) return;
-  domProxyTarget.text = domProxyEl.value;
+  const max = inputMaxLen.get(domProxyTarget);
+  let value = domProxyEl.value;
+  if (max !== undefined && value.length > max) {
+    value = value.slice(0, max);
+    domProxyEl.value = value;
+  }
+  domProxyTarget.text = value;
 }
 
 function fireInputBlur(input: InputText): void {
@@ -942,24 +957,37 @@ export function dropdownRow(
   let items: string[] = [];
   let cur = -1;
   let pick: (i: number) => void = () => {};
+  const btnW = opts.btnWidth ?? Math.round(height * 2.8);
   const btn = mkButton('', { height, fontSize, theme: BUTTON_STYLE.deck });
-  btn.width = px(opts.btnWidth ?? Math.round(height * 2.8));
+  btn.width = px(btnW);
+  // Подпись кнопки подгоняем под ширину: длинные значения («Невозможный»)
+  // иначе упираются в края. Базовый шрифт запоминаем, чтобы при выборе
+  // короткого значения размер вернулся к прежнему.
+  const btnBaseFont = btn.fontSizeInPixels || fontSize;
+  const applyBtnText = (s: string): void => {
+    btn.textBlock!.text = s;
+    const avail = Math.max(10, btnW - 20);
+    let f = btnBaseFont;
+    while (f > 10 && textWidthPx(s, f) > avail) f -= 1;
+    btn.fontSize = f;
+    btn.textBlock!.fontSize = f;
+  };
   if (opts.stacked) btn.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
   row.addControl(lbl);
   row.addControl(btn);
   btn.onPointerClickObservable.add(() => {
     ctx.openFor(btn, items, cur, (i) => {
       cur = i;
-      btn.textBlock!.text = items[i] ?? '';
+      applyBtnText(items[i] ?? '');
       pick(i);
-    }, opts.btnWidth);
+    }, btnW);
   });
   return {
     root: row,
     setOptions: (lst, currentIndex, onPick) => {
       items = lst;
       cur = currentIndex;
-      btn.textBlock!.text = lst[currentIndex] ?? '';
+      applyBtnText(lst[currentIndex] ?? '');
       if (onPick !== undefined) pick = onPick;
     },
     getSelected: () => cur,
@@ -1020,6 +1048,13 @@ export function popupList(
     ax = 8;
     ay = 8;
   }
+  // Список не должен быть уже самой длинной подписи: иначе текст липнет к
+  // краям («Невозможный» и т. п.). Расширяем под пункт, но не за экран.
+  let widest = 0;
+  for (const it of items) widest = Math.max(widest, Math.ceil(textWidthPx(it, fontSize)));
+  const screenW = viewWidth();
+  const maxAllowed = screenW > 0 ? Math.max(160, screenW - ax - 10) : listW + 40;
+  listW = Math.min(Math.max(listW, widest + 28), maxAllowed);
   const list = new StackPanel('list');
   list.width = px(listW);
   list.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
@@ -1034,6 +1069,7 @@ export function popupList(
         : BUTTON_STYLE.deck,
       height: fontSize + 12,
       fontSize,
+      width: listW,
       corner: 6,
     });
     b.width = px(listW);

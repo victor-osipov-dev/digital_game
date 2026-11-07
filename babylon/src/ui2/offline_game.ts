@@ -325,24 +325,8 @@ export class OfflineGame {
     this.restoreBtn = restore;
     const hint = mkTop(t('Подск.'), () => this.onHint());
     this.hintBtn = hint;
-    // Бейдж «AD» в правом верхнем углу кнопки подсказки.
-    const badge = new Rectangle('hintAdBadge');
-    badge.width = px(30);
-    badge.height = px(16);
-    badge.cornerRadius = 5;
-    badge.background = '#FFC107';
-    badge.color = '#00000000';
-    badge.thickness = 0;
-    badge.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
-    badge.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
-    badge.isPointerBlocker = false;
-    badge.isHitTestVisible = false;
-    const badgeText = new TextBlock('hintAdText', 'AD');
-    badgeText.color = '#1A1A1A';
-    badgeText.fontSize = 11;
-    badgeText.fontFamily = 'Arial, sans-serif';
-    badgeText.isHitTestVisible = false;
-    badge.addControl(badgeText);
+    // Пометка «с рекламой» в правом верхнем углу кнопки подсказки.
+    const badge = this.mkAdBadge();
     badge.isVisible = false;
     hint.addControl(badge);
     this.hintAdBadge = badge;
@@ -1956,18 +1940,18 @@ export class OfflineGame {
     const hintInset = 10;
     const hintW = innerW - 12;
     const hintText = t('Перетащите сюда число — новый ряд');
-    const labelH = estimateWrappedTextHeight(hintText, hintW - hintInset, fs(13));
+    const labelW = hintW - hintInset;
+    const labelH = estimateWrappedTextHeight(hintText, labelW, fs(13));
     hostC.height = px(Math.max(ts.y + 16, labelH + 8));
     const block = softPanel({ bg: '#2E7D3222', border: '#2E7D3280', thickness: 2, corner: 10 });
     block.root.width = '100%';
     block.root.height = '100%';
     hostC.addControl(block.root);
+    // Надпись по центру зоны сброса.
     const lab = mkLabel(hintText, {
-      fontSize: fs(13), color: '#9CD6A5', width: hintW - hintInset,
-      height: labelH, align: 'left', hAlign: 'left', vAlign: 'center',
+      fontSize: fs(13), color: '#9CD6A5', width: labelW,
+      height: labelH, align: 'center', hAlign: 'center', vAlign: 'center',
     });
-    // Отступ текста от левого края поля.
-    lab.left = px(hintInset);
     hostC.addControl(lab);
     return { rowId: -1, root: hostC, fill: block.fill, host: hostC, figures: [], items: [], lineOf: [], hintZone: true };
   }
@@ -1995,6 +1979,11 @@ export class OfflineGame {
       this.handFigs.push(f);
       items.push({ root: f.root, width: ts.x, height: ts.y });
     }
+    // Ширина руки зависит от текущего размера поля: при смене разрешения её
+    // нужно пересчитать, иначе раскладка центруется по старой ширине и фишки
+    // уезжают в сторону и обрезаются.
+    this.handPanel.width = px(Math.max(180, viewWidth() - SIDE_PAD * 2));
+    this.handHost.width = px(this.handAvailW());
     // Перенос строк: фишки раскладываются рядами по доступной ширине.
     const laid = layoutFlow(this.handHost, items, this.handAvailW(), flowGap(ts));
     this.handHost.height = px(Math.max(ts.y, laid.totalHeight));
@@ -2154,6 +2143,32 @@ export class OfflineGame {
     }
   }
 
+  // Пометка «кнопка с рекламой»: локализованный текст (RU «Реклама», EN «Ad»),
+  // а не западное «AD». Небольшой жёлтый бейдж в углу кнопки.
+  private mkAdBadge(): Rectangle {
+    const text = t('Реклама');
+    const font = 9;
+    const w = Math.ceil(measureTextWidth(text, font)) + 10;
+    const badge = new Rectangle('hintAdBadge');
+    badge.width = px(w);
+    badge.height = px(14);
+    badge.cornerRadius = 4;
+    badge.background = '#FFC107';
+    badge.color = '#00000000';
+    badge.thickness = 0;
+    badge.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
+    badge.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    badge.isPointerBlocker = false;
+    badge.isHitTestVisible = false;
+    const label = new TextBlock('hintAdText', text);
+    label.color = '#1A1A1A';
+    label.fontSize = font;
+    label.fontFamily = 'Arial, sans-serif';
+    label.isHitTestVisible = false;
+    badge.addControl(label);
+    return badge;
+  }
+
   // Бургер: столбик скрытых действий под верхней панелью у правого края,
   // тап мимо закрывает. Показывается НИЖЕ бургера (не перекрывая его) и
   // с собственным фоном.
@@ -2177,10 +2192,10 @@ export class OfflineGame {
     // углов (cornerRadius) отчётливо видно даже на тёмном фоне панели.
     const deckTheme: ButtonTheme = { bg: '#2F3B4C', hover: '#4A5C73', press: '#263040', border: '#ffffff26' };
     const menuTheme: ButtonTheme = { bg: '#1F4E79', hover: '#2A6CA8', press: '#163A5C', border: '#ffffff26' };
-    const items: { label: string; onClick: () => void; theme: ButtonTheme }[] = [];
+    const items: { label: string; onClick: () => void; theme: ButtonTheme; ad?: boolean }[] = [];
     if (this.hiddenTopActionNames.includes('topSave')) items.push({ label: t('Сохр.'), onClick: () => this.onSaveCheckpoint(), theme: deckTheme });
     if (this.hiddenTopActionNames.includes('topRestore')) items.push({ label: t('Вернуть'), onClick: () => this.onRestoreCheckpoint(), theme: deckTheme });
-    if (this.hiddenTopActionNames.includes('topHint')) items.push({ label: t('Подск.'), onClick: () => this.onHint(), theme: deckTheme });
+    if (this.hiddenTopActionNames.includes('topHint')) items.push({ label: t('Подск.'), onClick: () => this.onHint(), theme: deckTheme, ad: platform.supportsRewarded });
     if (this.hiddenTopActionNames.includes('topHelp')) items.push({ label: t('Правила'), onClick: () => this.showRulesOverlay(), theme: deckTheme });
     if (this.hiddenTopActionNames.includes('topSettings')) items.push({ label: t('Настр.'), onClick: () => this.showSettingsOverlay(), theme: deckTheme });
     if (this.hiddenTopActionNames.includes('topMenu')) items.push({
@@ -2236,6 +2251,7 @@ export class OfflineGame {
       // Ширина = внутреннее поле панели (boxW минус padding 8+8): иначе
       // кнопки вылезают за пределы панели и кажутся обрезанными.
       const b = mkButton(it.label, { height: btnH, width: boxW - 32, fontSize: fs(15), corner: 14, theme: it.theme });
+      if (it.ad) b.addControl(this.mkAdBadge());
       b.onPointerUpObservable.clear();
       b.onPointerUpObservable.add(() => {
         this.clearTransientOverlays();

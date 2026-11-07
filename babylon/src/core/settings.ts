@@ -10,6 +10,8 @@ export type { LangCode };
 
 export const MIN_PLAYERS = 2;
 export const MAX_PLAYERS = 5;
+// Максимальная длина имени игрока/ника — как на сервере (checkNick: 24).
+export const MAX_NAME_LEN = 24;
 
 // Лестница масштабов: маленький — ровно прежний ×1.0, большой — ×2.
 export const TEXT_SCALES = [1.0, 1.3, 2.0];
@@ -207,7 +209,7 @@ export function setPlayerCount(n: number): void {
 export function setPlayerName(index: number, value: string): void {
   const s = loadSettings();
   if (index >= 0 && index < s.player_names.length) {
-    const cleaned = value.trim();
+    const cleaned = value.trim().slice(0, MAX_NAME_LEN);
     s.player_names[index] = cleaned !== '' ? cleaned : t('Игрок %d', index + 1);
     saveSettings({});
   }

@@ -8,7 +8,7 @@ import {
   StackPanel,
 } from '@babylonjs/gui';
 import { t } from '../core/lang';
-import { fs, loadSettings } from '../core/settings';
+import { fs, loadSettings, MAX_NAME_LEN } from '../core/settings';
 import { AuthError, RoomWithServer } from '../net/api';
 import {
   BoardListMsg,
@@ -34,6 +34,7 @@ import {
   modalOverlay,
   popupList,
   setButtonLabel,
+  setInputMaxLength,
   SKIN,
   softPanel,
   px,
@@ -379,6 +380,7 @@ export class OnlineLobby {
 
     page.addControl(headerLabel(t('Вход'), fs(19)));
     this.nickEdit = mkField(t('имя в игре'));
+    setInputMaxLength(this.nickEdit, MAX_NAME_LEN);
     page.addControl(this.nickEdit);
 
     this.loginBtn = accentButton(t('Войти'), BUTTON_STYLE.online, ROUND_H, fs(17));

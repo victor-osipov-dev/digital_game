@@ -5,6 +5,7 @@ import {
   fs,
   loadSettings,
   MAX_PLAYERS,
+  MAX_NAME_LEN,
   MIN_PLAYERS,
   saveSettings,
   setPlayerCount,
@@ -26,6 +27,7 @@ import {
   mkLabel,
   onInputBlur,
   popupList,
+  setInputMaxLength,
   SKIN,
   softPanel,
   DropdownCtx,
@@ -339,6 +341,7 @@ export class MenuScreen {
     input.fontFamily = 'Arial, sans-serif';
     input.placeholderText = t('Игрок %d', i + 1);
     focusInputOnTap(input);
+    setInputMaxLength(input, MAX_NAME_LEN);
     onInputBlur(input, () => setPlayerName(i, input.text));
     sp.addControl(input);
     const bot = checkboxRow(t('Бот'), loadSettings().player_is_bot[i] ?? false, {
