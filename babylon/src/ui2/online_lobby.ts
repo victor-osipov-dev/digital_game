@@ -837,11 +837,9 @@ export class OnlineLobby {
       const res = await api.roomsAll();
       this.rooms = res.rooms;
       this.roomsPage = 0;
-      const total = res.total;
-      const online = total - res.failed.length;
-      let line = t('Комнат найдено: %d · серверов в сети: %d из %d', this.rooms.length, online, total);
-      if (res.failed.length > 0) line += ' · ' + t('без %s', res.failed.map((f) => t(f.name)).join(', '));
-      this.setRoomsNote(line, false);
+      // Технические сведения о серверах кластера игроку не нужны — оставляем
+      // только число найденных комнат.
+      this.setRoomsNote(t('Комнат найдено: %d', this.rooms.length), false);
     } catch (e) {
       this.rooms = [];
       this.setRoomsNote(t((e as Error).message) || t('Не удалось получить список'), true);
