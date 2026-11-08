@@ -127,7 +127,7 @@ export class OfflineGame {
   // друг друга: следующий коммит прилетал раньше предыдущего.
   private presentQueue: Array<
     | { kind: 'title'; seat: number; text: string }
-    | { kind: 'steps'; seat: number; ids: number[] }
+    | { kind: 'steps'; seat: number; ids: number[]; rowId: number }
     | { kind: 'draft'; seat: number; ids: number[]; rowId: number }
   > = [];
   private presentBusy = false;
@@ -1004,7 +1004,21 @@ export class OfflineGame {
 
   private enqueueSteps(ids: number[], seat: number): void {
     if (ids.length === 0) return;
-    this.presentQueue.push({ kind: 'steps', seat, ids: [...ids] });
+    // GAME_STATE подтверждает весь сетевой ход одним пакетом, в отличие от
+    // локального бота, который обновляет стол после каждой фишки. Запоминаем
+    // ряд последней фишки хода, чтобы прокрутить к нему при показе коммита.
+    const moved = new Set(ids);
+    let targetTile = -1;
+    const lastTurn = this.state?.last_turn_tile_ids ?? [];
+    for (let i = lastTurn.length - 1; i >= 0; i -= 1) {
+      if (moved.has(lastTurn[i])) {
+        targetTile = lastTurn[i];
+        break;
+      }
+    }
+    if (targetTile < 0) targetTile = ids[ids.length - 1];
+    const rowId = this.rowIdOfTile(targetTile);
+    this.presentQueue.push({ kind: 'steps', seat, ids: [...ids], rowId });
     void this.pumpPresent();
   }
 
@@ -1061,8 +1075,15 @@ export class OfflineGame {
           this.flightActive = true;
           await this.scrollTableToRow(seg.rowId, gen);
           if (gen !== this.presentGen || !this.running) return;
+        } else {
+          this.flightActive = true;
+          // В сети бот обычно присылает один финальный GAME_STATE за ход, а
+          // не промежуточные обновления как локальный бот. Поэтому без этого
+          // пути committed-фишки анимировались, но стол к ним не прокручивался.
+          if (this.onlineMode && this.state?.players[seg.seat]?.is_bot) {
+            this.queueBotTableScroll(seg.rowId, gen);
+          }
         }
-        else this.flightActive = true;
         await this.playQueuedSteps(seg.ids, gen, seg.seat);
         if (!this.finishPresentedSegment(gen)) return;
       }
