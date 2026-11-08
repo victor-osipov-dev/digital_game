@@ -1358,109 +1358,146 @@ export class OnlineLobby {
     if (this.boardOpen) return;
     this.boardOpen = true;
     const { overlay, close } = modalOverlay(this.popups, 'board', { alpha: 0.6, zIndex: 950 });
-
-    // Две независимые таблицы: Яндекс — платформенная витрина, сервер —
-    // проверенный общий рейтинг и источник статистики. На узком/низком
-    // экране прокручивается вся модалка, внутреннего скролла у списков нет.
     const showYandex = platform.id === 'yandex';
-    const CHROME_H = 16 + 30 + 20 + 40 + 40 + 46 + 16 + 10 * 5;
-    // Высоты заголовков/подписей и дополнительных межстрочных отступов
-    // секции Яндекса, без высоты её списка.
-    const YA_CHROME_H = 156;
     const vh = viewHeight();
     const ROW_H = 26;
     const MAX_ENTRIES = 10;
     const MAX_LIST_H = MAX_ENTRIES * ROW_H + 4;
-    const INITIAL_PANEL_H = CHROME_H + MAX_LIST_H
-      + (showYandex ? YA_CHROME_H + MAX_LIST_H : 0);
+    const panelW = Math.max(160, Math.min(480, viewWidth() - 32));
+    // Убираем горизонтальный скролл геометрией: контентная ширина фиксирована
+    // с вычетом полей панели, а строки таблицы используют только её остаток.
+    const contentW = Math.max(128, panelW - 32);
     const modalScrollH = Math.max(120, vh - 24);
+    const GAP = 8;
+    const PAD_Y = 12;
+    const TITLE_H = 30;
+    const YA_TITLE_H = 26;
+    const YA_SUB_H = 18;
+    const RANK_H = 24;
+    const NOTE_H = 34;
+    const TOGGLE_H = 40;
+    const CLOSE_H = 44;
+
     const panel = softPanel({
       bg: SKIN.panelDark,
       bgAlpha: 0.98,
       corner: 10,
-      width: Math.min(480, viewWidth() - 32),
-      height: INITIAL_PANEL_H,
+      width: panelW,
+      height: 320,
     });
     panel.root.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
-    panel.root.verticalAlignment = INITIAL_PANEL_H <= modalScrollH
-      ? Control.VERTICAL_ALIGNMENT_CENTER
-      : Control.VERTICAL_ALIGNMENT_TOP;
+    panel.root.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
     let modalScroll: ScrollViewer | null = null;
-    if (INITIAL_PANEL_H <= modalScrollH) {
-      overlay.addControl(panel.root);
-    } else {
-      modalScroll = new ScrollViewer('boardModalScroll');
-      modalScroll.thickness = 0;
-      modalScroll.barSize = 4;
-      modalScroll.width = px(Math.min(480, viewWidth() - 32));
-      modalScroll.height = px(modalScrollH);
-      modalScroll.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
-      modalScroll.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
-      overlay.addControl(modalScroll);
-      modalScroll.addControl(panel.root);
-      enableSmoothScroll(modalScroll);
-    }
     const setPanelHeight = (height: number): void => {
       panel.root.height = px(height);
-      // Если фактический топ содержит меньше десяти строк, панель может
-      // оказаться достаточно короткой даже на маленьком экране: тогда
-      // убираем прокрутку целиком и центрируем уже саму модалку.
-      if (modalScroll && height <= modalScrollH) {
+      const needsScroll = height > modalScrollH;
+      if (needsScroll && !modalScroll) {
+        overlay.removeControl(panel.root);
+        modalScroll = new ScrollViewer('boardModalScroll');
+        modalScroll.thickness = 0;
+        modalScroll.barSize = 4;
+        // Вертикальная полоса не должна сжимать дочернюю панель и создавать
+        // горизонтальное переполнение. Горизонтальный скролл здесь не нужен.
+        modalScroll.width = px(panelW + 6);
+        modalScroll.height = px(modalScrollH);
+        modalScroll.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+        modalScroll.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+        modalScroll.horizontalBar.isVisible = false;
+        overlay.addControl(modalScroll);
+        modalScroll.addControl(panel.root);
+        enableSmoothScroll(modalScroll);
+      } else if (!needsScroll && modalScroll) {
         modalScroll.removeControl(panel.root);
         overlay.removeControl(modalScroll);
         modalScroll = null;
         panel.root.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
         overlay.addControl(panel.root);
+      } else if (!modalScroll) {
+        panel.root.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
       }
+      if (modalScroll) panel.root.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
     };
+    overlay.addControl(panel.root);
 
     const box = new StackPanel('boardBox');
     box.isVertical = true;
-    box.spacing = 10;
-    box.width = '100%';
+    box.spacing = GAP;
+    box.width = px(contentW);
     box.height = '100%';
-    box.paddingLeft = px(16);
-    box.paddingRight = px(16);
-    box.paddingTop = px(16);
-    box.paddingBottom = px(16);
+    box.paddingLeft = '0px';
+    box.paddingRight = '0px';
+    box.paddingTop = px(PAD_Y);
+    box.paddingBottom = px(PAD_Y);
+    box.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
     panel.root.addControl(box);
 
     box.addControl(mkLabel(t('Таблица лидеров'), { fontSize: fs(20), color: GOLD, height: 30 }));
     let yaGrid: StackPanel | null = null;
     let yaRankLab: ReturnType<typeof mkLabel> | null = null;
     let yaNoteLab: ReturnType<typeof mkLabel> | null = null;
+    let yaTitle: ReturnType<typeof mkLabel> | null = null;
+    let yaSub: ReturnType<typeof mkLabel> | null = null;
+    let serverToggle: Button | null = null;
+    let serverExpanded = false;
     if (showYandex) {
-      box.addControl(mkLabel(t('Яндекс Игры'), { fontSize: fs(17), color: WHITE90, height: 24 }));
+      yaTitle = mkLabel(t('Яндекс Игры'), { fontSize: fs(19), color: GOLD, height: YA_TITLE_H });
+      box.addControl(yaTitle);
+      yaSub = mkLabel(t('Топ Яндекс Игр по победам'), {
+        fontSize: fs(13), color: WEAK50, height: YA_SUB_H,
+      });
+      box.addControl(yaSub);
       yaGrid = new StackPanel('yaBoardGrid');
       yaGrid.isVertical = true;
       yaGrid.spacing = 4;
       yaGrid.width = '100%';
-      yaGrid.height = px(MAX_LIST_H);
+      yaGrid.height = px(0);
+      yaGrid.isVisible = false;
       box.addControl(yaGrid);
-      yaRankLab = mkLabel('', { fontSize: fs(14), color: '#90CAF9', width: '100%', height: 24 });
+      yaRankLab = mkLabel('', { fontSize: fs(15), color: '#90CAF9', width: '100%', height: RANK_H });
+      yaRankLab.isVisible = false;
       box.addControl(yaRankLab);
       yaNoteLab = mkLabel(t('Загружаем таблицу Яндекса…'), {
-        fontSize: fs(13), color: WHITE85, width: '100%', height: 36, noWrap: false,
+        fontSize: fs(13), color: WHITE85, width: '100%', height: NOTE_H, noWrap: false,
       });
       box.addControl(yaNoteLab);
-      box.addControl(mkLabel(t('Общий топ со всех платформ'), {
-        fontSize: fs(14), color: WHITE85, width: '100%', height: 24,
-      }));
+      serverToggle = greyButton(t('Показать общий рейтинг всех платформ'), 40, fs(14), contentW);
+      serverToggle.onPointerUpObservable.add(() => {
+        serverExpanded = !serverExpanded;
+        serverSection.isVisible = serverExpanded;
+        setButtonLabel(serverToggle!, t(serverExpanded
+          ? 'Скрыть общий рейтинг всех платформ'
+          : 'Показать общий рейтинг всех платформ'));
+        setPanelHeight(calculatePanelHeight());
+      });
+      box.addControl(serverToggle);
     }
-    box.addControl(mkLabel(t('Количество побед'), { fontSize: fs(13), color: 'rgba(255,255,255,0.55)', height: 20 }));
 
+    const serverSection = new StackPanel('serverBoardSection');
+    serverSection.isVertical = true;
+    serverSection.spacing = 6;
+    serverSection.width = '100%';
+    serverSection.isVisible = !showYandex;
+    serverSection.addControl(mkLabel(t('Общий рейтинг всех платформ'), {
+      fontSize: fs(15), color: WHITE90, height: 24,
+    }));
+    serverSection.addControl(mkLabel(t('Количество побед'), {
+      fontSize: fs(12), color: WEAK50, height: 18,
+    }));
     const grid = new StackPanel('boardGrid');
     grid.isVertical = true;
     grid.spacing = 4;
     grid.width = '100%';
-    grid.height = px(MAX_LIST_H);
-    box.addControl(grid);
+    grid.height = px(0);
+    grid.isVisible = false;
+    serverSection.addControl(grid);
 
-    const meLab = mkLabel('', { fontSize: fs(15), color: '#90CAF9', width: '100%', height: 40 });
-    box.addControl(meLab);
-    const bn = mkNote();
-    bn.lab.height = px(40);
-    box.addControl(bn.root);
+    const meLab = mkLabel('', { fontSize: fs(14), color: '#90CAF9', width: '100%', height: 40, noWrap: false });
+    serverSection.addControl(meLab);
+    const serverNoteLab = mkLabel('', {
+      fontSize: fs(13), color: NOTE, width: '100%', height: NOTE_H, noWrap: false,
+    });
+    serverSection.addControl(serverNoteLab);
+    box.addControl(serverSection);
 
     let open = true;
     const doClose = (): void => {
@@ -1469,13 +1506,39 @@ export class OnlineLobby {
       this.boardOpen = false;
       close();
     };
-    const cl = accentButton(t('Закрыть'), BUTTON_STYLE.green, 46, fs(16));
+    const cl = accentButton(t('Закрыть'), BUTTON_STYLE.green, CLOSE_H, fs(16), contentW);
     cl.onPointerUpObservable.add(doClose);
     box.addControl(cl);
     const dim = overlay.children[0] as Rectangle;
     dim.onPointerUpObservable.add(doClose);
 
-    setNote(bn.lab, t('Загружаем таблицу…'), false);
+    let serverListH = 0;
+    const getServerSectionHeight = (): number => {
+      const heights = [24, 18];
+      if (grid.isVisible) heights.push(serverListH);
+      heights.push(40);
+      if (serverNoteLab.isVisible) heights.push(NOTE_H);
+      return heights.reduce((sum, height) => sum + height, 0)
+        + serverSection.spacing * Math.max(0, heights.length - 1);
+    };
+    const calculatePanelHeight = (): number => {
+      let children = [TITLE_H];
+      if (showYandex) {
+        children = children.concat([YA_TITLE_H, YA_SUB_H]);
+        if (yaGrid?.isVisible) children.push(yaGrid.heightInPixels || 0);
+        if (yaRankLab?.isVisible) children.push(RANK_H);
+        if (yaNoteLab?.isVisible) children.push(NOTE_H);
+        children.push(TOGGLE_H);
+      }
+      if (!showYandex || serverExpanded) children.push(getServerSectionHeight());
+      children.push(CLOSE_H);
+      return PAD_Y * 2 + children.reduce((sum, height) => sum + height, 0)
+        + GAP * Math.max(0, children.length - 1);
+    };
+    setNote(serverNoteLab, t('Загружаем таблицу…'), false);
+    serverNoteLab.isVisible = true;
+    serverSection.height = px(getServerSectionHeight());
+    setPanelHeight(calculatePanelHeight());
     meLab.text = '';
     grid.clearControls();
     const yaLoad = showYandex
@@ -1487,44 +1550,47 @@ export class OnlineLobby {
     ]);
     if (!open) return;
 
-    let serverHeight = CHROME_H;
     if (serverResult.status === 'fulfilled') {
       const res: BoardListMsg = serverResult.value;
-      this.renderBoard(res, grid, meLab, bn.lab);
+      this.renderBoard(res, grid, meLab, serverNoteLab, contentW);
       const n = Math.min(MAX_ENTRIES, (res.entries ?? []).length);
       if (n === 0) {
         grid.isVisible = false;
-        serverHeight -= 10;
+        grid.height = px(0);
+        serverListH = 0;
+        setNote(serverNoteLab, '', false);
       } else {
-        const listH = Math.min(MAX_LIST_H, n * ROW_H + 4);
-        grid.height = px(listH);
-        serverHeight += listH;
+        grid.isVisible = true;
+        serverListH = Math.min(MAX_LIST_H, n * ROW_H + 4);
+        grid.height = px(serverListH);
       }
     } else {
       grid.isVisible = false;
-      serverHeight -= 10;
-      setNote(bn.lab, t((serverResult.reason as Error).message) || t('Не удалось загрузить таблицу'), true);
+      grid.height = px(0);
+      serverListH = 0;
+      meLab.text = '';
+      setNote(serverNoteLab, t((serverResult.reason as Error).message) || t('Не удалось загрузить таблицу'), true);
     }
+    serverSection.height = px(getServerSectionHeight());
 
-    let yaHeight = 0;
     if (showYandex && yaGrid && yaRankLab && yaNoteLab) {
       yaGrid.clearControls();
       if (yaResult.status === 'fulfilled' && yaResult.value) {
         const data = yaResult.value;
-        this.renderYandexBoard(data, yaGrid, yaRankLab, yaNoteLab);
+        this.renderYandexBoard(data, yaGrid, yaRankLab, yaNoteLab, contentW);
         const n = Math.min(MAX_ENTRIES, data.entries.length);
-        if (n === 0) yaGrid.isVisible = false;
-        else {
-          yaGrid.height = px(Math.min(MAX_LIST_H, n * ROW_H + 4));
-          yaHeight = Math.min(MAX_LIST_H, n * ROW_H + 4);
-        }
+        yaGrid.isVisible = n > 0;
+        yaGrid.height = px(n > 0 ? Math.min(MAX_LIST_H, n * ROW_H + 4) : 0);
       } else {
         yaGrid.isVisible = false;
+        yaGrid.height = px(0);
         yaRankLab.text = '';
+        yaRankLab.isVisible = false;
         setNote(yaNoteLab, t('Не удалось загрузить таблицу Яндекса'), true);
       }
     }
-    setPanelHeight(serverHeight + (showYandex ? YA_CHROME_H + yaHeight : 0));
+    serverSection.height = px(getServerSectionHeight());
+    setPanelHeight(calculatePanelHeight());
   }
 
   private renderYandexBoard(
@@ -1532,6 +1598,7 @@ export class OnlineLobby {
     grid: StackPanel,
     rankLab: ReturnType<typeof mkLabel>,
     noteLab: ReturnType<typeof mkLabel>,
+    contentW: number,
   ): void {
     grid.clearControls();
     const entries = data.entries.slice(0, 10);
@@ -1543,8 +1610,7 @@ export class OnlineLobby {
     } else {
       grid.isVisible = true;
       setNote(noteLab, '', false);
-      const rowW = Math.max(150, Math.min(440, this.avail - 64));
-      const nameW = Math.max(60, rowW - 100);
+      const nameW = Math.max(28, contentW - 100);
       entries.forEach((entry, i) => {
         const rank = entry.rank > 0 ? entry.rank : i + 1;
         const row = hrow(12);
@@ -1568,6 +1634,7 @@ export class OnlineLobby {
     rankLab.text = data.userRank > 0
       ? t('Ваше место в Яндексе: %d', data.userRank)
       : '';
+    rankLab.isVisible = data.userRank > 0;
   }
 
   // _render_board-порт: строки «место · игрок · победы».
@@ -1576,10 +1643,10 @@ export class OnlineLobby {
     grid: StackPanel,
     meLab: ReturnType<typeof mkLabel>,
     noteLab: ReturnType<typeof mkLabel>,
+    contentW: number,
   ): void {
     grid.clearControls();
-    const inner = Math.min(440, this.avail - 32);
-    const nickW = Math.max(80, inner - 96);
+    const nameW = Math.max(28, Math.min(340, contentW - 100));
     const entries = (res.entries ?? []).slice(0, 10);
     if (entries.length === 0) {
       setNote(noteLab, t('Нет сыгранных партий'), false);
@@ -1594,15 +1661,15 @@ export class OnlineLobby {
       row.height = px(22);
       row.addControl(mkLabel(`${i + 1}.`, {
         fontSize: fs(15), noWrap: true,
-        color: rankColor(i + 1, mine), width: 40, height: 22, hAlign: 'left',
+        color: rankColor(i + 1, mine), width: 34, height: 22, hAlign: 'left',
       }));
-      row.addControl(mkLabel(textTruncate(e.nick, fs(15), nickW), {
+      row.addControl(mkLabel(textTruncate(e.nick, fs(15), nameW), {
         fontSize: fs(15), noWrap: true,
-        color: mine ? '#90CAF9' : WHITE90, width: nickW, height: 22, hAlign: 'left',
+        color: mine ? '#90CAF9' : WHITE90, width: nameW, height: 22, hAlign: 'left',
       }));
       row.addControl(mkLabel(String(e.wins), {
         fontSize: fs(15), noWrap: true,
-        color: mine ? '#90CAF9' : WHITE90, width: 46, height: 22, hAlign: 'right',
+        color: mine ? '#90CAF9' : WHITE90, width: 42, height: 22, hAlign: 'right',
       }));
       grid.addControl(row);
     });
