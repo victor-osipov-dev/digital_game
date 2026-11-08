@@ -1371,11 +1371,9 @@ export class OnlineLobby {
     const GAP = 8;
     const PAD_Y = 12;
     const TITLE_H = 30;
-    const YA_TITLE_H = 26;
-    const YA_SUB_H = 18;
     const RANK_H = 24;
     const NOTE_H = 34;
-    const TOGGLE_H = 40;
+    const TOGGLE_H = 36;
     const CLOSE_H = 44;
 
     const panel = softPanel({
@@ -1431,21 +1429,15 @@ export class OnlineLobby {
     box.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
     panel.root.addControl(box);
 
-    box.addControl(mkLabel(t('Таблица лидеров'), { fontSize: fs(20), color: GOLD, height: 30 }));
+    box.addControl(mkLabel(showYandex ? t('Лидеры Яндекс Игр') : t('Таблица лидеров'), {
+      fontSize: fs(20), color: GOLD, height: TITLE_H,
+    }));
     let yaGrid: StackPanel | null = null;
     let yaRankLab: ReturnType<typeof mkLabel> | null = null;
     let yaNoteLab: ReturnType<typeof mkLabel> | null = null;
-    let yaTitle: ReturnType<typeof mkLabel> | null = null;
-    let yaSub: ReturnType<typeof mkLabel> | null = null;
     let serverToggle: Button | null = null;
     let serverExpanded = false;
     if (showYandex) {
-      yaTitle = mkLabel(t('Яндекс Игры'), { fontSize: fs(19), color: GOLD, height: YA_TITLE_H });
-      box.addControl(yaTitle);
-      yaSub = mkLabel(t('Топ Яндекс Игр по победам'), {
-        fontSize: fs(13), color: WEAK50, height: YA_SUB_H,
-      });
-      box.addControl(yaSub);
       yaGrid = new StackPanel('yaBoardGrid');
       yaGrid.isVertical = true;
       yaGrid.spacing = 4;
@@ -1460,13 +1452,13 @@ export class OnlineLobby {
         fontSize: fs(13), color: WHITE85, width: '100%', height: NOTE_H, noWrap: false,
       });
       box.addControl(yaNoteLab);
-      serverToggle = greyButton(t('Показать общий рейтинг всех платформ'), 40, fs(14), contentW);
+      serverToggle = greyButton(t('Показать серверный топ'), TOGGLE_H, fs(13), contentW);
       serverToggle.onPointerUpObservable.add(() => {
         serverExpanded = !serverExpanded;
         serverSection.isVisible = serverExpanded;
         setButtonLabel(serverToggle!, t(serverExpanded
-          ? 'Скрыть общий рейтинг всех платформ'
-          : 'Показать общий рейтинг всех платформ'));
+          ? 'Скрыть серверный топ'
+          : 'Показать серверный топ'));
         setPanelHeight(calculatePanelHeight());
       });
       box.addControl(serverToggle);
@@ -1477,11 +1469,8 @@ export class OnlineLobby {
     serverSection.spacing = 6;
     serverSection.width = '100%';
     serverSection.isVisible = !showYandex;
-    serverSection.addControl(mkLabel(t('Общий рейтинг всех платформ'), {
+    serverSection.addControl(mkLabel(t(showYandex ? 'Все платформы' : 'Общий рейтинг всех платформ'), {
       fontSize: fs(15), color: WHITE90, height: 24,
-    }));
-    serverSection.addControl(mkLabel(t('Количество побед'), {
-      fontSize: fs(12), color: WEAK50, height: 18,
     }));
     const grid = new StackPanel('boardGrid');
     grid.isVertical = true;
@@ -1514,7 +1503,7 @@ export class OnlineLobby {
 
     let serverListH = 0;
     const getServerSectionHeight = (): number => {
-      const heights = [24, 18];
+      const heights = [24];
       if (grid.isVisible) heights.push(serverListH);
       heights.push(40);
       if (serverNoteLab.isVisible) heights.push(NOTE_H);
@@ -1524,7 +1513,6 @@ export class OnlineLobby {
     const calculatePanelHeight = (): number => {
       let children = [TITLE_H];
       if (showYandex) {
-        children = children.concat([YA_TITLE_H, YA_SUB_H]);
         if (yaGrid?.isVisible) children.push(yaGrid.heightInPixels || 0);
         if (yaRankLab?.isVisible) children.push(RANK_H);
         if (yaNoteLab?.isVisible) children.push(NOTE_H);
@@ -1632,7 +1620,7 @@ export class OnlineLobby {
       });
     }
     rankLab.text = data.userRank > 0
-      ? t('Ваше место в Яндексе: %d', data.userRank)
+      ? t('Ваше место: %d', data.userRank)
       : '';
     rankLab.isVisible = data.userRank > 0;
   }
