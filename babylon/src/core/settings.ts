@@ -4,7 +4,7 @@ import { getPlatformInterfaceLang } from '../platform';
 const KEY = 'dg.settings';
 // Версия схемы настроек. v2: локальный дефолт — один человек против ботов,
 // а статистика разделена на локальную и сетевую (серверную).
-const SETTINGS_VERSION = 2;
+const SETTINGS_VERSION = 3;
 
 export type { LangCode };
 
@@ -54,8 +54,9 @@ function defaults(): Settings {
     // По умолчанию один живой игрок против бота. Дополнительные места,
     // которые добавляет setPlayerCount, тоже становятся ботами.
     player_is_bot: [false, true],
+    // Размер текста и карточек по умолчанию — «Средний».
     text_scale: 1,
-    tile_step: 5,
+    tile_step: 2,
     bot_level: 0,
     bot_anim: true,
     stat_games: 0,
@@ -103,8 +104,8 @@ export function loadSettings(): Settings {
     require_30: typeof parsed.require_30 === 'boolean' ? parsed.require_30 : d.require_30,
     player_names: Array.isArray(parsed.player_names) ? parsed.player_names.map(String) : [...d.player_names],
     player_is_bot: playerIsBot,
-    text_scale: clampi(Number(parsed.text_scale ?? d.text_scale), 0, TEXT_SCALES.length - 1),
-    tile_step: clampi(Number(parsed.tile_step ?? d.tile_step), 0, TILE_WIDTHS.length - 1),
+    text_scale: clampi(version < 3 ? d.text_scale : Number(parsed.text_scale ?? d.text_scale), 0, TEXT_SCALES.length - 1),
+    tile_step: clampi(version < 3 ? d.tile_step : Number(parsed.tile_step ?? d.tile_step), 0, TILE_WIDTHS.length - 1),
     bot_level: clampi(Number(parsed.bot_level ?? d.bot_level), 0, BOT_LEVEL_NAMES.length - 1),
     bot_anim: typeof parsed.bot_anim === 'boolean' ? parsed.bot_anim : d.bot_anim,
     stat_games: Math.max(0, Number(parsed.stat_games ?? 0)),

@@ -176,6 +176,7 @@ export class OnlineLobby {
 
   private playBtn!: Button;
   private boardBtn!: Button;
+  private yaUpsellBtn!: Button;
   private tabCreateBtn!: Button;
   private tabCodeBtn!: Button;
   private createBox!: StackPanel;
@@ -358,6 +359,12 @@ export class OnlineLobby {
     dis(this.loginBtn, busy || !linked);
     dis(this.yaLoginBtn, busy || !linked);
     dis(this.yaGuestBtn, busy || !linked);
+    dis(this.yaUpsellBtn, busy || !linked);
+    // Кнопка входа по Yandex ID из комнат: только на Яндексе и пока аккаунт
+    // не яндексовый (гость). Позволяет позже связать сессию с Yandex ID.
+    const guestAccount = !!this.app.api.user
+      && !String(this.app.api.user.login ?? '').startsWith('ya:');
+    this.yaUpsellBtn.isVisible = platform.id === 'yandex' && guestAccount;
     dis(this.refreshBtn, busy || this.roomsLoading || !linked);
     dis(this.createBtn, busy || !authed);
     dis(this.playBtn, busy || !authed);
@@ -398,12 +405,12 @@ export class OnlineLobby {
 
     this.yaLoginBtn = accentButton(t('Войти через Яндекс'), BUTTON_STYLE.online, ROUND_H, fs(16));
     this.yaLoginBtn.isVisible = isYandex;
-    this.yaLoginBtn.onPointerUpObservable.add(() => void this.doYandexLogin(true));
+    this.yaLoginBtn.onPointerUpObservable.add(() => void this.signInWithYandex(true));
     page.addControl(this.yaLoginBtn);
 
     this.yaGuestBtn = greyButton(t('Продолжить гостем'), ROUND_H, fs(16));
     this.yaGuestBtn.isVisible = isYandex;
-    this.yaGuestBtn.onPointerUpObservable.add(() => void this.doYandexLogin(false));
+    this.yaGuestBtn.onPointerUpObservable.add(() => this.showGuestForm());
     page.addControl(this.yaGuestBtn);
 
     this.nickEdit = mkField(t('имя в игре'));
@@ -411,7 +418,7 @@ export class OnlineLobby {
     setInputMaxLength(this.nickEdit, MAX_NAME_LEN);
     page.addControl(this.nickEdit);
 
-    this.loginBtn = accentButton(isYandex ? t('Другой гостевой вход') : t('Войти'), BUTTON_STYLE.online, ROUND_H, fs(17));
+    this.loginBtn = accentButton(t('Войти'), BUTTON_STYLE.online, ROUND_H, fs(17));
     this.loginBtn.isVisible = !isYandex;
     this.loginBtn.onPointerUpObservable.add(() => void this.doGuestLogin());
     page.addControl(this.loginBtn);
@@ -471,6 +478,13 @@ export class OnlineLobby {
     this.boardBtn = accentButton(t('Таблица лидеров'), BUTTON_STYLE.blueOnline, ROUND_H, fs(16));
     this.boardBtn.onPointerUpObservable.add(() => void this.openBoard());
     page.addControl(this.boardBtn);
+
+    // Гость на Яндексе позже может войти по Yandex ID: кнопка появляется,
+    // когда текущий аккаунт не яндексовый.
+    this.yaUpsellBtn = accentButton(t('Войти через Яндекс'), BUTTON_STYLE.online, ROUND_H, fs(16));
+    this.yaUpsellBtn.isVisible = false;
+    this.yaUpsellBtn.onPointerUpObservable.add(() => void this.signInWithYandex(false));
+    page.addControl(this.yaUpsellBtn);
 
     // --- вкладки: видна только одна форма, в начале — ни одной.
     // На экране уже 360px — в колонку (подписи целиком); шире — в ряд.
@@ -729,56 +743,83 @@ export class OnlineLobby {
     }
   }
 
-  private async doYandexLogin(requireAuthorized: boolean): Promise<void> {
+  // «Продолжить гостем» на Яндексе: показываем обычную форму входа с именем
+  // (логин/пароль генерируются на лету), а не логиним по lite-ID молча.
+  private showGuestForm(): void {
+    this.nickEdit.isVisible = true;
+    this.loginBtn.isVisible = true;
+    this.yaGuestBtn.isVisible = false;
+    this.fillAuthDefaults();
+    this.updateButtons();
+  }
+
+  // Вход по Yandex ID. fromAuthPage — вызывается со страницы входа (там
+  // показываем итог строкой); иначе (апгрейд из комнат) итог идёт тостом.
+  private async signInWithYandex(fromAuthPage: boolean): Promise<void> {
     if (this.busyFlag || platform.id !== 'yandex') return;
     this.setBusy(t('Получаем профиль Яндекс…'));
     let profile = await platform.getPlayer();
-    if (!this.authPageActive()) {
+    if (!this.alive()) {
       this.setBusy('');
       return;
     }
     if (!profile?.uid) {
       this.setBusy('');
-      this.nickEdit.isVisible = true;
-      this.loginBtn.isVisible = true;
-      setNote(this.authNoteLab, t('Не удалось получить гостевой профиль Яндекса'), true);
-      this.updateButtons();
+      this.reportYandexResult(fromAuthPage, t('Не удалось получить гостевой профиль Яндекса'), true);
+      if (fromAuthPage) this.showGuestForm();
       return;
     }
 
-    if (requireAuthorized && !profile.authorized) {
+    if (!profile.authorized) {
       this.setBusy(t('Открываем вход через Яндекс…'));
       const opened = await platform.openAuthDialog();
-      if (!this.authPageActive()) {
+      if (!this.alive()) {
         this.setBusy('');
         return;
       }
       if (!opened) {
         this.setBusy('');
-        setNote(this.authNoteLab, t('Вход через Яндекс отменён. Можно продолжить гостем.'), false);
+        this.reportYandexResult(fromAuthPage, t('Вход через Яндекс отменён. Можно продолжить гостем.'), false);
         return;
       }
       profile = await platform.getPlayer();
-      if (!this.authPageActive()) {
+      if (!this.alive()) {
         this.setBusy('');
         return;
       }
       if (!profile?.uid || !profile.authorized) {
         this.setBusy('');
-        setNote(this.authNoteLab, t('Вход в Яндекс не выполнен. Можно продолжить гостем.'), false);
+        this.reportYandexResult(fromAuthPage, t('Вход в Яндекс не выполнен. Можно продолжить гостем.'), false);
         return;
       }
     }
 
-    this.setBusy(requireAuthorized ? t('Входим через Яндекс…') : t('Входим как гость…'));
+    this.setBusy(t('Входим через Яндекс…'));
     try {
       await this.app.api.yandexLogin(profile.uid, profile.name || t('Гость'));
       this.setBusy('');
-      await this.gotoRooms();
+      this.updateStatus();
+      if (fromAuthPage || this.page === 'auth') {
+        await this.gotoRooms();
+      } else {
+        this.updateButtons();
+        await this.loadRooms(true);
+        showDomToast(t('Вход через Яндекс выполнен'));
+      }
     } catch (e) {
       this.setBusy('');
-      setNote(this.authNoteLab, t((e as Error).message) || t('Не удалось войти'), true);
+      this.reportYandexResult(fromAuthPage, t((e as Error).message) || t('Не удалось войти'), true);
     }
+  }
+
+  private reportYandexResult(fromAuthPage: boolean, text: string, warn: boolean): void {
+    if (fromAuthPage || this.page === 'auth') setNote(this.authNoteLab, text, warn);
+    else showDomToast(text);
+  }
+
+  // Экран ещё жив и не ушёл на другую страницу, пока шёл асинхронный шаг.
+  private alive(): boolean {
+    return this.pageAuth?.parent != null || this.pageRooms?.parent != null;
   }
 
   // =============================================================== подключение
@@ -1452,13 +1493,13 @@ export class OnlineLobby {
         fontSize: fs(13), color: WHITE85, width: '100%', height: NOTE_H, noWrap: false,
       });
       box.addControl(yaNoteLab);
-      serverToggle = greyButton(t('Показать серверный топ'), TOGGLE_H, fs(13), contentW);
+      serverToggle = greyButton(t('Показать общий топ'), TOGGLE_H, fs(13), contentW);
       serverToggle.onPointerUpObservable.add(() => {
         serverExpanded = !serverExpanded;
         serverSection.isVisible = serverExpanded;
         setButtonLabel(serverToggle!, t(serverExpanded
-          ? 'Скрыть серверный топ'
-          : 'Показать серверный топ'));
+          ? 'Скрыть общий топ'
+          : 'Показать общий топ'));
         setPanelHeight(calculatePanelHeight());
       });
       box.addControl(serverToggle);
