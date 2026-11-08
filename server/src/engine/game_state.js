@@ -382,6 +382,10 @@ class GameState {
     this.firstTurn = false;
     this.removeEmptyRows();
     if (this.currentPlayer().handIds.length === 0) {
+      // Победный ход не вызывает advance(), поэтому сохраняем его фишки для
+      // lastTurnTileIds и зелёной подсветки финального стола.
+      this.lastTurnTileIds = this.turnPlacedIds.slice();
+      this.turnPlacedIds = [];
       this.winner = this.current;
       this.finished = true;
       return { ok: true, reason: '', errors: [], win: true };

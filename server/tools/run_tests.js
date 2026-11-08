@@ -294,6 +294,19 @@ test('валидный первый ход проходит и передаёт 
   assert.strictEqual(s.firstTurn, false);
 });
 
+test('победный ход сохраняется как lastTurnTileIds и очищает черновик', () => {
+  const ids = [findTile(0, 3), findTile(0, 4), findTile(0, 5)];
+  const s = stateWithHand(false, ids);
+  const row = s.addRow();
+  for (const id of ids) assert.strictEqual(s.placeFromHand(id, row.id, 99), true);
+
+  const result = s.endTurn();
+  assert.strictEqual(result.ok, true);
+  assert.strictEqual(result.win, true);
+  assert.deepStrictEqual(s.lastTurnTileIds, ids);
+  assert.deepStrictEqual(s.turnPlacedIds, []);
+});
+
 test('порог 30 очков считает джокер по его значению в ряду', () => {
   // Набор из трёх десяток плюс джокер: джокер становится десяткой,
   // вместе 10*4 = 40. Джокер НЕ должен считаться своей единицей.

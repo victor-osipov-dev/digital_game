@@ -371,6 +371,10 @@ export class GameState {
     this.first_turn = false;
     this.removeEmptyRows();
     if (this.hand().length === 0) {
+      // Победный ход не вызывает advance(), поэтому сохраняем его отдельно
+      // для последней подсветки стола (last_turn_tile_ids).
+      this.last_turn_tile_ids = this.turn_placed.map((tile) => tile.id);
+      this.turn_placed = [];
       this.winner = this.handSeat();
       this.finished = true;
       return { ok: true, reason: '', errors: [], win: true };
@@ -555,5 +559,4 @@ export class GameState {
     return -1;
   }
 }
-
 
