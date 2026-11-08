@@ -210,6 +210,9 @@ export class OfflineGame {
   private dragAutoScrollLast = 0;
   private hintTimer = 0;
   private hintsUsed = new Set<number>();
+  // Подсветка должна переживать rebuildHand/resize, которые могут случиться
+  // при возврате из rewarded-рекламы.
+  private hintTileIds = new Set<number>();
   private toastHost: Container | null = null;
   private toastLabel: TextBlock | null = null;
   private flashTimer = 0;
@@ -779,7 +782,11 @@ export class OfflineGame {
     toastHost.addControl(this.toastLabel);
     // тап по тосту — убрать
     toastHost.onPointerUpObservable.add(() => {
-      if (this.hintTimer) window.clearTimeout(this.hintTimer);
+      if (this.hintTimer) {
+        window.clearTimeout(this.hintTimer);
+        this.hintTileIds.clear();
+        this.refresh();
+      }
       this.hintTimer = 0;
       if (this.toastHost) this.toastHost.isVisible = false;
     });
@@ -792,6 +799,7 @@ export class OfflineGame {
     this.running = true;
     this.clearDraftPresentation();
     this.hintsUsed.clear();
+    this.hintTileIds.clear();
     this.initLocalStats();
     this.resetDrawMark();
     // новый матч: очередь показа и её метки — с чистого листа
@@ -1695,6 +1703,7 @@ export class OfflineGame {
       window.clearTimeout(this.hintTimer);
       this.hintTimer = 0;
     }
+    this.hintTileIds.clear();
   }
 
   // Сетевые ходы: ответ — новый GAME_STATE. Пока запрос в полёте,
@@ -2402,7 +2411,10 @@ export class OfflineGame {
     const items: FlowItem[] = [];
     for (let i = 0; i < hand.length; i += 1) {
       const face = hand[i];
-      const f = new TileFigure(face, faceDown, drawnTileId === face.id ? { drawn: true } : {}, ts, this.badgeLayer, false, this.inheritFigs?.get(face.id) ?? null);
+      const f = new TileFigure(face, faceDown, {
+        hint: this.hintTileIds.has(face.id),
+        drawn: drawnTileId === face.id,
+      }, ts, this.badgeLayer, false, this.inheritFigs?.get(face.id) ?? null);
       this.wireDrag(f, { kind: 'hand', rowId: -1, index: i });
       this.handFigs.push(f);
       items.push({ root: f.root, width: ts.x, height: ts.y });
@@ -2549,16 +2561,11 @@ export class OfflineGame {
       return;
     }
     if (plan.action === 'place' && plan.tiles.length > 0) {
-      const planned = new Set<number>(plan.tiles);
-      const handSeat = this.onlineMode ? this.state.local_seat : this.state.current;
-      const drawnId = this.drawMarks.get(handSeat) ?? -1;
-      for (const f of this.handFigs) {
-        if (planned.has(f.face.id)) {
-          // метки пересчитываются целиком, как refresh_marks в оригинале:
-          // иначе подсказка стёрла бы галочку взятой фишки
-          f.refreshMarks({ hint: true, drawn: f.face.id === drawnId });
-        }
-      }
+      this.hintTileIds = new Set(plan.tiles);
+      // Обновляем всю руку, а не только текущие объекты TileFigure: после
+      // resize/возврата из рекламы Babylon может пересоздать их. rebuildHand
+      // повторно наложит подсказку из hintTileIds.
+      this.refresh();
       // Подсказки за рекламу не лимитируются; бесплатная (standalone) —
       // одноразовая.
       if (countAsUsed) this.hintsUsed.add(this.state.current);
@@ -2566,6 +2573,7 @@ export class OfflineGame {
       if (this.hintTimer) window.clearTimeout(this.hintTimer);
       this.hintTimer = window.setTimeout(() => {
         this.hintTimer = 0;
+        this.hintTileIds.clear();
         this.refresh();
       }, 2600);
     }
@@ -3359,6 +3367,7 @@ export class OfflineGame {
       // не прошёл — возврат к снимку хода и завершение хода фолбэком.
       const seq = [...ops];
       const apply = this.state.createOpsLooper();
+      let lastPlacedTile = -1;
       const fail = (): void => {
         if (this.running && this.state) this.state.restoreTurnSnapshot();
         setTimeout(() => this.botEndTurn(), BOT_MIN_WAIT_MS);
@@ -3366,7 +3375,13 @@ export class OfflineGame {
       const step = (): void => {
         if (!this.running || !this.state) return;
         if (seq.length === 0) {
-          setTimeout(() => this.botEndTurn(), BOT_MIN_WAIT_MS);
+          // Не прерываем прокрутку на каждом отдельном действии бота.
+          // После завершения выкладки подводим стол к последней изменённой
+          // фишке и только затем заканчиваем ход.
+          const rowId = this.rowIdOfTile(lastPlacedTile);
+          void this.scrollTableToRow(rowId, this.presentGen).then(() => {
+            if (this.running) setTimeout(() => this.botEndTurn(), BOT_MIN_WAIT_MS);
+          });
           return;
         }
         const op = seq.shift()!;
@@ -3375,12 +3390,8 @@ export class OfflineGame {
           fail();
           return;
         }
+        lastPlacedTile = Number(op.tile ?? -1);
         this.refresh();
-        // Плавно подводим стол к ряду, куда бот положил фишку (как и
-        // чужой черновик в сети) — игрок видит, что именно изменилось.
-        const placedTile = Number(op.tile ?? -1);
-        const placedRow = this.rowIdOfTile(placedTile);
-        if (placedRow > 0) void this.scrollTableToRow(placedRow, this.presentGen);
         if (stepwise && seq.length > 0) window.setTimeout(step, BOT_STEP_MS);
         else step();
       };
