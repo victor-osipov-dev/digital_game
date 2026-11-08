@@ -173,6 +173,10 @@ export class OfflineGame {
   private hiddenTopActionNames: string[] = [];
   private chipsRow!: StackPanel;
   private chipsScroll!: ScrollViewer;
+  // Плавная горизонтальная прокрутка ряда чипов к игроку, чей сейчас ход.
+  private chipsScrollRaf = 0;
+  private chipsScrollToken = 0;
+  private lastChipSeat = -1;
   private rowsScroll!: ScrollViewer;
   private rowsInner!: StackPanel;
   private handPanel!: Container;
@@ -230,6 +234,8 @@ export class OfflineGame {
   build(root: Container): void {
     this.cancelActiveDrag();
     this.cancelTableScroll();
+    this.cancelChipsScroll();
+    this.lastChipSeat = -1;
     this.layoutAnimationId += 1;
     this.boardRoot = root;
     root.clearControls();
@@ -1220,6 +1226,71 @@ export class OfflineGame {
     }
   }
 
+  // Сколько пикселей не хватает, чтобы чип места был виден целиком (0 — уже виден).
+  private chipsSeatDelta(seat: number): number {
+    const chip = seat >= 0 ? this.chipsRow.children[seat] ?? null : null;
+    if (!chip) return 0;
+    const row = rectOf(this.chipsScroll);
+    const item = rectOf(chip);
+    if (row.w <= 0 || item.w <= 0) return 0;
+    const margin = 10;
+    if (item.x < row.x + margin) return item.x - row.x - margin;
+    if (item.x + item.w > row.x + row.w - margin) return item.x + item.w - (row.x + row.w - margin);
+    return 0;
+  }
+
+  // Плавно прокрутить ряд чипов к месту, чей сейчас ход. Вызывается при
+  // смене ходящего, чтобы активное имя всегда было видно без рывка.
+  //
+  // Позиции считаем ВНУТРИ кадра: сразу после rebuildChips меры детей ещё
+  // не пересчитаны, и синхронный расчёт давал нулевую цель — прокрутка не
+  // запускалась. Поэтому ждём пару кадров, пока появятся размеры.
+  private scrollChipsToSeat(seat: number): void {
+    if (seat < 0) return;
+    if (this.chipsScrollRaf) window.cancelAnimationFrame(this.chipsScrollRaf);
+    this.chipsScrollRaf = 0;
+    const token = ++this.chipsScrollToken;
+    let last = performance.now();
+    let layoutTries = 0;
+    const tick = (now: number): void => {
+      this.chipsScrollRaf = 0;
+      if (token !== this.chipsScrollToken || !this.running) return;
+      const chip = this.chipsRow.children[seat] ?? null;
+      const row = rectOf(this.chipsScroll);
+      const item = chip ? rectOf(chip) : { x: 0, y: 0, w: 0, h: 0 };
+      if (row.w <= 0 || item.w <= 0) {
+        if (layoutTries++ < 6) {
+          last = now;
+          this.chipsScrollRaf = window.requestAnimationFrame(tick);
+        }
+        return;
+      }
+      const delta = this.chipsSeatDelta(seat);
+      if (Math.abs(delta) < 1) return;
+      const elapsed = Math.max(8, Math.min(40, now - last));
+      last = now;
+      const step = Math.sign(delta) * Math.min(Math.abs(delta), 900 * elapsed / 1000);
+      if (Math.abs(scrollViewerByPixels(this.chipsScroll, 'horizontal', step)) < 0.1) return;
+      this.chipsScrollRaf = window.requestAnimationFrame(tick);
+    };
+    this.chipsScrollRaf = window.requestAnimationFrame(tick);
+  }
+
+  private cancelChipsScroll(): void {
+    this.chipsScrollToken += 1;
+    if (this.chipsScrollRaf) window.cancelAnimationFrame(this.chipsScrollRaf);
+    this.chipsScrollRaf = 0;
+  }
+
+  // Ряд, в котором лежит фишка (по id) — чтобы прокрутить стол к ходу бота.
+  private rowIdOfTile(tileId: number): number {
+    if (!this.state || tileId <= 0) return -1;
+    for (const row of this.state.table) {
+      if (row.tiles.some((t) => t.id === tileId)) return row.id;
+    }
+    return -1;
+  }
+
   // Входящий DRAFT: стол другого игрока подменяется его раскладкой.
   // Guard «чей ход», дедуп и устаревание 15 с — как в оригинале
   // (game.gd:2844-2910, 3887-3899).
@@ -1597,6 +1668,7 @@ export class OfflineGame {
   stopTimers(): void {
     this.cancelActiveDrag();
     this.cancelTableScroll();
+    this.cancelChipsScroll();
     this.stopRejoinLoop();
     this.stopDraftResend();
     this.stopGraceCountdown();
@@ -1890,6 +1962,11 @@ export class OfflineGame {
     this.deckBtn.textBlock!.fontSize = fs(15);
     this.syncTopBar();
     this.rebuildChips();
+    // Ход сменился — плавно подводим ряд чипов к активному игроку.
+    if (this.state.current !== this.lastChipSeat) {
+      this.lastChipSeat = this.state.current;
+      this.scrollChipsToSeat(this.state.current);
+    }
     // Бейджи переезжают от прежних фишек к новым: пересборка не должна
     // гасить «галочки» ни на кадр (иначе ряд мигает при каждой выкладке).
     this.inheritFigs = new Map<number, TileFigure>();
@@ -3299,6 +3376,11 @@ export class OfflineGame {
           return;
         }
         this.refresh();
+        // Плавно подводим стол к ряду, куда бот положил фишку (как и
+        // чужой черновик в сети) — игрок видит, что именно изменилось.
+        const placedTile = Number(op.tile ?? -1);
+        const placedRow = this.rowIdOfTile(placedTile);
+        if (placedRow > 0) void this.scrollTableToRow(placedRow, this.presentGen);
         if (stepwise && seq.length > 0) window.setTimeout(step, BOT_STEP_MS);
         else step();
       };

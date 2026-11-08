@@ -130,7 +130,11 @@ export class MenuScreen {
       const message = pending.state === 'playing'
         ? t('Вы всё ещё в партии «%s»', pending.name || pending.code)
         : t('Вы всё ещё в комнате «%s»', pending.name || pending.code);
-      const innerW = Math.max(120, colW - 20);
+      // Внутренняя ширина без боковых полей. Раньше ширина контента считалась
+      // от colW и НЕ учитывала padding колонки — текст и кнопки вылезали за
+      // рамку и обрезались слева/справа.
+      const pad = 12;
+      const innerW = Math.max(120, colW - 2 * pad);
       const labelFont = fs(14);
       const wrappedMessage = wrapTextToWidth(message, innerW, labelFont);
       const labelH = estimateWrappedTextHeight(wrappedMessage, innerW, labelFont) + 4;
@@ -144,13 +148,16 @@ export class MenuScreen {
       const actionH = stackButtons ? buttonH * 2 + 8 : buttonH;
       const box = softPanel({ bg: '#FFD54F14', border: SKIN.gold, thickness: 2, corner: 10 });
       box.root.width = '100%';
-      box.root.height = px(6 + labelH + 6 + actionH + 8);
+      box.root.height = px(pad + labelH + 6 + actionH + pad);
       const bcol = new StackPanel('pendingCol');
       bcol.isVertical = true;
       bcol.spacing = 6;
+      // Колонка шириной innerW центрируется в рамке сама — без padding,
+      // иначе внутренняя ширина детей вновь становилась больше доступной.
       bcol.width = px(innerW);
-      bcol.paddingLeft = px(10);
-      bcol.paddingTop = px(6);
+      bcol.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+      bcol.paddingLeft = '0px';
+      bcol.paddingRight = '0px';
       box.root.addControl(bcol);
       const pendingLabel = mkLabel(wrappedMessage, {
         fontSize: labelFont,
@@ -161,7 +168,6 @@ export class MenuScreen {
         align: 'left',
         vAlign: 'top',
       });
-      pendingLabel.resizeToFit = true;
       pendingLabel.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
       bcol.addControl(pendingLabel);
       const actions = new StackPanel('pendingActions');
