@@ -38,6 +38,7 @@ import {
   SKIN,
   softPanel,
   px,
+  wrapTextToWidth,
 } from './uiskin';
 import { measureTextWidth } from './menu_screen';
 import { viewHeight, viewWidth } from './viewport';
@@ -961,36 +962,51 @@ export class OnlineLobby {
 
     const font = fs(16);
     const buttonFont = fs(16);
+    const pad = 12;
+    const gap = 10;
     const joinW = Math.max(84, Math.ceil(measureTextWidth(t('Войти'), buttonFont)) + 28);
     const buttonH = Math.max(38, Math.ceil(buttonFont * 1.55));
-    const rowInnerW = Math.max(100, this.avail - 24);
-    const sideLabelW = Math.max(80, rowInnerW - joinW - 12);
-    const sideLabelH = estimateWrappedTextHeight(text, sideLabelW, font);
-    const stacked = sideLabelH > buttonH + 8;
-    const labelW = stacked ? rowInnerW : sideLabelW;
-    const labelH = estimateWrappedTextHeight(text, labelW, font);
+    // Ширина содержимого карточки: сверху/снизу скруглённая карточка на всю
+    // ширину колонки, внутри — поля pad по краям.
+    const innerW = Math.max(80, this.avail - 24);
+    const contentW = Math.max(60, innerW - 2 * pad);
+    // Текст слева, кнопка справа. Если тексту не остаётся места (узкий
+    // экран) или он не влезает в одну строку — кнопка уходит вниз, а не
+    // наезжает на текст.
+    const sideLabelW = Math.max(60, contentW - joinW - gap);
+    const sideWrapped = wrapTextToWidth(text, sideLabelW, font);
+    const sideLabelH = estimateWrappedTextHeight(sideWrapped, sideLabelW, font);
+    const stacked = sideLabelW < 110 || sideLabelH > buttonH + 6;
+    const labelW = stacked ? contentW : sideLabelW;
+    const wrappedText = stacked ? wrapTextToWidth(text, contentW, font) : sideWrapped;
+    const labelH = stacked ? estimateWrappedTextHeight(wrappedText, contentW, font) : sideLabelH;
     const rowH = stacked
-      ? 8 + labelH + 6 + buttonH + 8
-      : Math.max(buttonH + 12, labelH + 12);
+      ? pad + labelH + 6 + buttonH + pad
+      : Math.max(buttonH + 2 * pad, labelH + 2 * pad);
     row.height = px(rowH);
-    const lab = mkLabel(text, {
+    const lab = mkLabel(wrappedText, {
       fontSize: font,
       color: WHITE90,
       width: labelW,
-      height: labelH,
+      height: stacked ? labelH : rowH - 2 * pad,
       noWrap: false,
-      hAlign: 'left',
-      vAlign: stacked ? 'top' : 'center',
+      align: 'left',
+      vAlign: 'center',
     });
-    lab.left = px(10);
-    lab.top = px(stacked ? 8 : 0);
+    // Текст и контрол — строго по левому краю с отступом pad (раньше был
+    // задан только hAlign, а текст внутри центрировался — отсюда «отступ»).
+    lab.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    lab.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    lab.verticalAlignment = stacked ? Control.VERTICAL_ALIGNMENT_TOP : Control.VERTICAL_ALIGNMENT_CENTER;
+    lab.left = px(pad);
+    lab.top = px(stacked ? pad : 0);
     card.root.addControl(lab);
 
     const join = accentButton(t('Войти'), BUTTON_STYLE.deck, buttonH, buttonFont, joinW);
     join.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
     join.verticalAlignment = stacked ? Control.VERTICAL_ALIGNMENT_BOTTOM : Control.VERTICAL_ALIGNMENT_CENTER;
-    join.left = px(stacked ? -10 : -14);
-    if (stacked) join.top = px(-8);
+    join.left = px(-pad);
+    if (stacked) join.top = px(-pad);
     join.onPointerUpObservable.add(() =>
       void this.doJoin(room.code, room.hasPassword ? this.joinPass.text : ''));
     card.root.addControl(join);
