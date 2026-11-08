@@ -80,6 +80,7 @@ interface TileSnapshot {
   face: TileFace;
   rect: { x: number; y: number; w: number; h: number };
   slot?: string;
+  rowId?: number;
   // Скрытые фишки (рука бота) не должны «просвечивать» во время полёта.
   faceDown?: boolean;
 }
@@ -1350,6 +1351,7 @@ export class OfflineGame {
   ): Promise<void> {
     const slots = this.tileSlotKeys();
     const fresh = new Set(freshIds);
+    const reorderedRows = this.reorderedRowIds(before);
     const sourceChip = this.chipsRow.children[seat];
     if (sourceChip) this.ensureSeatChipVisible(sourceChip);
     await new Promise<void>((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve())));
@@ -1371,7 +1373,10 @@ export class OfflineGame {
             faceDown: false,
             rect: { x: spawn.x, y: spawn.y, w: to.w || tileSize().x, h: to.h || tileSize().y },
           };
-        } else if (previous && previous.slot !== slots.get(id)) {
+        } else if (previous && (
+          previous.slot !== slots.get(id)
+          || (previous.rowId !== undefined && reorderedRows.has(previous.rowId))
+        )) {
           source = {
             ...previous,
             rect: { ...previous.rect, y: previous.rect.y - scrollDelta },
@@ -1416,7 +1421,7 @@ export class OfflineGame {
       const ghost = this.createFlightGhost(move.source, move.target);
       await new Promise<void>((resolve) => {
         this.playTileFlight(move.source, move.target, to, {
-          duration: move.isNew ? 210 : 175,
+          duration: move.isNew ? 155 : 125,
           fromScale: move.isNew ? 0.62 : 0.94,
           fromAlpha: move.isNew ? 0.35 : move.target.rgbaAlpha,
         }, ghost, resolve);
@@ -2223,18 +2228,21 @@ export class OfflineGame {
   private captureTileSnapshots(): Map<number, TileSnapshot> {
     const snapshots = new Map<number, TileSnapshot>();
     const slots = this.tileSlotKeys();
-    const collect = (f: TileFigure): void => {
+    const collect = (f: TileFigure, rowId?: number): void => {
       const rect = rectOf(f.root);
       if (rect.w > 0 && rect.h > 0) {
         snapshots.set(f.face.id, {
           face: f.face,
           rect,
           slot: slots.get(f.face.id),
+          rowId,
           faceDown: f.faceDown,
         });
       }
     };
-    for (const row of this.rowFigs) for (const f of row.figures) collect(f);
+    for (const row of this.rowFigs) {
+      if (!row.hintZone) for (const f of row.figures) collect(f, row.rowId);
+    }
     for (const f of this.handFigs) collect(f);
     return snapshots;
   }
@@ -2245,20 +2253,40 @@ export class OfflineGame {
   private tileSlotKeys(): Map<number, string> {
     const slots = new Map<number, string>();
     const rows = this.rowFigs.filter((r) => !r.hintZone);
-    let prefixHeights = '';
-    for (let ri = 0; ri < rows.length; ri += 1) {
-      const row = rows[ri];
-      const height = String(row.root.height);
+    for (const row of rows) {
       for (let i = 0; i < row.figures.length; i += 1) {
         slots.set(row.figures[i].face.id,
-          `row:${ri}:${prefixHeights}:${row.rowId}:${i}:${row.lineOf[i] ?? 0}`);
+          `row:${row.rowId}:${i}:${row.lineOf[i] ?? 0}`);
       }
-      prefixHeights += `${height};`;
     }
     for (let i = 0; i < this.handFigs.length; i += 1) {
       slots.set(this.handFigs[i].face.id, `hand:${i}`);
     }
     return slots;
+  }
+
+  // Ряд считаем переставленным только если изменился относительный порядок
+  // старых рядов. Добавление/удаление ряда само по себе не должно запускать
+  // анимацию для всех рядов ниже него.
+  private reorderedRowIds(before: Map<number, TileSnapshot>): Set<number> {
+    const previousOrder = [...new Set(
+      [...before.values()]
+        .map((snapshot) => snapshot.rowId)
+        .filter((rowId): rowId is number => rowId !== undefined),
+    )];
+    const currentOrder = this.rowFigs.filter((row) => !row.hintZone).map((row) => row.rowId);
+    const oldRows = new Set(previousOrder);
+    const newRows = new Set(currentOrder);
+    const oldCommonOrder = previousOrder.filter((rowId) => newRows.has(rowId));
+    const newCommonOrder = currentOrder.filter((rowId) => oldRows.has(rowId));
+    const reordered = new Set<number>();
+    for (let i = 0; i < oldCommonOrder.length; i += 1) {
+      if (oldCommonOrder[i] !== newCommonOrder[i]) {
+        reordered.add(oldCommonOrder[i]);
+        if (newCommonOrder[i] !== undefined) reordered.add(newCommonOrder[i]);
+      }
+    }
+    return reordered;
   }
 
   private currentTileFigures(): Map<number, TileFigure> {
@@ -2275,6 +2303,7 @@ export class OfflineGame {
     const origins = new Map(this.flightOrigins);
     this.flightOrigins.clear();
     const slots = this.tileSlotKeys();
+    const reorderedRows = this.reorderedRowIds(before);
     const pending: { source: TileSnapshot; target: TileFigure; ghost: TileFigure; fade: boolean }[] = [];
 
     // Сначала определяем только реально сдвинувшиеся слоты и прячем их
@@ -2283,7 +2312,10 @@ export class OfflineGame {
     for (const [id, target] of figures) {
       const origin = origins.get(id);
       const previous = before.get(id);
-      if (!origin && (!previous || previous.slot === slots.get(id))) continue;
+      if (!origin && (!previous || (
+        previous.slot === slots.get(id)
+        && (previous.rowId === undefined || !reorderedRows.has(previous.rowId))
+      ))) continue;
       const source = origin ?? previous;
       if (!source) continue;
       target.hideBadgeForFlight();
