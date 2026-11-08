@@ -34,7 +34,6 @@ import {
   px,
 } from './uiskin';
 import { openRulesOverlay, openStatsOverlay } from './overlays';
-import { platform } from '../platform';
 
 import type { MenuHost } from './ports';
 import { viewHeight, viewWidth } from './viewport';
@@ -260,35 +259,13 @@ export class MenuScreen {
     const bottom = hrow(14);
     bottom.width = '100%';
     bottom.height = px(50);
-    // Кнопка «Выход» осмысленна только на отдельной странице: внутри любого
-    // iframe (площадки и встраивание на своём сайте) закрыть окно нельзя, а
-    // полноэкранный режим контролирует родитель, а не игра. Поэтому прячем
-    // её и во фрейме, и на любой площадке — показываем лишь standalone в
-    // отдельном окне.
-    const inFrame = ((): boolean => {
-      try {
-        return typeof window !== 'undefined' && window.self !== window.top;
-      } catch {
-        return true;
-      }
-    })();
-    const embedded = inFrame || platform.id !== 'standalone';
-    const rulesW = embedded ? colW : Math.floor(colW / 2) - 7;
-    const rulesBtn = mkButton(t('Как играть'), { fontSize: fs(16), height: 50, width: Math.floor(rulesW), theme: { bg: '#31363F', hover: '#3A404A', press: '#262B33' } });
+    // Кнопка «Выход» убрана: на площадках (Яндекс Игры и др.) закрывать
+    // окно нельзя и это запрещено рекомендациями, а на своём сайте она
+    // вводила в заблуждение. «Как играть» занимает всю ширину.
+    const rulesBtn = mkButton(t('Как играть'), { fontSize: fs(16), height: 50, width: Math.floor(colW), theme: { bg: '#31363F', hover: '#3A404A', press: '#262B33' } });
     rulesBtn.onPointerUpObservable.clear();
     rulesBtn.onPointerUpObservable.add(() => this.openHelp());
     bottom.addControl(rulesBtn);
-    if (!embedded) {
-      const quitBtn = mkButton(t('Выход'), { fontSize: fs(16), height: 50, width: Math.floor(colW / 2) - 7, theme: { bg: '#31363F', hover: '#3A404A', press: '#262B33' } });
-      quitBtn.onPointerUpObservable.clear();
-      quitBtn.onPointerUpObservable.add(() => {
-        // Выход — сначала снять полноэкранный режим (жест игрока), затем
-        // закрыть страницу. Иначе браузер остался бы развёрнутым.
-        void platform.exitFullscreen();
-        window.close();
-      });
-      bottom.addControl(quitBtn);
-    }
     col.addControl(bottom);
   }
 

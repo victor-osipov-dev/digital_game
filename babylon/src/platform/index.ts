@@ -4,6 +4,11 @@ import { StandalonePlatform } from './noop';
 import { YandexPlatform } from './yandex';
 import { CrazyGamesPlatform } from './crazygames';
 import { GameDistributionPlatform } from './gamedistribution';
+import {
+  installFullscreenBridge,
+  reportedFullscreenState,
+  requestParentFullscreen,
+} from './fullscreen_bridge';
 
 export type { PlatformAPI, PlatformId };
 export type { DeviceKind } from './types';
@@ -204,6 +209,9 @@ class PlatformFacade implements PlatformAPI {
   }
 
   isFullscreen(): boolean {
+    // Во фрейме состояние сообщает родитель (fimdi-мост): изнутри
+    // document.fullscreenElement не виден. Учитываем оба источника.
+    if (reportedFullscreenState() === true) return true;
     try {
       return this.current.isFullscreen();
     } catch {
@@ -212,11 +220,19 @@ class PlatformFacade implements PlatformAPI {
   }
 
   async exitFullscreen(): Promise<boolean> {
+    let result = false;
     try {
-      return await this.current.exitFullscreen();
+      result = await this.current.exitFullscreen();
     } catch {
-      return false;
+      result = false;
     }
+    // Внутри фрейма полноэкранным режимом управляет родитель — просим и его.
+    try {
+      if (this.isEmbedded) requestParentFullscreen(false);
+    } catch {
+      /* ignore */
+    }
+    return result;
   }
 
   async toggleFullscreen(): Promise<boolean> {
@@ -303,6 +319,8 @@ let initialized = false;
 export async function initPlatform(opts: { timeoutMs?: number } = {}): Promise<PlatformAPI> {
   if (initialized) return platform;
   initialized = true;
+  // Мост с родителем (fimdi): состояние полноэкранного режима из фрейма.
+  installFullscreenBridge();
   const timeoutMs = opts.timeoutMs ?? 2000;
   let provider = createProvider(platformId);
   // Детект выполняется один раз при загрузке модуля — до появления SDK,
