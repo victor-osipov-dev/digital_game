@@ -71,6 +71,9 @@ const ROOMS_MIN_H = 190;
 const PLAYERS_MIN_H = 160;
 const HEALTH_TICK_MS = 20000;
 const ROOMS_TICK_MS = 10000;
+// uid, в который мы сами вошли по авторизованному Yandex ID. По нему
+// отличаем настоящий вход от гостевого lite-ID (у обоих логин «ya:»).
+const YA_AUTH_UID_KEY = 'dg.ya_auth_uid';
 
 type PageName = 'auth' | 'rooms' | 'lobby';
 
@@ -177,6 +180,7 @@ export class OnlineLobby {
   private playBtn!: Button;
   private boardBtn!: Button;
   private yaUpsellBtn!: Button;
+  private yaUpsellLab!: ReturnType<typeof mkLabel>;
   private tabCreateBtn!: Button;
   private tabCodeBtn!: Button;
   private createBox!: StackPanel;
@@ -360,11 +364,16 @@ export class OnlineLobby {
     dis(this.yaLoginBtn, busy || !linked);
     dis(this.yaGuestBtn, busy || !linked);
     dis(this.yaUpsellBtn, busy || !linked);
-    // Кнопка входа по Yandex ID из комнат: только на Яндексе и пока аккаунт
-    // не яндексовый (гость). Позволяет позже связать сессию с Yandex ID.
-    const guestAccount = !!this.app.api.user
-      && !String(this.app.api.user.login ?? '').startsWith('ya:');
-    this.yaUpsellBtn.isVisible = platform.id === 'yandex' && guestAccount;
+    // Кнопка входа по Yandex ID из комнат: только на Яндексе и пока текущий
+    // серверный аккаунт не совпадает с тем, в который мы сами входили по
+    // авторизованному Yandex ID. Гостевой lite-ID тоже носит логин «ya:»,
+    // поэтому префикса недостаточно — помним uid своего яндексового входа.
+    const myYaUid = localStorage.getItem(YA_AUTH_UID_KEY) ?? '';
+    const login = String(this.app.api.user?.login ?? '');
+    const matchesOwnYandexLogin = myYaUid !== '' && login === `ya:${myYaUid}`;
+    this.yaUpsellBtn.isVisible = platform.id === 'yandex'
+      && !!this.app.api.user && !matchesOwnYandexLogin;
+    this.yaUpsellLab.isVisible = this.yaUpsellBtn.isVisible;
     dis(this.refreshBtn, busy || this.roomsLoading || !linked);
     dis(this.createBtn, busy || !authed);
     dis(this.playBtn, busy || !authed);
@@ -479,8 +488,13 @@ export class OnlineLobby {
     this.boardBtn.onPointerUpObservable.add(() => void this.openBoard());
     page.addControl(this.boardBtn);
 
-    // Гость на Яндексе позже может войти по Yandex ID: кнопка появляется,
-    // когда текущий аккаунт не яндексовый.
+    // Гость на Яндексе позже может войти по Yandex ID: пояснение и кнопка
+    // появляются, когда текущий аккаунт не яндексовый.
+    this.yaUpsellLab = mkLabel(t('Войдите через Яндекс ID, чтобы сохранить прогресс'), {
+      fontSize: fs(13), color: NOTE, width: '100%', height: 34, noWrap: false, align: 'center',
+    });
+    this.yaUpsellLab.isVisible = false;
+    page.addControl(this.yaUpsellLab);
     this.yaUpsellBtn = accentButton(t('Войти через Яндекс'), BUTTON_STYLE.online, ROUND_H, fs(16));
     this.yaUpsellBtn.isVisible = false;
     this.yaUpsellBtn.onPointerUpObservable.add(() => void this.signInWithYandex(false));
@@ -797,6 +811,7 @@ export class OnlineLobby {
     this.setBusy(t('Входим через Яндекс…'));
     try {
       await this.app.api.yandexLogin(profile.uid, profile.name || t('Гость'));
+      localStorage.setItem(YA_AUTH_UID_KEY, profile.uid);
       this.setBusy('');
       this.updateStatus();
       if (fromAuthPage || this.page === 'auth') {
@@ -881,6 +896,7 @@ export class OnlineLobby {
     this.setBusy(t('Входим через Яндекс…'));
     try {
       await this.app.api.yandexLogin(profile.uid, profile.name || t('Гость'));
+      localStorage.setItem(YA_AUTH_UID_KEY, profile.uid);
       this.setBusy('');
       await this.gotoRooms();
     } catch (e) {

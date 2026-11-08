@@ -419,6 +419,7 @@ const EN: Record<string, string> = {
   'Войдите через Яндекс, чтобы играть по сети': 'Sign in with Yandex to play online',
   'Войдите через Яндекс для имени, облачной статистики и лидербордов': 'Sign in with Yandex for your name, cloud stats, and leaderboards',
   'Войти через Яндекс': 'Sign in with Yandex',
+  'Войдите через Яндекс ID, чтобы сохранить прогресс': 'Sign in with Yandex ID to save your progress',
   'Вход через Яндекс привязывает сетевые результаты к профилю, использует имя из Яндекса и открывает таблицу Яндекс Игр. Гостевой режим тоже позволяет играть по сети, но гостевой прогресс может не восстановиться при смене устройства или профиля.': 'Signing in with Yandex links online results to your profile, uses your Yandex name, and enables the Yandex Games leaderboard. You can still play online as a guest, but guest progress may not be recoverable on another device or profile.',
   'Продолжить гостем': 'Continue as guest',
   'Общий рейтинг всех платформ': 'Overall leaderboard across platforms',
