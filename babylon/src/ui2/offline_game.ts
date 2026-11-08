@@ -1421,7 +1421,9 @@ export class OfflineGame {
       const ghost = this.createFlightGhost(move.source, move.target);
       await new Promise<void>((resolve) => {
         this.playTileFlight(move.source, move.target, to, {
-          duration: move.isNew ? 155 : 125,
+          // Новую фишку бот выставляет нарочито медленно, чтобы ход был
+          // читаемым; сдвиг существующих фишек остаётся чуть быстрее.
+          duration: move.isNew ? 520 : 280,
           fromScale: move.isNew ? 0.62 : 0.94,
           fromAlpha: move.isNew ? 0.35 : move.target.rgbaAlpha,
         }, ghost, resolve);
