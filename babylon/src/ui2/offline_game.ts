@@ -145,6 +145,7 @@ export class OfflineGame {
   private localStatsEligible = false;
   private localStatsHumanSeat = -1;
   private localStatsResultDone = false;
+  private yandexScoreReported = false;
   // wait-панель (paused/waiting/grace)
   private waitHost: Container | null = null;
   private waitLab: TextBlock | null = null;
@@ -797,6 +798,7 @@ export class OfflineGame {
   startGame(state: GameState): void {
     this.state = state;
     this.running = true;
+    this.yandexScoreReported = false;
     this.clearDraftPresentation();
     this.hintsUsed.clear();
     this.hintTileIds.clear();
@@ -1868,6 +1870,7 @@ export class OfflineGame {
 
   showWin(): void {
     this.clearOverlays();
+    this.reportYandexWins();
     platform.gameplayStop();
     this.running = false;
     this.stopTimers();
@@ -1938,6 +1941,21 @@ export class OfflineGame {
       enableSmoothScroll(scroll);
       col.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
     }
+  }
+
+  // Сервер остаётся источником истины: SDK получает только значение wins
+  // из board.list после подтверждённой сетевой победы. Локальные результаты
+  // и переданные клиентом очки в таблицу Яндекса не отправляем.
+  private reportYandexWins(): void {
+    if (this.yandexScoreReported || !this.onlineMode || platform.id !== 'yandex'
+      || !this.state || this.state.winner !== this.state.local_seat) return;
+    this.yandexScoreReported = true;
+    void this.host.gameApi().boardList().then((board) => {
+      if (board.me && Number.isFinite(board.me.wins)) {
+        return platform.reportLeaderboardScore('wins', Math.max(0, board.me.wins));
+      }
+      return false;
+    }).catch(() => false);
   }
 
   // Плавающая кнопка «Результат» после «Посмотреть стол».

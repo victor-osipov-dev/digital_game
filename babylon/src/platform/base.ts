@@ -1,4 +1,4 @@
-import type { DeviceKind, PlatformAPI, PlatformId } from './types';
+import type { DeviceKind, PlatformAPI, PlatformId, PlatformLeaderboard, PlatformPlayer } from './types';
 import {
   browserExitFullscreen,
   browserFullscreenAvailable,
@@ -40,6 +40,22 @@ export abstract class BasePlatform implements PlatformAPI {
   }
 
   async showRewarded(): Promise<boolean> {
+    return false;
+  }
+
+  async getPlayer(): Promise<PlatformPlayer | null> {
+    return null;
+  }
+
+  async openAuthDialog(): Promise<boolean> {
+    return false;
+  }
+
+  async getLeaderboardEntries(_name: string): Promise<PlatformLeaderboard> {
+    return { entries: [], userRank: 0, error: 'unsupported' };
+  }
+
+  async reportLeaderboardScore(_name: string, _score: number): Promise<boolean> {
     return false;
   }
 

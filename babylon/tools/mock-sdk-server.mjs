@@ -1,7 +1,7 @@
 // Локальный отладочный сервер: отдаёт собранную игру из ./dist и подменяет
 // относительный /sdk.js на мок Яндекс Игр SDK. Нужен, чтобы проверить всю
-// интеграцию площадки (fullscreen, оценка, ярлык, буфер обмена, баннер,
-// реклама) без sdk-dev-proxy и без настоящей площадки.
+// интеграцию площадки (вход, лидерборд, fullscreen, оценка, ярлык, буфер
+// обмена, баннер, реклама) без sdk-dev-proxy и без настоящей площадки.
 //
 // Это НЕ настоящий SDK: реклама рисуется собственным оверлеем, показов нет.
 // Запуск: node tools/mock-sdk-server.mjs   (порт по умолчанию 4177, PORT=…)
@@ -63,6 +63,10 @@ window.__handlers = {};
     }, 200);
   }
   window.YaGames = { init: async function () {
+    var authorized = false;
+    // UUID проходит тот же валидатор auth.ya, что и UID dev-proxy.
+    var playerId = 'a1b2c3d4-e5f6-4789-a012-3456789abcde';
+    var scores = {};
     var fs = {
       STATUS_ON: 'on', STATUS_OFF: 'off', status: 'off',
       request: async function () { fs.status = 'on'; window.__advCalls.push('fs-on'); },
@@ -78,6 +82,36 @@ window.__handlers = {};
       },
       environment: { i18n: { lang: 'ru' } },
       deviceInfo: { type: 'desktop' },
+      getPlayer: async function () {
+        window.__advCalls.push('get-player');
+        return {
+          getUniqueID: function () { return playerId; },
+          getName: function () { return authorized ? 'Игрок Яндекса' : 'Гость'; },
+          isAuthorized: function () { return authorized; },
+        };
+      },
+      auth: {
+        openAuthDialog: async function () {
+          window.__advCalls.push('auth-dialog');
+          authorized = true;
+        },
+      },
+      leaderboards: {
+        getEntries: async function (name, options) {
+          window.__advCalls.push('lb-get:' + name);
+          if (name !== 'wins') throw new Error('leaderboard not configured');
+          var score = scores[name] || 0;
+          var entries = [
+            { score: Math.max(score, 7), rank: 1, player: { publicName: 'Тестовый лидер' } },
+            { score: Math.max(score, 3), rank: 2, player: { publicName: 'Игрок Яндекса' } },
+          ];
+          return { entries: entries, userRank: authorized ? (score > 0 ? 2 : 0) : 0 };
+        },
+        setScore: async function (name, score) {
+          window.__advCalls.push('lb-score:' + name + ':' + score);
+          scores[name] = Math.max(scores[name] || 0, score);
+        },
+      },
       screen: { fullscreen: fs },
       feedback: {
         canReview: async function () { return { value: true }; },

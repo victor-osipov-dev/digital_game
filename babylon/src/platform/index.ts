@@ -1,4 +1,4 @@
-import type { DeviceKind, PlatformAPI, PlatformId } from './types';
+import type { DeviceKind, PlatformAPI, PlatformId, PlatformLeaderboard, PlatformPlayer } from './types';
 import { detectPlatformId } from './detect';
 import { StandalonePlatform } from './noop';
 import { YandexPlatform } from './yandex';
@@ -10,7 +10,7 @@ import {
   requestParentFullscreen,
 } from './fullscreen_bridge';
 
-export type { PlatformAPI, PlatformId };
+export type { PlatformAPI, PlatformId, PlatformLeaderboard, PlatformLeaderboardEntry, PlatformPlayer } from './types';
 export type { DeviceKind } from './types';
 
 function hasExplicitPlatformParam(): boolean {
@@ -187,6 +187,38 @@ class PlatformFacade implements PlatformAPI {
   async showRewarded(): Promise<boolean> {
     try {
       return await this.current.showRewarded();
+    } catch {
+      return false;
+    }
+  }
+
+  async getPlayer(): Promise<PlatformPlayer | null> {
+    try {
+      return await this.current.getPlayer();
+    } catch {
+      return null;
+    }
+  }
+
+  async openAuthDialog(): Promise<boolean> {
+    try {
+      return await this.current.openAuthDialog();
+    } catch {
+      return false;
+    }
+  }
+
+  async getLeaderboardEntries(name: string): Promise<PlatformLeaderboard> {
+    try {
+      return await this.current.getLeaderboardEntries(name);
+    } catch (e) {
+      return { entries: [], userRank: 0, error: (e as Error).message || 'unavailable' };
+    }
+  }
+
+  async reportLeaderboardScore(name: string, score: number): Promise<boolean> {
+    try {
+      return await this.current.reportLeaderboardScore(name, score);
     } catch {
       return false;
     }

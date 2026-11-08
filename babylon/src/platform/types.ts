@@ -11,6 +11,24 @@ export type PlatformId = 'yandex' | 'crazygames' | 'gamedistribution' | 'standal
 
 export type DeviceKind = 'desktop' | 'mobile' | 'tablet' | 'tv' | 'unknown';
 
+export interface PlatformPlayer {
+  uid: string;
+  name: string;
+  authorized: boolean;
+}
+
+export interface PlatformLeaderboardEntry {
+  name: string;
+  score: number;
+  rank: number;
+}
+
+export interface PlatformLeaderboard {
+  entries: PlatformLeaderboardEntry[];
+  userRank: number;
+  error?: string;
+}
+
 export interface PlatformAPI {
   readonly id: PlatformId;
   /** Игра запущена внутри iframe площадки (а не отдельной страницей). */
@@ -42,6 +60,14 @@ export interface PlatformAPI {
    * @returns true — просмотр засчитан, можно выдавать награду.
    */
   showRewarded(): Promise<boolean>;
+  /** Профиль площадки без диалога входа (у гостя возвращается lite-ID). */
+  getPlayer(): Promise<PlatformPlayer | null>;
+  /** Явный диалог входа площадки; вызывается только после нажатия игрока. */
+  openAuthDialog(): Promise<boolean>;
+  /** Платформенная таблица; ошибка не должна скрывать серверный топ. */
+  getLeaderboardEntries(name: string): Promise<PlatformLeaderboard>;
+  /** Запись очков в таблицу площадки из подтверждённых сервером данных. */
+  reportLeaderboardScore(name: string, score: number): Promise<boolean>;
   /** Язык интерфейса площадки в формате 'ru' | 'en' | ..., null — неизвестен. */
   getInterfaceLang(): string | null;
   getDevice(): DeviceKind;

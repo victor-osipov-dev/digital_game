@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { S2C, clean, parsePacket } from '../src/net/protocol';
+import { C2S, S2C, clean, parsePacket } from '../src/net/protocol';
 
 describe('clean', () => {
   it('убирает null-поля', () => {
@@ -21,6 +21,10 @@ describe('parsePacket', () => {
 });
 
 describe('константы протокола', () => {
+  it('Yandex ID использует серверный auth.ya', () => {
+    expect(C2S.YA_LOGIN).toBe('auth.ya');
+  });
+
   it('клиентские операции', () => {
     expect(S2C.GAME_STATE).toBe('game.state');
     expect(S2C.ROOM_STATE).toBe('room.state');

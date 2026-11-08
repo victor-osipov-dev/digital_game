@@ -1,6 +1,7 @@
 const C2S = {
   REGISTER: 'auth.register',
   LOGIN: 'auth.login',
+  YA_LOGIN: 'auth.ya',
   RESUME: 'auth.resume',
   LOBBY_OPEN: 'lobby.open',
   LOGOUT: 'auth.logout',

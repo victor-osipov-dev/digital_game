@@ -1,4 +1,4 @@
-import type { DeviceKind, PlatformAPI } from './types';
+import type { DeviceKind, PlatformAPI, PlatformLeaderboard, PlatformPlayer } from './types';
 import {
   browserExitFullscreen,
   browserIsFullscreen,
@@ -52,6 +52,28 @@ interface YsdkShortcut {
 interface YsdkClipboard {
   writeText?: (text: string) => void;
 }
+interface YsdkPlayer {
+  getUniqueID?: () => string;
+  getName?: () => string;
+  isAuthorized?: () => boolean;
+}
+interface YsdkLeaderboardEntry {
+  score?: number;
+  rank?: number;
+  player?: { publicName?: string };
+}
+interface YsdkLeaderboardResult {
+  entries?: YsdkLeaderboardEntry[];
+  userRank?: number;
+}
+interface YsdkLeaderboards {
+  getEntries?: (name: string, options?: {
+    quantityTop?: number;
+    quantityAround?: number;
+    includeUser?: boolean;
+  }) => Promise<YsdkLeaderboardResult>;
+  setScore?: (name: string, score: number) => Promise<void>;
+}
 interface Ysdk {
   features?: { LoadingAPI?: YsdkLoadingApi; GameplayAPI?: YsdkGameplayApi };
   environment?: { i18n?: { lang?: string }; payload?: string };
@@ -67,6 +89,9 @@ interface Ysdk {
   feedback?: YsdkFeedback;
   shortcut?: YsdkShortcut;
   clipboard?: YsdkClipboard;
+  getPlayer?: () => Promise<YsdkPlayer>;
+  auth?: { openAuthDialog?: () => Promise<unknown> };
+  leaderboards?: YsdkLeaderboards;
   on?: (event: string, listener: () => void) => void;
   off?: (event: string, listener: () => void) => void;
 }
@@ -113,10 +138,11 @@ function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
  *   Яндекса), затем абсолютный фолбэк для своего домена.
  * - Game Ready / Gameplay-разметка, interstitial, rewarded и sticky-баннер —
  *   по документации; полноэкранный режим, оценка игры и ярлык — через SDK.
- * - Авторизация НЕ запрашивается: игра полностью проходима гостем,
- *   прогресс хранится локально (п. 1.2.2 требований).
- * - Облачные сейвы не используем осознанно: опция cloud-saves в черновике
- *   остаётся выключенной, п. 1.11 не применяется.
+ * - Профиль, явный Yandex ID login и SDK-лидерборд доступны только по
+ *   запросу UI; SDK не открывает авторизацию сам.
+ * - Серверные результаты остаются источником истины, SDK-лидерборд —
+ *   отдельная платформенная витрина.
+ * - Облачные игровые сохранения не используем.
  */
 export class YandexPlatform implements PlatformAPI {
   readonly id = 'yandex' as const;
@@ -317,6 +343,80 @@ export class YandexPlatform implements PlatformAPI {
         finish(false);
       }
     });
+  }
+
+  async getPlayer(): Promise<PlatformPlayer | null> {
+    try {
+      if (!this.ysdk?.getPlayer) return null;
+      const player = await withTimeout(this.ysdk.getPlayer(), 6000, null as unknown as YsdkPlayer);
+      if (!player) return null;
+      let uid = '';
+      let name = '';
+      let authorized = false;
+      try { uid = String(player.getUniqueID?.() ?? '').trim(); } catch { /* SDK may omit identity */ }
+      try { name = String(player.getName?.() ?? '').trim(); } catch { /* optional */ }
+      try { authorized = !!player.isAuthorized?.(); } catch { /* optional */ }
+      if (!uid) return null;
+      return { uid, name, authorized };
+    } catch {
+      return null;
+    }
+  }
+
+  async openAuthDialog(): Promise<boolean> {
+    try {
+      const open = this.ysdk?.auth?.openAuthDialog;
+      if (!open) return false;
+      const timedOut = Symbol('auth-timeout');
+      const result = await withTimeout(open.call(this.ysdk!.auth), 60000, timedOut);
+      return result !== timedOut;
+    } catch {
+      return false;
+    }
+  }
+
+  async getLeaderboardEntries(name: string): Promise<PlatformLeaderboard> {
+    try {
+      const getEntries = this.ysdk?.leaderboards?.getEntries;
+      if (!getEntries) return { entries: [], userRank: 0, error: 'no leaderboard API' };
+      const result = await withTimeout(
+        getEntries.call(this.ysdk!.leaderboards, name, {
+          quantityTop: 5,
+          quantityAround: 5,
+          includeUser: true,
+        }),
+        10000,
+        null as unknown as YsdkLeaderboardResult,
+      );
+      if (!result) return { entries: [], userRank: 0, error: 'leaderboard timeout' };
+      const entries = (result.entries ?? []).map((entry) => ({
+        name: String(entry.player?.publicName ?? '').trim() || '—',
+        score: Math.max(0, Math.floor(Number(entry.score) || 0)),
+        rank: Math.max(0, Math.floor(Number(entry.rank) || 0)),
+      }));
+      return {
+        entries,
+        userRank: Math.max(0, Math.floor(Number(result.userRank) || 0)),
+      };
+    } catch (e) {
+      return { entries: [], userRank: 0, error: (e as Error).message || 'leaderboard unavailable' };
+    }
+  }
+
+  async reportLeaderboardScore(name: string, score: number): Promise<boolean> {
+    try {
+      const setScore = this.ysdk?.leaderboards?.setScore;
+      if (!setScore || !Number.isFinite(score) || score < 0) return false;
+      const timedOut = Symbol('leaderboard-timeout');
+      const result = await withTimeout<unknown>(
+        setScore.call(this.ysdk!.leaderboards, name, Math.floor(score)) as Promise<unknown>,
+        10000,
+        timedOut,
+      );
+      return result !== timedOut;
+    } catch {
+      return false;
+    }
   }
 
   /**

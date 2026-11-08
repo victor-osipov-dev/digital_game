@@ -219,6 +219,30 @@ export class Api {
     return ok;
   }
 
+  // Яндекс SDK даёт постоянный уникальный ID только после добровольного
+  // входа (или lite-ID для гостя). Сервер хранит его в отдельном ya:-
+  // пространстве имён; пароль браузер не создаёт и не сохраняет.
+  async yandexLogin(uid: string, nick: string): Promise<AuthOkMsg> {
+    const cleanUid = String(uid ?? '').trim();
+    if (!cleanUid) throw new AuthError('Не удалось получить профиль Яндекса');
+    const pkt = await this.session.request(
+      C2S.YA_LOGIN,
+      { uid: cleanUid, nick: String(nick ?? '').trim() },
+      [S2C.AUTH_OK, S2C.AUTH_ERR],
+    );
+    if (pkt.t !== S2C.AUTH_OK) throw new AuthError(String(pkt.reason ?? 'Ошибка входа'));
+    const ok = pkt as unknown as AuthOkMsg;
+    if (ok.token) localStorage.setItem(TOKEN_KEY, ok.token);
+    this.user = ok.user;
+    localStorage.setItem(NICK_KEY, ok.user.nick);
+    // Не позволяем последующему гостевому авто-входу незаметно вернуть
+    // старый парольный аккаунт после входа через Яндекс ID.
+    localStorage.removeItem(LOGIN_KEY);
+    localStorage.removeItem(PASS_KEY);
+    this.setPending(ok.room ?? null);
+    return ok;
+  }
+
   async logout(): Promise<void> {
     try {
       await this.session.request(C2S.LOGOUT, {}, null);

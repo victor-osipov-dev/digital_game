@@ -48,8 +48,6 @@ import { showDomToast } from './dom_toast';
 // Порт scripts/ui/online_lobby.gd: сетевое меню — единый экран с тремя
 // страницами (вход / комнаты / лобби комнаты), как в оригинале.
 // Осознанные отличия от оригинала:
-//  - Яндекс ID не портирован: в браузере нет SDK, форма входа — обычная
-//    (как на Android);
 //  - probe серверов (servers.gd) в TS-клиенте нет — подключаемся к
 //    dev-серверу, если задан, иначе по порядку к встроенным; список
 //    комнат приходит только с текущего сервера;
@@ -172,6 +170,9 @@ export class OnlineLobby {
   private nickEdit!: InputText;
   private authNoteLab!: ReturnType<typeof mkLabel>;
   private loginBtn!: Button;
+  private yaInfoLab!: ReturnType<typeof mkLabel>;
+  private yaLoginBtn!: Button;
+  private yaGuestBtn!: Button;
 
   private playBtn!: Button;
   private boardBtn!: Button;
@@ -355,6 +356,8 @@ export class OnlineLobby {
     const authed = Boolean(this.app.api.user);
     const dis = (b: Button, cond: boolean): void => { b.isEnabled = !cond; };
     dis(this.loginBtn, busy || !linked);
+    dis(this.yaLoginBtn, busy || !linked);
+    dis(this.yaGuestBtn, busy || !linked);
     dis(this.refreshBtn, busy || this.roomsLoading || !linked);
     dis(this.createBtn, busy || !authed);
     dis(this.playBtn, busy || !authed);
@@ -379,12 +382,37 @@ export class OnlineLobby {
     page.spacing = 12;
     page.isVisible = false;
 
-    page.addControl(headerLabel(t('Вход'), fs(19)));
+    const isYandex = platform.id === 'yandex';
+    page.addControl(headerLabel(isYandex ? t('Онлайн через Яндекс ID') : t('Вход'), fs(19)));
+
+    const benefit = t('Вход через Яндекс привязывает сетевые результаты к профилю, использует имя из Яндекса и открывает таблицу Яндекс Игр. Гостевой режим тоже позволяет играть по сети, но гостевой прогресс может не восстановиться при смене устройства или профиля.');
+    const benefitW = Math.max(160, this.avail - 24);
+    const benefitText = wrapTextToWidth(benefit, benefitW, fs(14));
+    this.yaInfoLab = mkLabel(benefitText, {
+      fontSize: fs(14), color: WHITE85, width: '100%',
+      height: estimateWrappedTextHeight(benefitText, benefitW, fs(14)) + 8,
+      noWrap: false, align: 'center', vAlign: 'center',
+    });
+    this.yaInfoLab.isVisible = isYandex;
+    page.addControl(this.yaInfoLab);
+
+    this.yaLoginBtn = accentButton(t('Войти через Яндекс'), BUTTON_STYLE.online, ROUND_H, fs(16));
+    this.yaLoginBtn.isVisible = isYandex;
+    this.yaLoginBtn.onPointerUpObservable.add(() => void this.doYandexLogin(true));
+    page.addControl(this.yaLoginBtn);
+
+    this.yaGuestBtn = greyButton(t('Продолжить гостем'), ROUND_H, fs(16));
+    this.yaGuestBtn.isVisible = isYandex;
+    this.yaGuestBtn.onPointerUpObservable.add(() => void this.doYandexLogin(false));
+    page.addControl(this.yaGuestBtn);
+
     this.nickEdit = mkField(t('имя в игре'));
+    this.nickEdit.isVisible = !isYandex;
     setInputMaxLength(this.nickEdit, MAX_NAME_LEN);
     page.addControl(this.nickEdit);
 
-    this.loginBtn = accentButton(t('Войти'), BUTTON_STYLE.online, ROUND_H, fs(17));
+    this.loginBtn = accentButton(isYandex ? t('Другой гостевой вход') : t('Войти'), BUTTON_STYLE.online, ROUND_H, fs(17));
+    this.loginBtn.isVisible = !isYandex;
     this.loginBtn.onPointerUpObservable.add(() => void this.doGuestLogin());
     page.addControl(this.loginBtn);
 
@@ -701,6 +729,58 @@ export class OnlineLobby {
     }
   }
 
+  private async doYandexLogin(requireAuthorized: boolean): Promise<void> {
+    if (this.busyFlag || platform.id !== 'yandex') return;
+    this.setBusy(t('Получаем профиль Яндекс…'));
+    let profile = await platform.getPlayer();
+    if (!this.authPageActive()) {
+      this.setBusy('');
+      return;
+    }
+    if (!profile?.uid) {
+      this.setBusy('');
+      this.nickEdit.isVisible = true;
+      this.loginBtn.isVisible = true;
+      setNote(this.authNoteLab, t('Не удалось получить гостевой профиль Яндекса'), true);
+      this.updateButtons();
+      return;
+    }
+
+    if (requireAuthorized && !profile.authorized) {
+      this.setBusy(t('Открываем вход через Яндекс…'));
+      const opened = await platform.openAuthDialog();
+      if (!this.authPageActive()) {
+        this.setBusy('');
+        return;
+      }
+      if (!opened) {
+        this.setBusy('');
+        setNote(this.authNoteLab, t('Вход через Яндекс отменён. Можно продолжить гостем.'), false);
+        return;
+      }
+      profile = await platform.getPlayer();
+      if (!this.authPageActive()) {
+        this.setBusy('');
+        return;
+      }
+      if (!profile?.uid || !profile.authorized) {
+        this.setBusy('');
+        setNote(this.authNoteLab, t('Вход в Яндекс не выполнен. Можно продолжить гостем.'), false);
+        return;
+      }
+    }
+
+    this.setBusy(requireAuthorized ? t('Входим через Яндекс…') : t('Входим как гость…'));
+    try {
+      await this.app.api.yandexLogin(profile.uid, profile.name || t('Гость'));
+      this.setBusy('');
+      await this.gotoRooms();
+    } catch (e) {
+      this.setBusy('');
+      setNote(this.authNoteLab, t((e as Error).message) || t('Не удалось войти'), true);
+    }
+  }
+
   // =============================================================== подключение
 
   // Скрытый вход для вернувшегося игрока: логин/пароль сохранены в
@@ -719,18 +799,7 @@ export class OnlineLobby {
     this.startTimers();
     this.updateStatus();
     if (this.app.api.isOpen) {
-      await this.tryAutoLogin();
-      if (this.app.api.user) {
-        if (this.currentRoom) {
-          this.applyRoom(this.currentRoom);
-        } else {
-          await this.gotoRooms();
-        }
-      } else {
-        this.setPage('auth');
-        this.fillAuthDefaults();
-      }
-      this.updateButtons();
+      await this.routeAfterConnection();
       return;
     }
     await this.doConnect();
@@ -738,6 +807,45 @@ export class OnlineLobby {
 
   private fillAuthDefaults(): void {
     if (this.nickEdit.text === '') this.nickEdit.text = this.app.api.nick;
+  }
+
+  private authPageActive(): boolean {
+    return this.page === 'auth' && this.pageAuth?.parent != null;
+  }
+
+  private async routeAfterConnection(): Promise<void> {
+    await this.tryAutoLogin();
+    if (this.app.api.user) {
+      if (this.currentRoom) this.applyRoom(this.currentRoom);
+      else await this.gotoRooms();
+      return;
+    }
+    this.setPage('auth');
+    this.fillAuthDefaults();
+    setNote(this.authNoteLab, '', false);
+    if (platform.id === 'yandex') void this.tryAuthorizedYandexLogin();
+    this.updateButtons();
+  }
+
+  // Если Яндекс ID уже авторизован в контейнере, не показываем лишний
+  // диалог. Гостевой lite-ID используется только после явного выбора игрока.
+  private async tryAuthorizedYandexLogin(): Promise<void> {
+    if (this.app.api.user || this.busyFlag) return;
+    this.setBusy(t('Получаем профиль Яндекс…'));
+    const profile = await platform.getPlayer();
+    if (!this.authPageActive() || !profile?.uid || !profile.authorized || this.app.api.user) {
+      this.setBusy('');
+      return;
+    }
+    this.setBusy(t('Входим через Яндекс…'));
+    try {
+      await this.app.api.yandexLogin(profile.uid, profile.name || t('Гость'));
+      this.setBusy('');
+      await this.gotoRooms();
+    } catch (e) {
+      this.setBusy('');
+      setNote(this.authNoteLab, t((e as Error).message) || t('Не удалось войти'), true);
+    }
   }
 
   // _do_connect-порт: сессия общая для кластера, вход на любом сервере
@@ -751,13 +859,7 @@ export class OnlineLobby {
     await this.app.waitForMenuConnection();
     if (this.app.api.isOpen) {
       this.updateStatus();
-      await this.tryAutoLogin();
-      if (this.app.api.user) await this.gotoRooms();
-      else {
-        this.setPage('auth');
-        this.fillAuthDefaults();
-      }
-      this.updateButtons();
+      await this.routeAfterConnection();
       return;
     }
     this.connecting = true;
@@ -795,15 +897,7 @@ export class OnlineLobby {
       setNote(this.busyLab, lastErr === '' ? t('Нет связи с сервером') : t(lastErr), true);
       return;
     }
-    await this.tryAutoLogin();
-    if (this.app.api.user) {
-      await this.gotoRooms();
-    } else {
-      this.setPage('auth');
-      this.fillAuthDefaults();
-      setNote(this.authNoteLab, '', false);
-    }
-    this.updateButtons();
+    await this.routeAfterConnection();
   }
 
   // =============================================================== комнаты
@@ -1265,14 +1359,20 @@ export class OnlineLobby {
     this.boardOpen = true;
     const { overlay, close } = modalOverlay(this.popups, 'board', { alpha: 0.6, zIndex: 950 });
 
-    // Таблица показывает максимум 10 строк. Если весь блок не помещается,
-    // прокручивается модалка целиком, а не вложенный список лидеров.
+    // Две независимые таблицы: Яндекс — платформенная витрина, сервер —
+    // проверенный общий рейтинг и источник статистики. На узком/низком
+    // экране прокручивается вся модалка, внутреннего скролла у списков нет.
+    const showYandex = platform.id === 'yandex';
     const CHROME_H = 16 + 30 + 20 + 40 + 40 + 46 + 16 + 10 * 5;
+    // Высоты заголовков/подписей и дополнительных межстрочных отступов
+    // секции Яндекса, без высоты её списка.
+    const YA_CHROME_H = 156;
     const vh = viewHeight();
     const ROW_H = 26;
     const MAX_ENTRIES = 10;
     const MAX_LIST_H = MAX_ENTRIES * ROW_H + 4;
-    const INITIAL_PANEL_H = CHROME_H + MAX_LIST_H;
+    const INITIAL_PANEL_H = CHROME_H + MAX_LIST_H
+      + (showYandex ? YA_CHROME_H + MAX_LIST_H : 0);
     const modalScrollH = Math.max(120, vh - 24);
     const panel = softPanel({
       bg: SKIN.panelDark,
@@ -1326,6 +1426,27 @@ export class OnlineLobby {
     panel.root.addControl(box);
 
     box.addControl(mkLabel(t('Таблица лидеров'), { fontSize: fs(20), color: GOLD, height: 30 }));
+    let yaGrid: StackPanel | null = null;
+    let yaRankLab: ReturnType<typeof mkLabel> | null = null;
+    let yaNoteLab: ReturnType<typeof mkLabel> | null = null;
+    if (showYandex) {
+      box.addControl(mkLabel(t('Яндекс Игры'), { fontSize: fs(17), color: WHITE90, height: 24 }));
+      yaGrid = new StackPanel('yaBoardGrid');
+      yaGrid.isVertical = true;
+      yaGrid.spacing = 4;
+      yaGrid.width = '100%';
+      yaGrid.height = px(MAX_LIST_H);
+      box.addControl(yaGrid);
+      yaRankLab = mkLabel('', { fontSize: fs(14), color: '#90CAF9', width: '100%', height: 24 });
+      box.addControl(yaRankLab);
+      yaNoteLab = mkLabel(t('Загружаем таблицу Яндекса…'), {
+        fontSize: fs(13), color: WHITE85, width: '100%', height: 36, noWrap: false,
+      });
+      box.addControl(yaNoteLab);
+      box.addControl(mkLabel(t('Общий топ со всех платформ'), {
+        fontSize: fs(14), color: WHITE85, width: '100%', height: 24,
+      }));
+    }
     box.addControl(mkLabel(t('Количество побед'), { fontSize: fs(13), color: 'rgba(255,255,255,0.55)', height: 20 }));
 
     const grid = new StackPanel('boardGrid');
@@ -1357,26 +1478,96 @@ export class OnlineLobby {
     setNote(bn.lab, t('Загружаем таблицу…'), false);
     meLab.text = '';
     grid.clearControls();
-    try {
-      const res: BoardListMsg = await this.app.api.boardList();
-      if (!open) return;
+    const yaLoad = showYandex
+      ? platform.getLeaderboardEntries('wins')
+      : Promise.resolve(null);
+    const [serverResult, yaResult] = await Promise.allSettled([
+      this.app.api.boardList(),
+      yaLoad,
+    ]);
+    if (!open) return;
+
+    let serverHeight = CHROME_H;
+    if (serverResult.status === 'fulfilled') {
+      const res: BoardListMsg = serverResult.value;
       this.renderBoard(res, grid, meLab, bn.lab);
       const n = Math.min(MAX_ENTRIES, (res.entries ?? []).length);
       if (n === 0) {
-        // пустая таблица: список не нужен, панель ужимается
         grid.isVisible = false;
-        setPanelHeight(CHROME_H - 10);
+        serverHeight -= 10;
       } else {
         const listH = Math.min(MAX_LIST_H, n * ROW_H + 4);
         grid.height = px(listH);
-        setPanelHeight(CHROME_H + listH);
+        serverHeight += listH;
       }
-    } catch (e) {
-      if (!open) return;
+    } else {
       grid.isVisible = false;
-      setPanelHeight(CHROME_H - 10);
-      setNote(bn.lab, t((e as Error).message) || t('Не удалось загрузить таблицу'), true);
+      serverHeight -= 10;
+      setNote(bn.lab, t((serverResult.reason as Error).message) || t('Не удалось загрузить таблицу'), true);
     }
+
+    let yaHeight = 0;
+    if (showYandex && yaGrid && yaRankLab && yaNoteLab) {
+      yaGrid.clearControls();
+      if (yaResult.status === 'fulfilled' && yaResult.value) {
+        const data = yaResult.value;
+        this.renderYandexBoard(data, yaGrid, yaRankLab, yaNoteLab);
+        const n = Math.min(MAX_ENTRIES, data.entries.length);
+        if (n === 0) yaGrid.isVisible = false;
+        else {
+          yaGrid.height = px(Math.min(MAX_LIST_H, n * ROW_H + 4));
+          yaHeight = Math.min(MAX_LIST_H, n * ROW_H + 4);
+        }
+      } else {
+        yaGrid.isVisible = false;
+        yaRankLab.text = '';
+        setNote(yaNoteLab, t('Не удалось загрузить таблицу Яндекса'), true);
+      }
+    }
+    setPanelHeight(serverHeight + (showYandex ? YA_CHROME_H + yaHeight : 0));
+  }
+
+  private renderYandexBoard(
+    data: Awaited<ReturnType<typeof platform.getLeaderboardEntries>>,
+    grid: StackPanel,
+    rankLab: ReturnType<typeof mkLabel>,
+    noteLab: ReturnType<typeof mkLabel>,
+  ): void {
+    grid.clearControls();
+    const entries = data.entries.slice(0, 10);
+    if (entries.length === 0) {
+      grid.isVisible = false;
+      setNote(noteLab, data.error
+        ? t('Не удалось загрузить таблицу Яндекса')
+        : t('Нет сыгранных партий'), !!data.error);
+    } else {
+      grid.isVisible = true;
+      setNote(noteLab, '', false);
+      const rowW = Math.max(150, Math.min(440, this.avail - 64));
+      const nameW = Math.max(60, rowW - 100);
+      entries.forEach((entry, i) => {
+        const rank = entry.rank > 0 ? entry.rank : i + 1;
+        const row = hrow(12);
+        row.width = '100%';
+        row.height = px(22);
+        row.addControl(mkLabel(`${rank}.`, {
+          fontSize: fs(15), noWrap: true, color: rankColor(rank, false),
+          width: 34, height: 22, hAlign: 'left',
+        }));
+        row.addControl(mkLabel(textTruncate(entry.name, fs(15), nameW), {
+          fontSize: fs(15), noWrap: true, color: WHITE90,
+          width: nameW, height: 22, hAlign: 'left',
+        }));
+        row.addControl(mkLabel(String(entry.score), {
+          fontSize: fs(15), noWrap: true, color: WHITE90,
+          width: 42, height: 22, hAlign: 'right',
+        }));
+        grid.addControl(row);
+      });
+    }
+    rankLab.text = data.userRank > 0
+      ? t('Ваше место в Яндексе: %d', data.userRank)
+      : '';
   }
 
   // _render_board-порт: строки «место · игрок · победы».

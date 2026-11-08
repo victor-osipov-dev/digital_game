@@ -55,6 +55,10 @@ describe('StandalonePlatform', () => {
     p.gameplayStop();
     expect(await p.showInterstitial()).toBe(false);
     expect(await p.showRewarded()).toBe(false);
+    expect(await p.getPlayer()).toBeNull();
+    expect(await p.openAuthDialog()).toBe(false);
+    expect(await p.getLeaderboardEntries('wins')).toMatchObject({ entries: [], error: 'unsupported' });
+    expect(await p.reportLeaderboardScore('wins', 3)).toBe(false);
     expect(p.getInterfaceLang()).toBeNull();
     expect(p.supportsRewarded).toBe(false);
   });
@@ -79,6 +83,58 @@ describe('StandalonePlatform', () => {
 });
 
 describe('YandexPlatform: новые возможности SDK', () => {
+  it('возвращает гостевой/авторизованный профиль только после явного диалога', async () => {
+    let authorized = false;
+    const calls: string[] = [];
+    installYandex({
+      getPlayer: async () => ({
+        getUniqueID: () => 'yandex-uid-123',
+        getName: () => authorized ? 'Игрок' : 'Гость',
+        isAuthorized: () => authorized,
+      }),
+      auth: {
+        openAuthDialog: async () => {
+          calls.push('auth');
+          authorized = true;
+        },
+      },
+    });
+    const p = new YandexPlatform();
+    await p.init();
+    expect(await p.getPlayer()).toEqual({ uid: 'yandex-uid-123', name: 'Гость', authorized: false });
+    expect(calls).toEqual([]);
+    expect(await p.openAuthDialog()).toBe(true);
+    expect(await p.getPlayer()).toEqual({ uid: 'yandex-uid-123', name: 'Игрок', authorized: true });
+    expect(calls).toEqual(['auth']);
+  });
+
+  it('читает таблицу Яндекса и записывает подтверждённый счёт', async () => {
+    const calls: unknown[][] = [];
+    installYandex({
+      leaderboards: {
+        getEntries: async (name: string, opts: unknown) => {
+          calls.push(['get', name, opts]);
+          return {
+            entries: [{ score: 8, rank: 2, player: { publicName: 'Победитель' } }],
+            userRank: 2,
+          };
+        },
+        setScore: async (name: string, score: number) => { calls.push(['set', name, score]); },
+      },
+    });
+    const p = new YandexPlatform();
+    await p.init();
+    expect(await p.getLeaderboardEntries('wins')).toEqual({
+      entries: [{ name: 'Победитель', score: 8, rank: 2 }],
+      userRank: 2,
+    });
+    expect(await p.reportLeaderboardScore('wins', 12)).toBe(true);
+    expect(calls[0]).toEqual(['get', 'wins', {
+      quantityTop: 5, quantityAround: 5, includeUser: true,
+    }]);
+    expect(calls[1]).toEqual(['set', 'wins', 12]);
+  });
+
   it('оценка игры: canReview перед requestReview', async () => {
     const calls: string[] = [];
     installYandex({
