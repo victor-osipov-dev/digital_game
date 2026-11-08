@@ -90,6 +90,8 @@ const SLOT_REVEAL_MS = 180;
 const BOT_THINK_MS = 1500;
 const BOT_STEP_MS = 550;
 const BOT_MIN_WAIT_MS = 1400;
+// Как часто максимум перезапускается автопрокрутка стола за ходом бота.
+const BOT_SCROLL_THROTTLE_MS = 1000;
 // Единый боковой отступ экрана и отступ сверху: верхняя панель, чипы,
 // стол, рука и нижние кнопки живут в одной сетке.
 const SIDE_PAD = 12;
@@ -139,6 +141,13 @@ export class OfflineGame {
   private tableScrollRaf = 0;
   private tableScrollGeneration = 0;
   private tableScrollDone: (() => void) | null = null;
+  // Троттлинг автопрокрутки стола за ходом бота: первое изменение поля
+  // подхватываем сразу, дальше — не чаще раза в интервал, чтобы анимация
+  // выкладки не перезапускалась на каждом шаге.
+  private botScrollTimer = 0;
+  private botScrollLastAt = 0;
+  private botScrollRowId = -1;
+  private botScrollGen = -1;
   private lastWaitEnv: GameEnvelope | null = null;
   // локальная статистика: партия считается, только если за столом ровно
   // один живой игрок (остальные — боты). Hot-seat не учитывается.
@@ -238,6 +247,7 @@ export class OfflineGame {
   build(root: Container): void {
     this.cancelActiveDrag();
     this.cancelTableScroll();
+    this.cancelBotTableScroll();
     this.cancelChipsScroll();
     this.lastChipSeat = -1;
     this.layoutAnimationId += 1;
@@ -799,6 +809,7 @@ export class OfflineGame {
     this.state = state;
     this.running = true;
     this.yandexScoreReported = false;
+    this.cancelBotTableScroll();
     this.clearDraftPresentation();
     this.hintsUsed.clear();
     this.hintTileIds.clear();
@@ -1102,6 +1113,48 @@ export class OfflineGame {
     const done = this.tableScrollDone;
     this.tableScrollDone = null;
     done?.();
+  }
+
+  // Поставить/сдвинуть цель автопрокрутки. Первый вызов (или если с прошлой
+  // прокрутки прошло достаточно времени) срабатывает сразу; частые вызовы
+  // в пределах окна троттлинга схлопываются в один отложенный — им уедет
+  // самая свежая цель.
+  private queueBotTableScroll(rowId: number, gen: number): void {
+    if (rowId < 0) return;
+    this.botScrollRowId = rowId;
+    this.botScrollGen = gen;
+    const since = performance.now() - this.botScrollLastAt;
+    if (since >= BOT_SCROLL_THROTTLE_MS) {
+      this.flushBotTableScroll();
+    } else if (!this.botScrollTimer) {
+      this.botScrollTimer = window.setTimeout(
+        () => this.flushBotTableScroll(),
+        Math.max(0, BOT_SCROLL_THROTTLE_MS - since),
+      );
+    }
+  }
+
+  private flushBotTableScroll(): void {
+    if (this.botScrollTimer) {
+      window.clearTimeout(this.botScrollTimer);
+      this.botScrollTimer = 0;
+    }
+    const rowId = this.botScrollRowId;
+    const gen = this.botScrollGen;
+    this.botScrollRowId = -1;
+    if (rowId < 0 || gen !== this.presentGen || !this.running) return;
+    this.botScrollLastAt = performance.now();
+    void this.scrollTableToRow(rowId, gen);
+  }
+
+  private cancelBotTableScroll(): void {
+    if (this.botScrollTimer) {
+      window.clearTimeout(this.botScrollTimer);
+      this.botScrollTimer = 0;
+    }
+    this.botScrollRowId = -1;
+    this.botScrollGen = -1;
+    this.botScrollLastAt = 0;
   }
 
   private scrollTableToRow(rowId: number, gen: number): Promise<void> {
@@ -1678,6 +1731,7 @@ export class OfflineGame {
   stopTimers(): void {
     this.cancelActiveDrag();
     this.cancelTableScroll();
+    this.cancelBotTableScroll();
     this.cancelChipsScroll();
     this.stopRejoinLoop();
     this.stopDraftResend();
@@ -3388,14 +3442,15 @@ export class OfflineGame {
       let lastPlacedTile = -1;
       const fail = (): void => {
         if (this.running && this.state) this.state.restoreTurnSnapshot();
+        this.cancelBotTableScroll();
         setTimeout(() => this.botEndTurn(), BOT_MIN_WAIT_MS);
       };
       const step = (): void => {
         if (!this.running || !this.state) return;
         if (seq.length === 0) {
-          // Не прерываем прокрутку на каждом отдельном действии бота.
-          // После завершения выкладки подводим стол к последней изменённой
-          // фишке и только затем заканчиваем ход.
+          // Финал выкладки: отменяем отложенный троттл и доезжаем до
+          // последней изменённой фишки, только затем заканчиваем ход.
+          this.cancelBotTableScroll();
           const rowId = this.rowIdOfTile(lastPlacedTile);
           void this.scrollTableToRow(rowId, this.presentGen).then(() => {
             if (this.running) setTimeout(() => this.botEndTurn(), BOT_MIN_WAIT_MS);
@@ -3410,6 +3465,9 @@ export class OfflineGame {
         }
         lastPlacedTile = Number(op.tile ?? -1);
         this.refresh();
+        // Первое изменение поля подхватываем сразу, дальше — по троттлу,
+        // чтобы анимация выкладки не перезапускалась на каждом шаге.
+        this.queueBotTableScroll(this.rowIdOfTile(lastPlacedTile), this.presentGen);
         if (stepwise && seq.length > 0) window.setTimeout(step, BOT_STEP_MS);
         else step();
       };
