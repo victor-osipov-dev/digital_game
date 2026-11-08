@@ -1248,7 +1248,13 @@ export class OfflineGame {
     return new Promise<void>((resolve) => {
       this.tableScrollDone = resolve;
       let layoutFrames = 0;
+      let stalledFrames = 0;
       let last = performance.now();
+      // На мобильных WebView Babylon иногда обновляет размеры ScrollViewer
+      // позже кадра пересборки ряда. Не отменяем автоскролл из-за первых
+      // нулевых замеров/шага: ждём повторного layout и пробуем прокрутить ещё.
+      const MAX_LAYOUT_FRAMES = 30;
+      const MAX_STALLED_FRAMES = 10;
       const finish = (): void => {
         if (this.tableScrollGeneration !== token) return;
         if (this.tableScrollRaf) window.cancelAnimationFrame(this.tableScrollRaf);
@@ -1266,7 +1272,7 @@ export class OfflineGame {
         const target = row ? rectOf(row.root) : { x: 0, y: 0, w: 0, h: 0 };
         const viewport = rectOf(this.rowsScroll);
         if (!row || target.w <= 0 || target.h <= 0 || viewport.h <= 0) {
-          if (layoutFrames++ < 6) this.tableScrollRaf = window.requestAnimationFrame(tick);
+          if (layoutFrames++ < MAX_LAYOUT_FRAMES) this.tableScrollRaf = window.requestAnimationFrame(tick);
           else finish();
           return;
         }
@@ -1287,9 +1293,13 @@ export class OfflineGame {
         last = now;
         const step = Math.sign(delta) * Math.min(Math.abs(delta), 720 * elapsed / 1000);
         if (Math.abs(scrollViewerByPixels(this.rowsScroll, 'vertical', step)) < 0.1) {
-          finish();
+          if (stalledFrames++ < MAX_STALLED_FRAMES) {
+            last = now;
+            this.tableScrollRaf = window.requestAnimationFrame(tick);
+          } else finish();
           return;
         }
+        stalledFrames = 0;
         this.tableScrollRaf = window.requestAnimationFrame(tick);
       };
       this.tableScrollRaf = window.requestAnimationFrame(tick);
