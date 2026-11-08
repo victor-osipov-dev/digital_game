@@ -77,8 +77,26 @@ function readLocation(): { query: string; hostname: string } {
   }
 }
 
-/** Площадка, определённая синхронно при загрузке (детект + ?platform=). */
-export const platformId: PlatformId = detectPlatformId({ ...readLocation(), ...readGlobals() });
+// Цель сборки задаётся Vite-define (см. vite.config.ts). 'auto' — площадка
+// определяется в рантайме; иное значение жёстко фиксирует площадку, чтобы
+// сборка для своего сайта не содержала и не пыталась загрузить Яндекс SDK.
+function buildPlatformTarget(): PlatformId | null {
+  try {
+    const v = __DG_PLATFORM_TARGET__;
+    if (v === 'yandex' || v === 'crazygames' || v === 'gamedistribution' || v === 'standalone') {
+      return v;
+    }
+  } catch {
+    // define не подставлен (например, юнит-тесты) — работаем в auto-режиме.
+  }
+  return null;
+}
+
+const forcedTarget = buildPlatformTarget();
+
+/** Площадка, определённая синхронно при загрузке (цель сборки + детект + ?platform=). */
+export const platformId: PlatformId = forcedTarget
+  ?? detectPlatformId({ ...readLocation(), ...readGlobals() });
 
 function createProvider(id: PlatformId): PlatformAPI {
   switch (id) {
@@ -360,7 +378,8 @@ export async function initPlatform(opts: { timeoutMs?: number } = {}): Promise<P
   // опознана и пользователь явно не зафиксировал standalone, пробуем
   // относительный /sdk.js: именно его отдают и Яндекс, и его dev-proxy.
   // На своём сайте это быстрый 404 без последствий.
-  if (platformId === 'standalone' && !hasExplicitPlatformParam() && !yaGamesPresent()) {
+  if (forcedTarget === null && platformId === 'standalone'
+    && !hasExplicitPlatformParam() && !yaGamesPresent()) {
     await loadProbeScript('/sdk.js', Math.min(1500, timeoutMs));
     if (yaGamesPresent()) {
       provider = new YandexPlatform();
