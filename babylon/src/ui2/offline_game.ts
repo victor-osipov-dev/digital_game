@@ -127,7 +127,10 @@ export class OfflineGame {
   // друг друга: следующий коммит прилетал раньше предыдущего.
   private presentQueue: Array<
     | { kind: 'title'; seat: number; text: string }
-    | { kind: 'steps'; seat: number; ids: number[]; rowId: number }
+    | {
+        kind: 'steps'; seat: number; ids: number[]; rowId: number;
+        before: Map<number, TileSnapshot>; scrollTop: number;
+      }
     | { kind: 'draft'; seat: number; ids: number[]; rowId: number }
   > = [];
   private presentBusy = false;
@@ -137,7 +140,7 @@ export class OfflineGame {
   private refreshPending = false;
   private titlePendingSeat = -1;
   private titleShownFor = -1;
-  private pendingSteps: { ids: number[]; seat: number }[] = [];
+  private pendingSteps: { ids: number[]; seat: number; before: Map<number, TileSnapshot>; scrollTop: number }[] = [];
   private tableScrollRaf = 0;
   private tableScrollGeneration = 0;
   private tableScrollDone: (() => void) | null = null;
@@ -148,6 +151,7 @@ export class OfflineGame {
   private botScrollLastAt = 0;
   private botScrollRowId = -1;
   private botScrollGen = -1;
+  private botScrollWaiters: Array<() => void> = [];
   private lastWaitEnv: GameEnvelope | null = null;
   // локальная статистика: партия считается, только если за столом ровно
   // один живой игрок (остальные — боты). Hot-seat не учитывается.
@@ -866,6 +870,10 @@ export class OfflineGame {
     const continuing = this.running && !!this.state && !this.state.finished
       && this.roomCode === view.code;
     const prev = continuing ? this.state : null;
+    // Визуальные источники нужны для сетевой анимации перемещения уже
+    // лежащих фишек: сервер присылает только конечное состояние ряда.
+    const beforeVisuals = continuing ? this.captureTileSnapshots() : new Map<number, TileSnapshot>();
+    const beforeScrollTop = this.tableScrollOffsetPx();
     const prevHandIds = prev ? prev.hand().map((t) => t.id) : null;
     // «прилетающие» фишки: впервые попали в серверный стол с этим
     // состоянием (game.gd _fresh_committed_ids)
@@ -934,13 +942,15 @@ export class OfflineGame {
       if (this.flightActive) {
         this.refreshPending = true;
         if (!view.finished && freshIds.length > 0 && moverSeat !== view.you) {
-          this.pendingSteps.push({ ids: freshIds, seat: moverSeat });
+          this.pendingSteps.push({
+            ids: freshIds, seat: moverSeat, before: beforeVisuals, scrollTop: beforeScrollTop,
+          });
         }
         this.titlePendingSeat = view.current;
       } else {
         this.refresh();
         if (!view.finished && freshIds.length > 0 && moverSeat !== view.you) {
-          this.enqueueSteps(freshIds, moverSeat);
+          this.enqueueSteps(freshIds, moverSeat, beforeVisuals, beforeScrollTop);
         }
         this.enqueueTurnTitle();
       }
@@ -1002,7 +1012,12 @@ export class OfflineGame {
     void this.pumpPresent();
   }
 
-  private enqueueSteps(ids: number[], seat: number): void {
+  private enqueueSteps(
+    ids: number[],
+    seat: number,
+    before: Map<number, TileSnapshot>,
+    scrollTop: number,
+  ): void {
     if (ids.length === 0) return;
     // GAME_STATE подтверждает весь сетевой ход одним пакетом, в отличие от
     // локального бота, который обновляет стол после каждой фишки. Запоминаем
@@ -1018,7 +1033,7 @@ export class OfflineGame {
     }
     if (targetTile < 0) targetTile = ids[ids.length - 1];
     const rowId = this.rowIdOfTile(targetTile);
-    this.presentQueue.push({ kind: 'steps', seat, ids: [...ids], rowId });
+    this.presentQueue.push({ kind: 'steps', seat, ids: [...ids], rowId, before, scrollTop });
     void this.pumpPresent();
   }
 
@@ -1081,7 +1096,12 @@ export class OfflineGame {
           // не промежуточные обновления как локальный бот. Поэтому без этого
           // пути committed-фишки анимировались, но стол к ним не прокручивался.
           if (this.onlineMode && this.state?.players[seg.seat]?.is_bot) {
-            this.queueBotTableScroll(seg.rowId, gen);
+            await this.queueBotTableScroll(seg.rowId, gen);
+            if (gen !== this.presentGen || !this.running) return;
+            const scrollDelta = this.tableScrollOffsetPx() - seg.scrollTop;
+            await this.playQueuedBotMove(seg.before, seg.ids, seg.seat, gen, scrollDelta);
+            if (!this.finishPresentedSegment(gen)) return;
+            continue;
           }
         }
         await this.playQueuedSteps(seg.ids, gen, seg.seat);
@@ -1103,7 +1123,7 @@ export class OfflineGame {
       this.refresh();
     }
     const pending = this.pendingSteps.splice(0);
-    for (const p of pending) this.enqueueSteps(p.ids, p.seat);
+    for (const p of pending) this.enqueueSteps(p.ids, p.seat, p.before, p.scrollTop);
     if (this.titlePendingSeat >= 0) {
       const seat = this.titlePendingSeat;
       this.titlePendingSeat = -1;
@@ -1140,10 +1160,11 @@ export class OfflineGame {
   // прокрутки прошло достаточно времени) срабатывает сразу; частые вызовы
   // в пределах окна троттлинга схлопываются в один отложенный — им уедет
   // самая свежая цель.
-  private queueBotTableScroll(rowId: number, gen: number): void {
-    if (rowId < 0) return;
+  private queueBotTableScroll(rowId: number, gen: number): Promise<void> {
+    if (rowId < 0) return Promise.resolve();
     this.botScrollRowId = rowId;
     this.botScrollGen = gen;
+    const waitForScroll = new Promise<void>((resolve) => this.botScrollWaiters.push(resolve));
     const since = performance.now() - this.botScrollLastAt;
     if (since >= BOT_SCROLL_THROTTLE_MS) {
       this.flushBotTableScroll();
@@ -1153,6 +1174,7 @@ export class OfflineGame {
         Math.max(0, BOT_SCROLL_THROTTLE_MS - since),
       );
     }
+    return waitForScroll;
   }
 
   private flushBotTableScroll(): void {
@@ -1162,10 +1184,16 @@ export class OfflineGame {
     }
     const rowId = this.botScrollRowId;
     const gen = this.botScrollGen;
+    const waiters = this.botScrollWaiters.splice(0);
     this.botScrollRowId = -1;
-    if (rowId < 0 || gen !== this.presentGen || !this.running) return;
+    if (rowId < 0 || gen !== this.presentGen || !this.running) {
+      for (const resolve of waiters) resolve();
+      return;
+    }
     this.botScrollLastAt = performance.now();
-    void this.scrollTableToRow(rowId, gen);
+    void this.scrollTableToRow(rowId, gen).then(() => {
+      for (const resolve of waiters) resolve();
+    });
   }
 
   private cancelBotTableScroll(): void {
@@ -1176,6 +1204,25 @@ export class OfflineGame {
     this.botScrollRowId = -1;
     this.botScrollGen = -1;
     this.botScrollLastAt = 0;
+    for (const resolve of this.botScrollWaiters.splice(0)) resolve();
+  }
+
+  // Текущий вертикальный scroll offset в экранных пикселях. Нужен, чтобы
+  // сдвинуть сохранённые экранные координаты фишек на величину автоскролла.
+  private tableScrollOffsetPx(): number {
+    const sc = this.rowsScroll as unknown as {
+      _verticalBar?: { value: number };
+      _window?: { _currentMeasure?: { height: number } };
+      _clientHeight?: number;
+      host?: { idealRatio?: number };
+    };
+    const value = sc._verticalBar?.value;
+    const content = sc._window?._currentMeasure?.height;
+    const view = sc._clientHeight;
+    const ratio = sc.host?.idealRatio ?? 1;
+    if (typeof value !== 'number' || typeof content !== 'number'
+      || typeof view !== 'number' || !Number.isFinite(ratio) || ratio <= 0) return 0;
+    return value * Math.max(0, (content - view) / ratio);
   }
 
   private scrollTableToRow(rowId: number, gen: number): Promise<void> {
@@ -1289,6 +1336,92 @@ export class OfflineGame {
       else window.setTimeout(run, delay);
     });
     await new Promise<void>((r) => window.setTimeout(r, maxEnd + 360));
+  }
+
+  // У сетевого бота весь ход приходит одним конечным состоянием. Поэтому
+  // анимируем не только новые фишки из чипа, но и старые фишки, сдвинутые
+  // вставкой/перестановкой ряда. Они летят по очереди, короткими перелётами.
+  private async playQueuedBotMove(
+    before: Map<number, TileSnapshot>,
+    freshIds: number[],
+    seat: number,
+    gen: number,
+    scrollDelta: number,
+  ): Promise<void> {
+    const slots = this.tileSlotKeys();
+    const fresh = new Set(freshIds);
+    const sourceChip = this.chipsRow.children[seat];
+    if (sourceChip) this.ensureSeatChipVisible(sourceChip);
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve())));
+    if (gen !== this.presentGen || !this.running) return;
+
+    const spawn = this.chipSpawnRect(seat, tileSize());
+    const moves: Array<{ source: TileSnapshot; target: TileFigure; isNew: boolean }> = [];
+    for (const row of this.rowFigs) {
+      if (row.hintZone) continue;
+      for (const target of row.figures) {
+        const id = target.face.id;
+        const previous = before.get(id);
+        let source: TileSnapshot | undefined;
+        const isNew = fresh.has(id);
+        if (isNew) {
+          const to = rectOf(target.root);
+          source = {
+            face: target.face,
+            faceDown: false,
+            rect: { x: spawn.x, y: spawn.y, w: to.w || tileSize().x, h: to.h || tileSize().y },
+          };
+        } else if (previous && previous.slot !== slots.get(id)) {
+          source = {
+            ...previous,
+            rect: { ...previous.rect, y: previous.rect.y - scrollDelta },
+          };
+        }
+        if (!source) continue;
+        const to = rectOf(target.root);
+        if (to.w > 0 && to.h > 0 && Math.hypot(to.x - source.rect.x, to.y - source.rect.y) < 3) continue;
+        moves.push({ source, target, isNew });
+      }
+    }
+    if (moves.length === 0) {
+      // Защитный фолбэк для первого обновления без исходных координат.
+      await this.playQueuedSteps(freshIds, gen, seat);
+      return;
+    }
+
+    // Новые фишки не должны сразу появиться в конечном ряду до своего
+    // короткого перелёта. Сдвинутые фишки остаются видны до очереди на них.
+    for (const move of moves) {
+      if (move.isNew) {
+        move.target.hideBadgeForFlight();
+        move.target.root.alpha = 0;
+      }
+    }
+    for (const move of moves) {
+      if (gen !== this.presentGen || !this.running) {
+        for (const rest of moves) {
+          rest.target.root.alpha = rest.target.rgbaAlpha;
+          rest.target.revealBadge();
+        }
+        return;
+      }
+      const to = rectOf(move.target.root);
+      if (to.w <= 0 || to.h <= 0) {
+        move.target.root.alpha = move.target.rgbaAlpha;
+        move.target.revealBadge();
+        continue;
+      }
+      move.target.hideBadgeForFlight();
+      move.target.root.alpha = 0;
+      const ghost = this.createFlightGhost(move.source, move.target);
+      await new Promise<void>((resolve) => {
+        this.playTileFlight(move.source, move.target, to, {
+          duration: move.isNew ? 210 : 175,
+          fromScale: move.isNew ? 0.62 : 0.94,
+          fromAlpha: move.isNew ? 0.35 : move.target.rgbaAlpha,
+        }, ghost, resolve);
+      });
+    }
   }
 
   private chipSpawnRect(seat: number, ts: { x: number; y: number }): { x: number; y: number } {
@@ -2078,9 +2211,13 @@ export class OfflineGame {
     this.rebuildHand();
     this.inheritFigs = null;
     this.updateActionRow();
-    // в сети чужие ходы показывает очередь презентаций, а не общий
-    // дифф: иначе фишки летели бы дважды
-    if (!this.onlineMode || this.state.myTurn()) this.animateTileTransitions(before);
+    // В сети чужой ход показывает очередь презентаций, а не общий дифф.
+    // myTurn здесь уже может быть true, потому что сервер переключил ход на
+    // нас после ответа бота; turn_placed отличает нашу локальную выкладку от
+    // только что подтверждённого чужого хода.
+    const localOnlineEdit = this.onlineMode && this.state.myTurn()
+      && this.state.turn_placed.length > 0;
+    if (!this.onlineMode || localOnlineEdit) this.animateTileTransitions(before);
   }
 
   private captureTileSnapshots(): Map<number, TileSnapshot> {
@@ -2214,6 +2351,7 @@ export class OfflineGame {
     to: { x: number; y: number; w: number; h: number },
     opts: { duration?: number; fromScale?: number; fromAlpha?: number } = {},
     existingGhost?: TileFigure,
+    onComplete?: () => void,
   ): void {
     target.hideBadgeForFlight();
     target.root.alpha = 0;
@@ -2248,6 +2386,7 @@ export class OfflineGame {
       target.root.alpha = endAlpha;
       // Бейдж возвращаем сразу, без пустого кадра до следующего tick'а.
       target.revealBadge();
+      onComplete?.();
     };
     window.requestAnimationFrame(step);
   }
