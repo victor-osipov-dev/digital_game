@@ -1,5 +1,6 @@
 import type { DeviceKind, PlatformAPI, PlatformId } from './types';
 import {
+  browserExitFullscreen,
   browserFullscreenAvailable,
   browserIsFullscreen,
   browserToggleFullscreen,
@@ -56,6 +57,10 @@ export abstract class BasePlatform implements PlatformAPI {
 
   async toggleFullscreen(): Promise<boolean> {
     return browserToggleFullscreen();
+  }
+
+  async exitFullscreen(): Promise<boolean> {
+    return browserExitFullscreen();
   }
 
   setBannerVisible(_visible: boolean): void {

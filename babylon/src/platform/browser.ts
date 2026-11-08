@@ -46,6 +46,21 @@ export function browserIsFullscreen(): boolean {
   }
 }
 
+/** Выйти из полноэкранного режима браузера; false — уже не на весь экран. */
+export async function browserExitFullscreen(): Promise<boolean> {
+  const d = doc();
+  if (!d) return false;
+  try {
+    if (browserIsFullscreen()) {
+      const exit = d.exitFullscreen ?? d.webkitExitFullscreen ?? d.msExitFullscreen;
+      await exit?.call(d);
+    }
+  } catch {
+    /* браузер запретил выход без жеста — вернём фактический статус */
+  }
+  return browserIsFullscreen();
+}
+
 /**
  * Переключить полноэкранный режим браузера. Браузер может отклонить запрос
  * (нет жеста пользователя, iframe без allowfullscreen) — тогда просто

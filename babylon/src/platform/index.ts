@@ -211,6 +211,14 @@ class PlatformFacade implements PlatformAPI {
     }
   }
 
+  async exitFullscreen(): Promise<boolean> {
+    try {
+      return await this.current.exitFullscreen();
+    } catch {
+      return false;
+    }
+  }
+
   async toggleFullscreen(): Promise<boolean> {
     try {
       return await this.current.toggleFullscreen();

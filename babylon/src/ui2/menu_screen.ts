@@ -272,7 +272,12 @@ export class MenuScreen {
     if (!embedded) {
       const quitBtn = mkButton(t('Выход'), { fontSize: fs(16), height: 50, width: Math.floor(colW / 2) - 7, theme: { bg: '#31363F', hover: '#3A404A', press: '#262B33' } });
       quitBtn.onPointerUpObservable.clear();
-      quitBtn.onPointerUpObservable.add(() => window.close());
+      quitBtn.onPointerUpObservable.add(() => {
+        // Выход — сначала снять полноэкранный режим (жест игрока), затем
+        // закрыть страницу. Иначе браузер остался бы развёрнутым.
+        void platform.exitFullscreen();
+        window.close();
+      });
       bottom.addControl(quitBtn);
     }
     col.addControl(bottom);

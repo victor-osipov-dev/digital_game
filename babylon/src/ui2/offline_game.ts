@@ -85,6 +85,8 @@ interface TileSnapshot {
 }
 
 const DROP_MS = 350;
+// Задержка перед раскрытием слота «новый ряд» между рядами при перетаскивании.
+const SLOT_REVEAL_MS = 180;
 const BOT_THINK_MS = 1500;
 const BOT_STEP_MS = 550;
 const BOT_MIN_WAIT_MS = 1400;
@@ -195,6 +197,11 @@ export class OfflineGame {
   private dragData: DragData | null = null;
   private dragPointer: { x: number; y: number } | null = null;
   private dragPointerAbort: AbortController | null = null;
+  // Слот «новый ряд» между рядами раскрывается с короткой задержкой, чтобы
+  // при быстром проносе фишки ряды не раздвигались на каждый кадр.
+  private slotActiveAt = -1;
+  private slotPendingAt = -1;
+  private slotTimer = 0;
   private dragAutoScrollRaf = 0;
   private dragAutoScrollLast = 0;
   private hintTimer = 0;
@@ -637,7 +644,9 @@ export class OfflineGame {
     // Иначе сам ряд шириной viewport-24 (с левым отступом 12px) выходит за
     // фактическую clipping-область ScrollViewer на 12px справа.
     innerHolder.width = '100%';
-    innerHolder.spacing = 6;
+    // Небольшой отступ между рядами: ряды визуально плотнее, а слот
+    // «новый ряд» при наведении раздвигает соседей сам.
+    innerHolder.spacing = 4;
     // бейджи-«галочки» выходят за карточку — не режем их рядами
     innerHolder.clipChildren = false;
     // Ряды и слоты уже позиционируются с left=SIDE_PAD, а ширина их рамок
@@ -2194,7 +2203,7 @@ export class OfflineGame {
     hostC.left = px(12);
     // Слот невидим и схлопнут, пока фишка не наведена между рядами:
     // постоянного большого зазора между рядами нет. При наведении слот
-    // раздувается до 12px (highlightSlot) и подсвечивается.
+    // с задержкой раздувается до 10px (hoverSlot/highlightSlot) и подсвечивается.
     hostC.height = px(1);
     hostC.isVisible = true;
     const fill = new Rectangle('slotFill');
@@ -2985,10 +2994,40 @@ export class OfflineGame {
       dd.index = -1;
     } else {
       const hit = this.rowsHit(g.x, g.y);
-      this.highlightSlot(hit && hit.rowId === -3 ? hit.index : -1);
-      dd.targetRow = hit ? hit.rowId : undefined;
-      dd.index = hit ? hit.index : undefined;
+      const slotAt = hit && hit.rowId === -3 ? hit.index : -1;
+      this.hoverSlot(slotAt);
+      // Ряд «между рядами» становится целью не раньше, чем слот раскрылся.
+      const slotReady = hit !== null && (hit.rowId !== -3 || this.slotActiveAt === slotAt);
+      dd.targetRow = slotReady ? hit!.rowId : undefined;
+      dd.index = slotReady ? hit!.index : undefined;
     }
+  }
+
+  // Наведение на слот «новый ряд»: раскрываем его с небольшой задержкой.
+  // При уходе слот схлопывается сразу, поэтому быстрый пронос фишки мимо
+  // середины стола не раздвигает ряды без надобности.
+  private hoverSlot(at: number): void {
+    if (at === this.slotActiveAt || at === this.slotPendingAt) return;
+    if (this.slotTimer) {
+      window.clearTimeout(this.slotTimer);
+      this.slotTimer = 0;
+    }
+    this.slotPendingAt = -1;
+    if (this.slotActiveAt !== -1) {
+      this.slotActiveAt = -1;
+      this.highlightSlot(-1);
+    }
+    if (at < 0) return;
+    this.slotPendingAt = at;
+    this.slotTimer = window.setTimeout(() => {
+      this.slotTimer = 0;
+      if (!this.dragData || this.slotPendingAt !== at) return;
+      this.slotPendingAt = -1;
+      this.slotActiveAt = at;
+      this.highlightSlot(at);
+      // Слот раскрылся под неподвижным пальцем — обновляем цель захвата.
+      if (this.dragPointer) this.updateDragHover(this.dragPointer);
+    }, SLOT_REVEAL_MS);
   }
 
   private dragEdgeIntent(): { direction: number; strength: number } | null {
@@ -3116,13 +3155,19 @@ export class OfflineGame {
     for (const sl of this.rowSlots) {
       const active = sl.at === at;
       // раздувается только наведённый слот — «раздвинуть ряды»
-      sl.root.height = px(active ? 12 : 1);
+      sl.root.height = px(active ? 10 : 1);
       sl.fill.color = active ? '#FFD54F99' : '#FFD54F00';
       sl.fill.background = active ? '#FFD54F26' : '#FFD54F00';
     }
   }
 
   private clearSlotHighlight(): void {
+    if (this.slotTimer) {
+      window.clearTimeout(this.slotTimer);
+      this.slotTimer = 0;
+    }
+    this.slotPendingAt = -1;
+    this.slotActiveAt = -1;
     for (const sl of this.rowSlots) {
       sl.root.height = px(1);
       sl.fill.color = '#FFD54F00';

@@ -1,5 +1,6 @@
 import type { DeviceKind, PlatformAPI } from './types';
 import {
+  browserExitFullscreen,
   browserIsFullscreen,
   browserToggleFullscreen,
   browserWriteClipboard,
@@ -358,6 +359,19 @@ export class YandexPlatform implements PlatformAPI {
       /* браузер/платформа запретили смену режима — вернём статус ниже */
     }
     return browserToggleFullscreen();
+  }
+
+  async exitFullscreen(): Promise<boolean> {
+    try {
+      const fs = this.ysdk?.screen?.fullscreen;
+      if (fs) {
+        if (this.isFullscreen()) await fs.exit?.();
+        return this.isFullscreen();
+      }
+    } catch {
+      /* платформа запретила выход — вернём фактический статус ниже */
+    }
+    return browserExitFullscreen();
   }
 
   async canReview(): Promise<boolean> {
