@@ -132,7 +132,10 @@ export class OfflineGame {
         kind: 'steps'; seat: number; ids: number[]; rowId: number;
         before: Map<number, TileSnapshot>; scrollTop: number;
       }
-    | { kind: 'draft'; seat: number; ids: number[]; rowId: number }
+    | {
+        kind: 'draft'; seat: number; ids: number[]; rowId: number;
+        before: Map<number, TileSnapshot>; scrollTop: number;
+      }
   > = [];
   private presentBusy = false;
   private presentGen = 0;
@@ -141,7 +144,10 @@ export class OfflineGame {
   private refreshPending = false;
   private titlePendingSeat = -1;
   private titleShownFor = -1;
-  private pendingSteps: { ids: number[]; seat: number; before: Map<number, TileSnapshot>; scrollTop: number }[] = [];
+  private pendingSteps: {
+    ids: number[]; seat: number; rowId: number;
+    before: Map<number, TileSnapshot>; scrollTop: number;
+  }[] = [];
   private tableScrollRaf = 0;
   private tableScrollGeneration = 0;
   private tableScrollDone: (() => void) | null = null;
@@ -888,6 +894,7 @@ export class OfflineGame {
         }
       }
     }
+    const changedRowId = prev ? this.changedTableRowId(prev, view.table) : -1;
     const nSeats = view.players.length || 1;
     const curSeat = Math.min(Math.max(view.current, 0), nSeats - 1);
     if (prev && prev.current !== curSeat) this.lastDraftPayload = '';
@@ -900,7 +907,7 @@ export class OfflineGame {
       this.cancelTableScroll();
     }
     const moverSeat = (view.lastTurn ?? []).length === 0
-      ? curSeat
+      ? (changedRowId >= 0 && prev ? prev.current : curSeat)
       : (curSeat - 1 + nSeats) % nSeats;
     this.roomCode = view.code;
     this.clearServerErrorRows();
@@ -942,16 +949,17 @@ export class OfflineGame {
       // убивает полёт. Данные уже применены — откладываем только показ.
       if (this.flightActive) {
         this.refreshPending = true;
-        if (!view.finished && freshIds.length > 0 && moverSeat !== view.you) {
+        if (!view.finished && (freshIds.length > 0 || changedRowId >= 0) && moverSeat !== view.you) {
           this.pendingSteps.push({
-            ids: freshIds, seat: moverSeat, before: beforeVisuals, scrollTop: beforeScrollTop,
+            ids: freshIds, seat: moverSeat, rowId: changedRowId,
+            before: beforeVisuals, scrollTop: beforeScrollTop,
           });
         }
         this.titlePendingSeat = view.current;
       } else {
         this.refresh();
-        if (!view.finished && freshIds.length > 0 && moverSeat !== view.you) {
-          this.enqueueSteps(freshIds, moverSeat, beforeVisuals, beforeScrollTop);
+        if (!view.finished && (freshIds.length > 0 || changedRowId >= 0) && moverSeat !== view.you) {
+          this.enqueueSteps(freshIds, moverSeat, beforeVisuals, beforeScrollTop, changedRowId);
         }
         this.enqueueTurnTitle();
       }
@@ -1018,8 +1026,8 @@ export class OfflineGame {
     seat: number,
     before: Map<number, TileSnapshot>,
     scrollTop: number,
+    rowIdHint: number,
   ): void {
-    if (ids.length === 0) return;
     // GAME_STATE подтверждает весь сетевой ход одним пакетом, в отличие от
     // локального бота, который обновляет стол после каждой фишки. Запоминаем
     // ряд последней фишки хода, чтобы прокрутить к нему при показе коммита.
@@ -1033,7 +1041,8 @@ export class OfflineGame {
       }
     }
     if (targetTile < 0) targetTile = ids[ids.length - 1];
-    const rowId = this.rowIdOfTile(targetTile);
+    const rowId = rowIdHint >= 0 ? rowIdHint : this.rowIdOfTile(targetTile);
+    if (rowId < 0 && ids.length === 0) return;
     this.presentQueue.push({ kind: 'steps', seat, ids: [...ids], rowId, before, scrollTop });
     void this.pumpPresent();
   }
@@ -1089,18 +1098,20 @@ export class OfflineGame {
             continue;
           }
           this.flightActive = true;
-          await this.scrollTableToRow(seg.rowId, gen);
-          if (gen !== this.presentGen || !this.running) return;
+          await this.playQueuedRemoteMove(
+            seg.before, seg.ids, seg.seat, seg.rowId, seg.scrollTop, gen, false,
+          );
+          if (!this.finishPresentedSegment(gen)) return;
+          continue;
         } else {
           this.flightActive = true;
           // В сети бот обычно присылает один финальный GAME_STATE за ход, а
           // не промежуточные обновления как локальный бот. Поэтому без этого
           // пути committed-фишки анимировались, но стол к ним не прокручивался.
           if (this.onlineMode && this.state?.players[seg.seat]?.is_bot) {
-            await this.queueBotTableScroll(seg.rowId, gen);
-            if (gen !== this.presentGen || !this.running) return;
-            const scrollDelta = this.tableScrollOffsetPx() - seg.scrollTop;
-            await this.playQueuedBotMove(seg.before, seg.ids, seg.seat, gen, scrollDelta);
+            await this.playQueuedRemoteMove(
+              seg.before, seg.ids, seg.seat, seg.rowId, seg.scrollTop, gen,
+            );
             if (!this.finishPresentedSegment(gen)) return;
             continue;
           }
@@ -1124,7 +1135,7 @@ export class OfflineGame {
       this.refresh();
     }
     const pending = this.pendingSteps.splice(0);
-    for (const p of pending) this.enqueueSteps(p.ids, p.seat, p.before, p.scrollTop);
+    for (const p of pending) this.enqueueSteps(p.ids, p.seat, p.before, p.scrollTop, p.rowId);
     if (this.titlePendingSeat >= 0) {
       const seat = this.titlePendingSeat;
       this.titlePendingSeat = -1;
@@ -1133,17 +1144,20 @@ export class OfflineGame {
     return true;
   }
 
-  private async playDraftPreview(seg: { seat: number; ids: number[]; rowId: number }): Promise<void> {
+  private async playDraftPreview(seg: {
+    seat: number; ids: number[]; rowId: number;
+    before: Map<number, TileSnapshot>; scrollTop: number;
+  }): Promise<void> {
     const gen = this.presentGen;
     this.showSeat(seg.seat);
     this.flightActive = true;
-    await this.scrollTableToRow(seg.rowId, gen);
-    if (gen !== this.presentGen || !this.running) return;
     if (this.draftFrom !== seg.seat || !this.state || this.state.myTurn()) {
       if (this.finishPresentedSegment(gen)) void this.pumpPresent();
       return;
     }
-    await this.playQueuedSteps(seg.ids, gen, seg.seat);
+    await this.playQueuedRemoteMove(
+      seg.before, seg.ids, seg.seat, seg.rowId, seg.scrollTop, gen, false,
+    );
     if (!this.finishPresentedSegment(gen)) return;
     void this.pumpPresent();
   }
@@ -1339,53 +1353,52 @@ export class OfflineGame {
     await new Promise<void>((r) => window.setTimeout(r, maxEnd + 360));
   }
 
-  // У сетевого бота весь ход приходит одним конечным состоянием. Поэтому
-  // анимируем не только новые фишки из чипа, но и старые фишки, сдвинутые
-  // вставкой/перестановкой ряда. Они летят по очереди, короткими перелётами.
-  private async playQueuedBotMove(
+  // Удалённый ход приходит целиком одним состоянием. До первого кадра
+  // скрываем целевые копии и оставляем призраки на реальных исходных местах.
+  // Перестановки стартуют вместе, а новые фишки летят по очереди.
+  private async playQueuedRemoteMove(
     before: Map<number, TileSnapshot>,
     freshIds: number[],
     seat: number,
+    rowId: number,
+    scrollTop: number,
     gen: number,
-    scrollDelta: number,
+    slowNew = true,
   ): Promise<void> {
     const slots = this.tileSlotKeys();
     const fresh = new Set(freshIds);
     const reorderedRows = this.reorderedRowIds(before);
     const sourceChip = this.chipsRow.children[seat];
     if (sourceChip) this.ensureSeatChipVisible(sourceChip);
-    await new Promise<void>((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve())));
-    if (gen !== this.presentGen || !this.running) return;
-
-    const spawn = this.chipSpawnRect(seat, tileSize());
-    const moves: Array<{ source: TileSnapshot; target: TileFigure; isNew: boolean }> = [];
+    const moves: Array<{
+      source: TileSnapshot | null;
+      target: TileFigure;
+      isNew: boolean;
+      ghost: TileFigure | null;
+    }> = [];
     for (const row of this.rowFigs) {
       if (row.hintZone) continue;
       for (const target of row.figures) {
         const id = target.face.id;
         const previous = before.get(id);
-        let source: TileSnapshot | undefined;
+        let source: TileSnapshot | null = null;
         const isNew = fresh.has(id);
-        if (isNew) {
-          const to = rectOf(target.root);
-          source = {
-            face: target.face,
-            faceDown: false,
-            rect: { x: spawn.x, y: spawn.y, w: to.w || tileSize().x, h: to.h || tileSize().y },
-          };
-        } else if (previous && (
+        if (!isNew && previous && (
           previous.slot !== slots.get(id)
           || (previous.rowId !== undefined && reorderedRows.has(previous.rowId))
         )) {
           source = {
             ...previous,
-            rect: { ...previous.rect, y: previous.rect.y - scrollDelta },
+            rect: { ...previous.rect },
           };
         }
-        if (!source) continue;
-        const to = rectOf(target.root);
-        if (to.w > 0 && to.h > 0 && Math.hypot(to.x - source.rect.x, to.y - source.rect.y) < 3) continue;
-        moves.push({ source, target, isNew });
+        if (!source && !isNew) continue;
+        // Важно скрыть конечные фигуры до первого кадра нового layout:
+        // иначе ряд успевает целиком «телепортироваться» на новые места.
+        target.hideBadgeForFlight();
+        target.root.alpha = 0;
+        const ghost = source ? this.createFlightGhost(source, target) : null;
+        moves.push({ source, target, isNew, ghost });
       }
     }
     if (moves.length === 0) {
@@ -1394,41 +1407,106 @@ export class OfflineGame {
       return;
     }
 
-    // Новые фишки не должны сразу появиться в конечном ряду до своего
-    // короткого перелёта. Сдвинутые фишки остаются видны до очереди на них.
-    for (const move of moves) {
-      if (move.isNew) {
-        move.target.hideBadgeForFlight();
-        move.target.root.alpha = 0;
-      }
-    }
-    for (const move of moves) {
-      if (gen !== this.presentGen || !this.running) {
-        for (const rest of moves) {
-          rest.target.root.alpha = rest.target.rgbaAlpha;
-          rest.target.revealBadge();
-        }
-        return;
-      }
-      const to = rectOf(move.target.root);
-      if (to.w <= 0 || to.h <= 0) {
+    // showSeat/rebuildChips пересоздаёт чипы. Даём Babylon пару кадров на
+    // замер и только затем берём настоящую позицию источника новой фишки.
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve())));
+    if (gen !== this.presentGen || !this.running) {
+      for (const move of moves) {
+        move.ghost?.disposeBadge();
+        if (move.ghost?.root.parent) move.ghost.root.parent.removeControl(move.ghost.root);
         move.target.root.alpha = move.target.rgbaAlpha;
         move.target.revealBadge();
-        continue;
       }
-      move.target.hideBadgeForFlight();
-      move.target.root.alpha = 0;
-      const ghost = this.createFlightGhost(move.source, move.target);
-      await new Promise<void>((resolve) => {
-        this.playTileFlight(move.source, move.target, to, {
-          // Новую фишку бот выставляет нарочито медленно, чтобы ход был
-          // читаемым; сдвиг существующих фишек остаётся чуть быстрее.
-          duration: move.isNew ? 520 : 280,
+      return;
+    }
+    if (sourceChip) {
+      this.ensureSeatChipVisible(sourceChip);
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+    }
+    const spawn = this.chipSpawnRect(seat, tileSize());
+    for (const move of moves) {
+      if (move.isNew && !move.source) {
+        move.source = {
+          face: move.target.face,
+          faceDown: false,
+          rect: { x: spawn.x, y: spawn.y, w: tileSize().x, h: tileSize().y },
+        };
+        move.ghost = this.createFlightGhost(move.source, move.target);
+      }
+    }
+
+    // Старые фишки остаются видны призраками на своих прежних местах, пока
+    // стол плавно прокручивается к цели. Следим за scroll offset, чтобы эти
+    // источники двигались вместе со старым содержимым ScrollViewer.
+    let trackingScroll = true;
+    let scrollTrackRaf = 0;
+    const trackSources = (): void => {
+      scrollTrackRaf = 0;
+      if (!trackingScroll) return;
+      const delta = this.tableScrollOffsetPx() - scrollTop;
+      for (const move of moves) {
+        if (!move.isNew && move.ghost && move.source) {
+          move.ghost.root.top = px(Math.round(move.source.rect.y - delta));
+        }
+      }
+      scrollTrackRaf = window.requestAnimationFrame(trackSources);
+    };
+    scrollTrackRaf = window.requestAnimationFrame(trackSources);
+    await this.queueBotTableScroll(rowId, gen);
+    trackingScroll = false;
+    if (scrollTrackRaf) window.cancelAnimationFrame(scrollTrackRaf);
+    const scrollDelta = this.tableScrollOffsetPx() - scrollTop;
+    for (const move of moves) {
+      if (!move.isNew && move.source) move.source.rect.y -= scrollDelta;
+    }
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve())));
+
+    const fly = (move: typeof moves[number], duration: number): Promise<void> => {
+      const to = rectOf(move.target.root);
+      if (to.w <= 0 || to.h <= 0 || !move.source || !move.ghost) {
+        move.ghost?.disposeBadge();
+        if (move.ghost?.root.parent) move.ghost.root.parent.removeControl(move.ghost.root);
+        move.target.root.alpha = move.target.rgbaAlpha;
+        move.target.revealBadge();
+        return Promise.resolve();
+      }
+      if (Math.hypot(to.x - move.source.rect.x, to.y - move.source.rect.y) < 3) {
+        move.ghost.disposeBadge();
+        if (move.ghost.root.parent) move.ghost.root.parent.removeControl(move.ghost.root);
+        move.target.root.alpha = move.target.rgbaAlpha;
+        move.target.revealBadge();
+        return Promise.resolve();
+      }
+      return new Promise<void>((resolve) => {
+        this.playTileFlight(move.source!, move.target, to, {
+          duration,
           fromScale: move.isNew ? 0.62 : 0.94,
           fromAlpha: move.isNew ? 0.35 : move.target.rgbaAlpha,
-        }, ghost, resolve);
+        }, move.ghost!, resolve);
       });
+    };
+
+    if (gen !== this.presentGen || !this.running) {
+      for (const move of moves) {
+        move.ghost?.disposeBadge();
+        if (move.ghost?.root.parent) move.ghost.root.parent.removeControl(move.ghost.root);
+        move.target.root.alpha = move.target.rgbaAlpha;
+        move.target.revealBadge();
+      }
+      return;
     }
+
+    // Сдвиг/перенос уже лежащих фишек — одна синхронная перестройка ряда,
+    // чтобы освободить место под новую фишку без наездов. Новые фишки бота
+    // летят медленно и последовательно, чтобы сам ход оставался читаемым.
+    const rearrangements = moves.filter((move) => !move.isNew);
+    const placements = moves.filter((move) => move.isNew);
+    const rearrangeTogether = Promise.all(rearrangements.map((move) => fly(move, 280)));
+    const placeInOrder = async (): Promise<void> => {
+      const duration = slowNew ? 520 : 340;
+      for (const move of placements) await fly(move, duration);
+    };
+    await Promise.all([rearrangeTogether, placeInOrder()]);
   }
 
   private chipSpawnRect(seat: number, ts: { x: number; y: number }): { x: number; y: number } {
@@ -1515,6 +1593,27 @@ export class OfflineGame {
     return -1;
   }
 
+  // Находим изменившийся ряд и тогда, когда серверный ход переместил только
+  // уже лежащие фишки (в таком случае freshIds может быть пустым).
+  private changedTableRowId(prev: GameState, next: GameView['table']): number {
+    const oldRows = new Map(prev.table.map((row) => [row.id, row.tiles.map((tile) => tile.id)]));
+    let changed = -1;
+    for (const row of next) {
+      const old = oldRows.get(row.id);
+      if (!old || old.length !== row.tileIds.length || old.some((id, i) => id !== row.tileIds[i])) {
+        changed = row.id;
+      }
+    }
+    if (changed >= 0) return changed;
+    const oldOrder = prev.table.map((row) => row.id);
+    const nextOrder = next.map((row) => row.id);
+    if (oldOrder.length === nextOrder.length && oldOrder.every((id, i) => id === nextOrder[i])) return -1;
+    for (let i = 0; i < Math.min(oldOrder.length, nextOrder.length); i += 1) {
+      if (oldOrder[i] !== nextOrder[i]) return nextOrder[i] ?? nextOrder[nextOrder.length - 1] ?? -1;
+    }
+    return nextOrder[nextOrder.length - 1] ?? -1;
+  }
+
   // Входящий DRAFT: стол другого игрока подменяется его раскладкой.
   // Guard «чей ход», дедуп и устаревание 15 с — как в оригинале
   // (game.gd:2844-2910, 3887-3899).
@@ -1539,6 +1638,8 @@ export class OfflineGame {
     const payload = JSON.stringify(msg.rows);
     if (payload === this.lastDraftPayload) return;
     this.lastDraftPayload = payload;
+    const beforeVisuals = this.captureTileSnapshots();
+    const beforeScrollTop = this.tableScrollOffsetPx();
     const previousRows = this.state.table.map((row, index) => ({
       id: row.id,
       index,
@@ -1559,7 +1660,13 @@ export class OfflineGame {
         || previous.tiles.length !== row.tiles.length
         || previous.tiles.some((id, i) => id !== row.tiles[i]);
     });
+    const changedContentRows = msg.rows.filter((row) => {
+      const previous = oldRows.get(row.id);
+      return !previous || previous.tiles.length !== row.tiles.length
+        || previous.tiles.some((id, i) => id !== row.tiles[i]);
+    });
     const targetRowId = msg.rows.find((row) => animatedIds.some((id) => row.tiles.includes(id)))?.id
+      ?? changedContentRows[changedContentRows.length - 1]?.id
       ?? changedRows[0]?.id ?? -1;
     this.applyServerRows(msg.rows);
     this.refresh();
@@ -1568,12 +1675,19 @@ export class OfflineGame {
       seat: msg.from,
       ids: animatedIds,
       rowId: targetRowId,
+      before: beforeVisuals,
+      scrollTop: beforeScrollTop,
     } as const;
-    if (this.flightActive) this.enqueueDraftSegment(segment);
-    else void this.playDraftPreview(segment);
+    if (animatedIds.length > 0 || changedRows.length > 0) {
+      if (this.flightActive) this.enqueueDraftSegment(segment);
+      else void this.playDraftPreview(segment);
+    }
   }
 
-  private enqueueDraftSegment(segment: { seat: number; ids: number[]; rowId: number }): void {
+  private enqueueDraftSegment(segment: {
+    seat: number; ids: number[]; rowId: number;
+    before: Map<number, TileSnapshot>; scrollTop: number;
+  }): void {
     const last = this.presentQueue[this.presentQueue.length - 1];
     if (last?.kind === 'draft' && last.seat === segment.seat) {
       last.ids = [...new Set([...last.ids, ...segment.ids])];
