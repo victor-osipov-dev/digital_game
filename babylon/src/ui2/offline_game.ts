@@ -1375,6 +1375,7 @@ export class OfflineGame {
       target: TileFigure;
       isNew: boolean;
       ghost: TileFigure | null;
+      rowId: number;
     }> = [];
     for (const row of this.rowFigs) {
       if (row.hintZone) continue;
@@ -1398,7 +1399,7 @@ export class OfflineGame {
         target.hideBadgeForFlight();
         target.root.alpha = 0;
         const ghost = source ? this.createFlightGhost(source, target) : null;
-        moves.push({ source, target, isNew, ghost });
+        moves.push({ source, target, isNew, ghost, rowId: row.rowId });
       }
     }
     if (moves.length === 0) {
@@ -1424,16 +1425,6 @@ export class OfflineGame {
       await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
     }
     const spawn = this.chipSpawnRect(seat, tileSize());
-    for (const move of moves) {
-      if (move.isNew && !move.source) {
-        move.source = {
-          face: move.target.face,
-          faceDown: false,
-          rect: { x: spawn.x, y: spawn.y, w: tileSize().x, h: tileSize().y },
-        };
-        move.ghost = this.createFlightGhost(move.source, move.target);
-      }
-    }
 
     // Старые фишки остаются видны призраками на своих прежних местах, пока
     // стол плавно прокручивается к цели. Следим за scroll offset, чтобы эти
@@ -1462,6 +1453,16 @@ export class OfflineGame {
     await new Promise<void>((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve())));
 
     const fly = (move: typeof moves[number], duration: number): Promise<void> => {
+      // Создаём призрак новой фишки только в момент её полёта: следующие
+      // фишки не должны копиться видимыми возле имени игрока.
+      if (move.isNew && !move.source) {
+        move.source = {
+          face: move.target.face,
+          faceDown: false,
+          rect: { x: spawn.x, y: spawn.y, w: tileSize().x, h: tileSize().y },
+        };
+        move.ghost = this.createFlightGhost(move.source, move.target);
+      }
       const to = rectOf(move.target.root);
       if (to.w <= 0 || to.h <= 0 || !move.source || !move.ghost) {
         move.ghost?.disposeBadge();
@@ -1496,17 +1497,38 @@ export class OfflineGame {
       return;
     }
 
-    // Сдвиг/перенос уже лежащих фишек — одна синхронная перестройка ряда,
-    // чтобы освободить место под новую фишку без наездов. Новые фишки бота
-    // летят медленно и последовательно, чтобы сам ход оставался читаемым.
-    const rearrangements = moves.filter((move) => !move.isNew);
-    const placements = moves.filter((move) => move.isNew);
-    const rearrangeTogether = Promise.all(rearrangements.map((move) => fly(move, 280)));
-    const placeInOrder = async (): Promise<void> => {
-      const duration = slowNew ? 520 : 340;
-      for (const move of placements) await fly(move, duration);
-    };
-    await Promise.all([rearrangeTogether, placeInOrder()]);
+    // Обрабатываем затронутые ряды по очереди. Внутри одного ряда уже
+    // лежащие фишки сдвигаются одновременно, а новая летит медленно поверх
+    // этой перестройки. Так нет ни столкновения, ни одновременного движения
+    // нескольких рядов; будущие новые фишки пока остаются скрытыми.
+    const byRow = new Map<number, typeof moves>();
+    for (const move of moves) {
+      const group = byRow.get(move.rowId) ?? [];
+      group.push(move);
+      byRow.set(move.rowId, group);
+    }
+    const rowOrder = this.rowFigs.filter((row) => !row.hintZone).map((row) => row.rowId);
+    const newDuration = slowNew ? 520 : 340;
+    for (const rowId of rowOrder) {
+      const group = byRow.get(rowId);
+      if (!group) continue;
+      if (gen !== this.presentGen || !this.running) {
+        for (const move of moves) {
+          move.ghost?.disposeBadge();
+          if (move.ghost?.root.parent) move.ghost.root.parent.removeControl(move.ghost.root);
+          move.target.root.alpha = move.target.rgbaAlpha;
+          move.target.revealBadge();
+        }
+        return;
+      }
+      const existing = group.filter((move) => !move.isNew);
+      const placements = group.filter((move) => move.isNew);
+      const rearrangeTogether = Promise.all(existing.map((move) => fly(move, 280)));
+      const placeInOrder = async (): Promise<void> => {
+        for (const move of placements) await fly(move, newDuration);
+      };
+      await Promise.all([rearrangeTogether, placeInOrder()]);
+    }
   }
 
   private chipSpawnRect(seat: number, ts: { x: number; y: number }): { x: number; y: number } {
