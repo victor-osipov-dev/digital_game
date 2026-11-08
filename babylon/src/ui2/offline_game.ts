@@ -3269,7 +3269,9 @@ export class OfflineGame {
   // титул золотом fs22, текст fs16 белый, [ОК зелёная][Отмена], клик мимо
   // панели закрывает. Один диалог на оба вопроса.
   private askConfirm(title: string, text: string, okText: string, action: () => void): void {
-    if (!this.popups || !this.running) return;
+    // Окончена ли партия — не преграда: после экрана победы и «Посмотреть
+    // стол» running уже false, но кнопка «Меню» обязана работать.
+    if (!this.popups || (!this.running && !this.state?.finished)) return;
     this.closeConfirm();
     const m = modalOverlay(this.popups, 'confirm', { alpha: 0.6, zIndex: 930 });
     this.confirmUi = m;
