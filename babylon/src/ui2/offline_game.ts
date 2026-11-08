@@ -1508,8 +1508,18 @@ export class OfflineGame {
       byRow.set(move.rowId, group);
     }
     const rowOrder = this.rowFigs.filter((row) => !row.hintZone).map((row) => row.rowId);
+    // Порядок рядов зависит от общего направления перелётов: если фишки
+    // смещаются вниз (или в основном по горизонтали), нижние ряды играем
+    // первыми, освобождая траектории; при движении вверх — сверху вниз.
+    let verticalTravel = 0;
+    for (const move of moves) {
+      if (!move.source) continue;
+      const to = rectOf(move.target.root);
+      if (to.w > 0 && to.h > 0) verticalTravel += to.y - move.source.rect.y;
+    }
+    const animationRowOrder = verticalTravel >= 0 ? rowOrder.slice().reverse() : rowOrder;
     const newDuration = slowNew ? 520 : 340;
-    for (const rowId of rowOrder) {
+    for (const rowId of animationRowOrder) {
       const group = byRow.get(rowId);
       if (!group) continue;
       if (gen !== this.presentGen || !this.running) {
