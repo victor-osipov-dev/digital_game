@@ -260,10 +260,19 @@ export class MenuScreen {
     const bottom = hrow(14);
     bottom.width = '100%';
     bottom.height = px(50);
-    // Внутри iframe площадки кнопка «Выход» бесполезна (window.close там
-    // не работает) и запрещена рекомендациями — показываем только на
-    // отдельной странице своего сайта.
-    const embedded = platform.isEmbedded && platform.id !== 'standalone';
+    // Кнопка «Выход» осмысленна только на отдельной странице: внутри любого
+    // iframe (площадки и встраивание на своём сайте) закрыть окно нельзя, а
+    // полноэкранный режим контролирует родитель, а не игра. Поэтому прячем
+    // её и во фрейме, и на любой площадке — показываем лишь standalone в
+    // отдельном окне.
+    const inFrame = ((): boolean => {
+      try {
+        return typeof window !== 'undefined' && window.self !== window.top;
+      } catch {
+        return true;
+      }
+    })();
+    const embedded = inFrame || platform.id !== 'standalone';
     const rulesW = embedded ? colW : Math.floor(colW / 2) - 7;
     const rulesBtn = mkButton(t('Как играть'), { fontSize: fs(16), height: 50, width: Math.floor(rulesW), theme: { bg: '#31363F', hover: '#3A404A', press: '#262B33' } });
     rulesBtn.onPointerUpObservable.clear();

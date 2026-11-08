@@ -46,17 +46,35 @@ export function browserIsFullscreen(): boolean {
   }
 }
 
-/** Выйти из полноэкранного режима браузера; false — уже не на весь экран. */
+/**
+ * Выйти из полноэкранного режима браузера; true — всё ещё на весь экран.
+ *
+ * Выход вызываем ВСЕГДА, а не только когда браузер сообщает о DOM-fullscreen:
+ * в части браузеров `fullscreenElement` не виден (или режим включён на уровне
+ * окна/родительского документа), но `exitFullscreen()` всё равно срабатывает.
+ * Если игра встроена в iframe того же происхождения и fullscreen держит
+ * родитель — просим выйти и его: у самого iframe прав на это нет.
+ */
 export async function browserExitFullscreen(): Promise<boolean> {
   const d = doc();
   if (!d) return false;
   try {
-    if (browserIsFullscreen()) {
-      const exit = d.exitFullscreen ?? d.webkitExitFullscreen ?? d.msExitFullscreen;
-      await exit?.call(d);
+    const exit = d.exitFullscreen ?? d.webkitExitFullscreen ?? d.msExitFullscreen;
+    if (exit) await exit.call(d);
+  } catch {
+    /* не на весь экран / запрещено — это не ошибка */
+  }
+  try {
+    const parentDoc = (typeof window !== 'undefined' ? window.parent?.document : null) as
+      FullscreenDocument | null;
+    if (parentDoc && parentDoc !== d) {
+      const pexit = parentDoc.exitFullscreen
+        ?? parentDoc.webkitExitFullscreen
+        ?? parentDoc.msExitFullscreen;
+      if (pexit) await pexit.call(parentDoc);
     }
   } catch {
-    /* браузер запретил выход без жеста — вернём фактический статус */
+    /* кросс-доменный фрейм: родителю выйти не можем */
   }
   return browserIsFullscreen();
 }
