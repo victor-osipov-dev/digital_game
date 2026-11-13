@@ -34,6 +34,8 @@ import {
   px,
 } from './uiskin';
 import { openRulesOverlay, openStatsOverlay } from './overlays';
+import { platform } from '../platform';
+import { applySoundPreference } from '../core/sound';
 
 import type { MenuHost } from './ports';
 import { viewHeight, viewWidth } from './viewport';
@@ -221,6 +223,18 @@ export class MenuScreen {
     });
     botAnim.root.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
     col.addControl(botAnim.root);
+
+    // Кнопка управления звуком: общая для меню и настроек партии.
+    const sound = checkboxRow(t('Звук'), S.sound, {
+      height: 34,
+      fontSize: fs(15),
+      onChange: (v) => {
+        saveSettings({ sound: v });
+        applySoundPreference(v);
+      },
+    });
+    sound.root.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    col.addControl(sound.root);
     // Отступ после «Анимация бота» перед блоком настроек.
     col.addControl(gapControl(8));
 
@@ -250,11 +264,15 @@ export class MenuScreen {
     startBtn.onPointerUpObservable.add(() => this.host.onStart());
     col.addControl(startBtn);
 
-    const onlineBtn = mkButton(t('Играть с другими'), { fontSize: fs(17), height: 50, theme: BUTTON_STYLE.blueOnline });
-    onlineBtn.width = '100%';
-    onlineBtn.onPointerUpObservable.clear();
-    onlineBtn.onPointerUpObservable.add(() => this.host.onOnline());
-    col.addControl(onlineBtn);
+    // Сетевые функции скрываются там, где площадка не поддерживает БЭК
+    // (YouTube Playables, GameDistribution и т. п.).
+    if (platform.supportsOnline) {
+      const onlineBtn = mkButton(t('Играть с другими'), { fontSize: fs(17), height: 50, theme: BUTTON_STYLE.blueOnline });
+      onlineBtn.width = '100%';
+      onlineBtn.onPointerUpObservable.clear();
+      onlineBtn.onPointerUpObservable.add(() => this.host.onOnline());
+      col.addControl(onlineBtn);
+    }
 
     const statsBtn = mkButton(t('Статистика'), { fontSize: fs(17), height: 50, theme: BUTTON_STYLE.deck });
     statsBtn.width = '100%';
@@ -357,8 +375,11 @@ export class MenuScreen {
 
   private openStats(): void {
     // Локальные и сетевые партии показаны раздельно, чтобы счётчики
-    // не смешивались: сетевые данные приходят с сервера.
-    openStatsOverlay(this.popups, { loadOnline: () => this.host.onlineStats() });
+    // не смешивались: сетевые данные приходят с сервера. Там, где онлайна
+    // нет (YouTube/GameDistribution), сетевой блок не показываем вовсе.
+    openStatsOverlay(this.popups, platform.supportsOnline
+      ? { loadOnline: () => this.host.onlineStats() }
+      : {});
   }
 }
 

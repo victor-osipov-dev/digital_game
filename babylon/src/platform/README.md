@@ -10,8 +10,9 @@
 |---|---|---|---|
 | Яндекс Игры | `yandex.ts` | `/sdk.js` → фолбэк `https://yandex.ru/games/sdk/v2` | Полная интеграция |
 | GamePush | `gamepush.ts` | сниппет `game-score.js` в `index.html` (только `--mode gamepush`) | Интеграция, нужен проект и поле `wins` |
-| CrazyGames | `crazygames.ts` | `https://sdk.crazygames.com/crazygames-sdk-v2.js` (тег в `index.html`) | Полная интеграция |
-| GameDistribution | `gamedistribution.ts` | `https://html5.api.gamedistribution.com/main.min.js` (грузится сам) | Интеграция, нужен `gameId` |
+| CrazyGames | `crazygames.ts` | `https://sdk.crazygames.com/crazygames-sdk-v3.js` (тег в `index.html`, `--mode crazygames`) | SDK v3: init, loading, gameplay, ads, data, muteAudio |
+| YouTube Playables | `youtube.ts` | `https://www.youtube.com/game_api/v1` (тег в `index.html`, `--mode youtube`) | firstFrameReady/gameReady, язык, звук, saveData, реклама; онлайн скрыт |
+| GameDistribution | `gamedistribution.ts` | `https://html5.api.gamedistribution.com/main.min.js` (грузится сам) | Интеграция, нужен `gameId`; онлайн скрыт, прелоадер один раз |
 | Свой сайт / прочие | `noop.ts` | — | Игра работает без рекламы |
 
 ## Варианты сборки
@@ -25,6 +26,12 @@
 | `npm run build:yandex` | принудительно Яндекс | `dist/` | Явная сборка под Яндекс |
 | `npm run build:site` | `standalone` | `dist-site/` | Свой сайт, без функций Яндекса |
 | `npm run build:gamepush` | `gamepush` | `dist-gamepush/` | Публикация через GamePush |
+| `npm run build:crazygames` | `crazygames` | `dist-crazygames/` | CrazyGames SDK v3 (тег в `<head>`) |
+| `npm run build:youtube` | `youtube` | `dist-youtube/` | YouTube Playables SDK (тег в `<head>`) |
+
+В режимах `crazygames` и `youtube` SDK-скрипт площадки вставляется в `<head>`
+до кода игры (для YouTube это обязательное требование). В `dist/` и
+`dist-site/` этих тегов нет.
 
 В режиме `standalone` площадка фиксируется на «свой сайт»: Яндекс-провайдер
 не создаётся, `/sdk.js` не запрашивается, и вся Яндекс-специфичная
@@ -83,7 +90,10 @@ GamePush (`window.onGPInit`, загрузчик `game-score.js`), а площа�
 - П. 1.2 — регистрация не требуется: офлайн и сетевой режим доступны
   гостем. На Яндексе в онлайн-лобби можно добровольно войти через Yandex ID;
   это привязывает серверный профиль к ID Яндекса и открывает таблицу Яндекса.
-- П. 1.3, 4.7 — звука в игре нет; `gameplayStop` вызывается при сворачивании,
+- П. 1.3, 4.7 — звук синтезируется через WebAudio (ассетов нет), кнопка
+  «Звук» есть в меню и в настройках партии; звук глушится на время рекламы
+  и учитывает SDK-состояние (`muteAudio` CrazyGames, `sounds` GamePush,
+  `isAudioEnabled` YouTube). `gameplayStop` вызывается при сворачивании,
   blur и по платформенным событиям `game_api_pause`/`game_api_resume`
   (они же покрывают автоматический стартовый interstitial Яндекса).
 - П. 1.6.1/1.6.2 — полноэкранный canvas + ResizeObserver, жесты, нет
@@ -137,9 +147,14 @@ GamePush (`window.onGPInit`, загрузчик `game-score.js`), а площа�
 
 ## Осознанно НЕ используем
 
-- Облачные игровые сейвы (п. 1.11 не применяется) — локальные настройки
-  хранятся в `localStorage`; вход через Yandex ID сам по себе их не синхронизирует.
+- Облачные игровые сейвы Яндекс-платформы как единственный источник: прогресс
+  (настройки/статистика) хранится в localStorage мгновенно и дублируется в
+  облако площадки (GamePush storage, CrazyGames data, YouTube saveData,
+  Яндекс player.getData/setData). При запуске берётся более свежая копия по
+  метке `saved_at`; без сети/облака игра работает на локальных данных.
 - Инап-покупки (п. 1.4, 1.13 не применяются) — покупок в игре нет.
+  Обязательное наличие покупок есть только у Fotostrana/Beeline/VK Play/
+  Kongregate — для целевых CrazyGames/YouTube/GamePush они не нужны.
 - Автоматическую авторизацию — диалог Yandex ID только по явному действию.
 - Асинхронный мультиплеер площадки — используется свой игровой сервер.
   Серверный лидерборд — общий и авторитетный; таблица Яндекса — отдельная
@@ -158,7 +173,9 @@ GamePush (`window.onGPInit`, загрузчик `game-score.js`), а площа�
    больше — лучше), иначе блок Яндекса покажет ошибку; серверная таблица
    при этом продолжит работать.
 4. Вкладка «Инап-покупки» пустая (покупок в игре нет).
-5. Опция cloud-saves ВЫКЛЮЧЕНА (настройки остаются локальными).
+5. Прогресс: игра пишет настройки/статистику в `localStorage` и дублирует их
+   в `player.setData({ dg_progress })`. Если облачные сейвы не нужны —
+   отключите их в консоли, локальный прогресс продолжит работать.
 6. Проверить в черновике: вход через Yandex ID, отказ/гостевой вариант,
    отображение обеих таблиц и запись серверных побед в `wins`.
 7. Реклама: interstitial — конец партии; rewarded — подсказка.
@@ -176,10 +193,32 @@ GamePush (`window.onGPInit`, загрузчик `game-score.js`), а площа�
 3. Добавить тесты детекта в `tests/platform.test.ts`.
 4. Дописать строку в таблицу выше и чек-лист подключения SDK.
 
-Переопределение площадки вручную: `?platform=yandex|gamepush|crazygames|gamedistribution|standalone`.
+Переопределение площадки вручную: `?platform=yandex|gamepush|crazygames|youtube|gamedistribution|standalone`.
 GameDistribution дополнительно: `?gamedist_id=ВАШ_ID`.
 В сборке `--mode site` цель `standalone` жёсткая: `?platform=` её не переопределяет.
-В сборке `--mode gamepush` цель `gamepush` тоже жёсткая.
+В сборках `--mode gamepush`, `--mode crazygames` и `--mode youtube` цель тоже жёсткая.
+
+## Новые площадки: чек-лист соответствия
+
+- **GameStart/GameReady** — вызывается после первого кадра (`platform.gameReady()`),
+  даже если стартовый лоадер уже удалён: Яндекс `LoadingAPI.ready`, GamePush
+  `gameStart`, CrazyGames `loadingStop`, YouTube `firstFrameReady`+`gameReady`.
+- **gameplayStart/Stop** — вокруг партии, при сворачивании (visibility/blur) и
+  по платформенным pause/resume. YouTube-плеер сам управляет паузой.
+- **Прогресс** — `loadProgress()` до `loadSettings()`, запись в облако
+  площадки с меткой `saved_at` (см. `src/core/progress.ts`).
+- **Язык** — только из SDK площадки: `ru` → русский, любой другой → английский;
+  без SDK — прежний дефолт `ru`.
+- **Звук** — кнопка «Звук» в меню и настройках партии; глушение на время
+  рекламы; состояние SDK (`muteAudio`, `gp.sounds`, `isAudioEnabled`) важнее
+  внутриигрового переключателя.
+- **Соцфункции/онлайн** — скрыты при `supportsOnline === false`
+  (YouTube Playables, GameDistribution): нет «Играть с другими», серверной
+  статистики и баннеров комнат.
+- **Rewarded** — кнопка не показывается при `supportsRewarded === false`
+  (динамически у GamePush по `ads.isRewardedAvailable`); награда только при
+  успешном показе. На площадках без рекламы упоминаний рекламы нет.
+- **Прелоадер GameDistribution** — вызывается ровно один раз за запуск.
 
 ## Как проверить рекламу локально
 

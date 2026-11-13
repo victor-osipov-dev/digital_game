@@ -84,6 +84,7 @@ const EN: Record<string, string> = {
   'Имена игроков:': 'Player names:',
   'Первый ход: от 30': 'First turn: 30+',
   'Анимация бота': 'Bot animation',
+  'Звук': 'Sound',
   'Текст:': 'Text:',
   'Карточки:': 'Tiles:',
   'Сложность ботов:': 'Bot difficulty:',

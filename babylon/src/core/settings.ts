@@ -1,5 +1,6 @@
 import { getLang, LangCode, setLang, t } from './lang';
 import { getPlatformInterfaceLang } from '../platform';
+import { scheduleProgressSave } from './progress';
 
 const KEY = 'dg.settings';
 // Версия схемы настроек. v2: локальный дефолт — один человек против ботов,
@@ -82,7 +83,12 @@ export function loadSettings(): Settings {
   // интерфейса площадки (требование Яндекс Игр 2.14); ручная настройка
   // всегда приоритетнее.
   const storedLang = parsed.lang === 'en' || parsed.lang === 'ru' ? parsed.lang : null;
-  const platformLang = getPlatformInterfaceLang() === 'en' ? 'en' : null;
+  // Язык площадки: поддерживаем только ru, любой другой/неизвестный — en
+  // (требование CrazyGames/YouTube/GamePush). Без SDK — прежний дефолт ru.
+  const sdkLang = getPlatformInterfaceLang();
+  const platformLang: LangCode | null = sdkLang
+    ? (sdkLang.toLowerCase().startsWith('ru') ? 'ru' : 'en')
+    : null;
   const lang = storedLang ?? platformLang ?? 'ru';
   setLang(lang);
   const d = defaults();
@@ -123,7 +129,15 @@ export function saveSettings(patch: Partial<Settings>): Settings {
   const s = { ...loadSettings(), ...patch };
   cache = s;
   fixup();
-  localStorage.setItem(KEY, JSON.stringify(s));
+  // saved_at нужен для выбора более свежей копии между устройством и облаком.
+  const saved_at = Date.now();
+  const payload = { ...s, saved_at };
+  try {
+    localStorage.setItem(KEY, JSON.stringify(payload));
+  } catch {
+    /* приватный режим/квота — игра продолжает работать в памяти */
+  }
+  scheduleProgressSave({ version: 1, saved_at, settings: payload });
   applyLang(s.lang);
   return s;
 }

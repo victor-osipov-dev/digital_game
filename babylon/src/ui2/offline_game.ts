@@ -44,6 +44,7 @@ import {
 } from './uiskin';
 import { openRulesOverlay, openSettingsOverlay } from './overlays';
 import { platform, withInterstitial } from '../platform';
+import { play } from '../core/audio';
 import { measureTextWidth } from './menu_screen';
 import { viewHeight, viewWidth } from './viewport';
 import type { OfflineHost } from './ports';
@@ -2243,6 +2244,16 @@ export class OfflineGame {
     this.clearOverlays();
     this.reportPlatformWins();
     platform.gameplayStop();
+    // Звук итога: победная/проигрышная фраза (для сетевой партии — по своему месту).
+    try {
+      const me = this.state && this.state.local_seat >= 0
+        ? this.state.local_seat
+        : this.localStatsHumanSeat;
+      const won = !!this.state && this.state.winner >= 0 && (me < 0 || this.state.winner === me);
+      play(won ? 'win' : 'lose');
+    } catch {
+      /* звук не критичен */
+    }
     this.running = false;
     this.stopTimers();
     const { overlay } = modalOverlay(this.popups, 'win', { alpha: 0.9, zIndex: 850 });
@@ -3181,6 +3192,7 @@ export class OfflineGame {
     const drawingSeat = this.state.current;
     const res = this.state.drawFromDeck();
     if (res.ok) {
+      play('draw');
       if (res.tile && deckRect.w > 0 && deckRect.h > 0) {
         const ts = tileSize();
         this.flightOrigins.set(res.tile.id, {
@@ -3699,6 +3711,7 @@ export class OfflineGame {
     }
     const index = dd.index === undefined ? -1 : dd.index;
     const ok = this.applyDrop(dd.face.id, dd.src, dd.targetRow, index);
+    if (ok) play('place');
     if (ok && previewRect.w > 0 && previewRect.h > 0) {
       this.flightOrigins.set(dd.face.id, { face: dd.face, rect: previewRect });
     }

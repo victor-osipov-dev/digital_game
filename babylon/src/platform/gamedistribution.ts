@@ -67,6 +67,9 @@ function sdk(): GDSdk | null {
 export class GameDistributionPlatform extends BasePlatform {
   readonly id = 'gamedistribution' as const;
   readonly supportsRewarded = true;
+  readonly supportsOnline = false;
+
+  private preloadCalled = false;
 
   get isEmbedded(): boolean {
     return true;
@@ -90,6 +93,15 @@ export class GameDistributionPlatform extends BasePlatform {
           await loadScript('https://html5.api.gamedistribution.com/main.min.js', 4000);
         } catch {
           /* без SDK игра работает как standalone */
+        }
+      }
+      // Прелоадер вызывается ровно один раз за запуск (требование площадки).
+      if (!this.preloadCalled && window.gdsdk) {
+        this.preloadCalled = true;
+        try {
+          sdk()?.preloadAd?.('rewarded');
+        } catch {
+          /* ignore */
         }
       }
     } catch {

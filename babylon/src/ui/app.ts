@@ -49,6 +49,9 @@ export class App implements MenuHost, OfflineHost {
   // сервер сразу сообщит, числится ли за ним комната/партия. Комната
   // привязана к своему серверу, поэтому сначала reconnect на прошлый host.
   private startMenuConnection(): void {
+    // Площадка без БЭК/онлайна (YouTube Playables, GameDistribution):
+    // не подключаемся к серверу и не показываем баннеры комнат.
+    if (!platform.supportsOnline) return;
     if (this.api.isOpen || this.menuConnectionTask) return;
     const task = (async () => {
       try {
@@ -278,17 +281,20 @@ export class App implements MenuHost, OfflineHost {
   }
 
   onOnline(): void {
+    if (!platform.supportsOnline) return;
     this.show('online');
   }
 
   // pending_room для баннера главного меню
   pendingRoom(): RoomLobbyView | null {
+    if (!platform.supportsOnline) return null;
     return this.api.pendingRoom;
   }
 
   // Сетевая статистика для окна «Статистика». Источник — серверная
   // таблица лидеров; локальные счётчики её не дублируют.
   async onlineStats(): Promise<OnlineStats | null> {
+    if (!platform.supportsOnline) return null;
     const cached = this.api.user;
     if (this.api.session.isOpen) {
       try {

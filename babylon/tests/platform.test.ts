@@ -3,6 +3,8 @@ import { detectPlatformId } from '../src/platform/detect';
 import { StandalonePlatform } from '../src/platform/noop';
 import { YandexPlatform } from '../src/platform/yandex';
 import { GamePushPlatform } from '../src/platform/gamepush';
+import { CrazyGamesPlatform } from '../src/platform/crazygames';
+import { YouTubePlatform } from '../src/platform/youtube';
 
 // Минимальная заглушка window для провайдера Яндекса: SDK уже «внедрён»,
 // поэтому init не грузит /sdk.js, а берёт готовый объект.
@@ -21,9 +23,37 @@ function installYandex(ysdk: Record<string, unknown>): void {
 // Заглушка GamePush: SDK «пришёл» в onGPInit, поэтому init не ждёт загрузку.
 function installGamePush(gp: Record<string, unknown>): void {
   const win: Record<string, unknown> = {
+    setTimeout: (fn: () => void, ms?: number) => setTimeout(fn, ms) as unknown as number,
+    clearTimeout: (id: number) => clearTimeout(id as unknown as ReturnType<typeof setTimeout>),
     location: { search: '', hostname: 'example.com' },
     __dgGP: gp,
     __dgGamePush: true,
+    self: {},
+  };
+  win.top = win;
+  (globalThis as unknown as Record<string, unknown>).window = win;
+}
+
+// Заглушка CrazyGames SDK v3: SDK уже «внедрён», init возвращает промис.
+function installCrazyGames(sdk: Record<string, unknown>): void {
+  const win: Record<string, unknown> = {
+    setTimeout: (fn: () => void, ms?: number) => setTimeout(fn, ms) as unknown as number,
+    clearTimeout: (id: number) => clearTimeout(id as unknown as ReturnType<typeof setTimeout>),
+    location: { search: '', hostname: 'example.com' },
+    CrazyGames: { SDK: sdk },
+    self: {},
+  };
+  win.top = win;
+  (globalThis as unknown as Record<string, unknown>).window = win;
+}
+
+// Заглушка YouTube Playables SDK: глобальный ytgame.
+function installYouTube(sdk: Record<string, unknown>): void {
+  const win: Record<string, unknown> = {
+    setTimeout: (fn: () => void, ms?: number) => setTimeout(fn, ms) as unknown as number,
+    clearTimeout: (id: number) => clearTimeout(id as unknown as ReturnType<typeof setTimeout>),
+    location: { search: '', hostname: 'example.com' },
+    ytgame: sdk,
     self: {},
   };
   win.top = win;
@@ -54,7 +84,13 @@ describe('detectPlatformId', () => {
     // GamePush — агрегатор: его SDK важнее нативного SDK площадки.
     expect(detectPlatformId({ hasGamePush: true, hasYaGames: true })).toBe('gamepush');
     expect(detectPlatformId({ hasCrazyGames: true })).toBe('crazygames');
+    expect(detectPlatformId({ hasYtGame: true })).toBe('youtube');
     expect(detectPlatformId({ hasGDSdk: true })).toBe('gamedistribution');
+  });
+
+  it('явный ?platform=youtube', () => {
+    expect(detectPlatformId({ query: '?platform=youtube', hasYaGames: true })).toBe('youtube');
+    expect(detectPlatformId({ query: '?platform=yt' })).toBe('youtube');
   });
 
   it('эвристика по хосту', () => {
@@ -454,5 +490,190 @@ describe('GamePushPlatform', () => {
     handlers.resume?.();
     expect(paused).toBe(1);
     expect(resumed).toBe(1);
+  });
+
+  it('прогресс через storage и звук через sounds', async () => {
+    const stored: Record<string, unknown> = {};
+    const soundCalls: string[] = [];
+    const handlers: Record<string, () => void> = {};
+    const sounds = {
+      isMuted: false,
+      mute: () => { soundCalls.push('mute'); sounds.isMuted = true; },
+      unmute: () => { soundCalls.push('unmute'); sounds.isMuted = false; },
+      on: (ev: string, cb: () => void) => { handlers[ev] = cb; },
+    };
+    installGamePush({
+      storage: {
+        get: async (key: string) => stored[key] ?? null,
+        set: async (key: string, value: unknown) => { stored[key] = value; },
+      },
+      sounds,
+    });
+    const p = new GamePushPlatform();
+    await p.init();
+    expect(await p.saveProgress({ saved_at: 5, settings: { lang: 'ru' } })).toBe(true);
+    expect(await p.loadProgress()).toMatchObject({ savedAt: 5, data: { settings: { lang: 'ru' } } });
+    expect(p.isAudioEnabled()).toBe(true);
+    p.setAudioEnabled(false);
+    p.setAudioEnabled(true);
+    expect(soundCalls).toEqual(['mute', 'unmute']);
+    let audio = true;
+    p.onAudioChange((v) => { audio = v; });
+    sounds.isMuted = true;
+    handlers.mute?.();
+    expect(audio).toBe(false);
+  });
+
+  it('supportsRewarded зависит от доступности рекламы', async () => {
+    installGamePush({ ads: { isRewardedAvailable: false } });
+    const p = new GamePushPlatform();
+    await p.init();
+    expect(p.supportsRewarded).toBe(false);
+    expect(p.supportsOnline).toBe(true);
+  });
+});
+
+describe('CrazyGamesPlatform (SDK v3)', () => {
+  it('init вызывает SDK.init, loadingStart/Stop и gameplay', async () => {
+    const calls: string[] = [];
+    installCrazyGames({
+      environment: 'local',
+      init: async () => { calls.push('init'); },
+      game: {
+        loadingStart: () => calls.push('loadingStart'),
+        loadingStop: () => calls.push('loadingStop'),
+        gameplayStart: () => calls.push('gameplayStart'),
+        gameplayStop: () => calls.push('gameplayStop'),
+      },
+      user: { systemInfo: { locale: 'ru-RU', device: { type: 'mobile' } } },
+    });
+    const p = new CrazyGamesPlatform();
+    await p.init();
+    expect(calls).toContain('init');
+    expect(calls).toContain('loadingStart');
+    p.gameReady();
+    p.gameplayStart();
+    p.gameplayStop();
+    expect(calls).toEqual(['init', 'loadingStart', 'loadingStop', 'gameplayStart', 'gameplayStop']);
+    expect(p.getInterfaceLang()).toBe('ru');
+    expect(p.getDevice()).toBe('mobile');
+  });
+
+  it('реклама: midgame и rewarded, награда только по adFinished', async () => {
+    const kinds: string[] = [];
+    let mode: 'finish' | 'error' = 'finish';
+    installCrazyGames({
+      environment: 'crazygames',
+      init: async () => undefined,
+      ad: {
+        requestAd: (kind: string, cb: Record<string, (a?: unknown, b?: unknown) => void>) => {
+          kinds.push(kind);
+          if (mode === 'finish') cb.adFinished?.();
+          else cb.adError?.(new Error('no ad'));
+        },
+      },
+    });
+    const p = new CrazyGamesPlatform();
+    await p.init();
+    expect(await p.showInterstitial()).toBe(true);
+    expect(await p.showRewarded()).toBe(true);
+    mode = 'error';
+    expect(await p.showRewarded()).toBe(false);
+    expect(kinds).toEqual(['midgame', 'rewarded', 'rewarded']);
+  });
+
+  it('прогресс через data и muteAudio важнее кнопки звука', async () => {
+    const store: Record<string, string> = {};
+    let settings: Record<string, unknown> = { muteAudio: false };
+    const listeners: Array<(s: Record<string, unknown>) => void> = [];
+    installCrazyGames({
+      environment: 'crazygames',
+      init: async () => undefined,
+      data: {
+        getItem: (key: string) => store[key] ?? null,
+        setItem: (key: string, value: string) => { store[key] = value; },
+      },
+      game: {
+        get settings() { return settings; },
+        addSettingsChangeListener: (cb: (s: Record<string, unknown>) => void) => { listeners.push(cb); },
+      },
+    });
+    const p = new CrazyGamesPlatform();
+    await p.init();
+    expect(await p.saveProgress({ saved_at: 9, settings: { lang: 'en' } })).toBe(true);
+    expect(await p.loadProgress()).toMatchObject({ savedAt: 9 });
+    expect(p.isAudioEnabled()).toBe(true);
+    let audio = true;
+    p.onAudioChange((v) => { audio = v; });
+    settings = { muteAudio: true };
+    listeners.forEach((cb) => cb(settings));
+    expect(audio).toBe(false);
+    expect(p.isAudioEnabled()).toBe(false);
+  });
+});
+
+describe('YouTubePlatform (Playables)', () => {
+  it('firstFrameReady до gameReady, язык и звук из system', async () => {
+    const calls: string[] = [];
+    let audioCb: ((v: boolean) => void) | null = null;
+    let pauseCb: (() => void) | null = null;
+    let resumeCb: (() => void) | null = null;
+    installYouTube({
+      IN_PLAYABLES_ENV: true,
+      game: {
+        firstFrameReady: () => calls.push('firstFrame'),
+        gameReady: () => calls.push('ready'),
+      },
+      system: {
+        getLanguage: async () => 'es-419',
+        isAudioEnabled: () => true,
+        onAudioEnabledChange: (cb: (v: boolean) => void) => { audioCb = cb; },
+        onPause: (cb: () => void) => { pauseCb = cb; },
+        onResume: (cb: () => void) => { resumeCb = cb; },
+      },
+    });
+    const p = new YouTubePlatform();
+    await p.init();
+    expect(p.getInterfaceLang()).toBe('es');
+    expect(p.supportsOnline).toBe(false);
+    p.gameReady();
+    expect(calls).toEqual(['firstFrame', 'ready']);
+    let audio = true;
+    p.onAudioChange((v) => { audio = v; });
+    const fireAudio = audioCb as ((v: boolean) => void) | null;
+    if (fireAudio) fireAudio(false);
+    expect(audio).toBe(false);
+    let paused = 0;
+    let resumed = 0;
+    p.onPause(() => { paused += 1; });
+    p.onResume(() => { resumed += 1; });
+    const firePause = pauseCb as (() => void) | null;
+    const fireResume = resumeCb as (() => void) | null;
+    if (firePause) firePause();
+    if (fireResume) fireResume();
+    expect(paused).toBe(1);
+    expect(resumed).toBe(1);
+  });
+
+  it('реклама и прогресс через loadData/saveData', async () => {
+    let blob = '';
+    installYouTube({
+      IN_PLAYABLES_ENV: true,
+      ads: {
+        requestInterstitialAd: async () => undefined,
+        requestRewardedAd: async (id: string) => id === 'dg-hint',
+      },
+      game: {
+        loadData: async () => blob,
+        saveData: async (data: string) => { blob = data; },
+      },
+      system: { getLanguage: async () => 'en-US' },
+    });
+    const p = new YouTubePlatform();
+    await p.init();
+    expect(await p.showInterstitial()).toBe(true);
+    expect(await p.showRewarded()).toBe(true);
+    expect(await p.saveProgress({ saved_at: 3, settings: { lang: 'en' } })).toBe(true);
+    expect(await p.loadProgress()).toMatchObject({ savedAt: 3 });
   });
 });

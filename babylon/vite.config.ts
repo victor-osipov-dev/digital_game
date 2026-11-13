@@ -32,12 +32,28 @@ function gamePushSnippetPlugin(): { name: string; transformIndexHtml: (html: str
   };
 }
 
+// Скрипт SDK площадки ставится в <head> ДО кода игры (требование YouTube
+// Playables; для CrazyGames — штатное подключение v3).
+function sdkScriptPlugin(src: string): { name: string; transformIndexHtml: (html: string) => string } {
+  return {
+    name: 'dg-sdk-script',
+    transformIndexHtml(html: string): string {
+      return html.replace('</head>', `  <script src="${src}"></script>\n</head>`);
+    },
+  };
+}
+
+const CRAZYGAMES_SDK = 'https://sdk.crazygames.com/crazygames-sdk-v3.js';
+const YOUTUBE_SDK = 'https://www.youtube.com/game_api/v1';
+
 // Варианты сборки (переключаются режимом Vite):
 //   vite build                  — auto: площадка определяется в рантайме.
 //                                 Это архив для Яндекс Игр (dist/).
 //   vite build --mode yandex    — принудительно Яндекс Игры (dist/).
 //   vite build --mode site      — только свой сайт, без Яндекса (dist-site/).
 //   vite build --mode gamepush  — GamePush SDK + своя панель (dist-gamepush/).
+//   vite build --mode crazygames — CrazyGames SDK v3 (dist-crazygames/).
+//   vite build --mode youtube   — YouTube Playables SDK (dist-youtube/).
 export default defineConfig(({ mode }) => {
   const target = mode === 'site'
     ? 'standalone'
@@ -45,16 +61,31 @@ export default defineConfig(({ mode }) => {
       ? 'yandex'
       : mode === 'gamepush'
         ? 'gamepush'
-        : 'auto';
+        : mode === 'crazygames'
+          ? 'crazygames'
+          : mode === 'youtube'
+            ? 'youtube'
+            : 'auto';
   const outDir = mode === 'site'
     ? 'dist-site'
     : mode === 'gamepush'
       ? 'dist-gamepush'
-      : 'dist';
+      : mode === 'crazygames'
+        ? 'dist-crazygames'
+        : mode === 'youtube'
+          ? 'dist-youtube'
+          : 'dist';
+  const plugins = mode === 'gamepush'
+    ? [gamePushSnippetPlugin()]
+    : mode === 'crazygames'
+      ? [sdkScriptPlugin(CRAZYGAMES_SDK)]
+      : mode === 'youtube'
+        ? [sdkScriptPlugin(YOUTUBE_SDK)]
+        : [];
   return {
     base: './',
     server: { port: 5173, host: true },
-    plugins: mode === 'gamepush' ? [gamePushSnippetPlugin()] : [],
+    plugins,
     // Значение видно коду как константа __DG_PLATFORM_TARGET__.
     define: { __DG_PLATFORM_TARGET__: JSON.stringify(target) },
     build: { outDir, emptyOutDir: true, target: 'es2022' },

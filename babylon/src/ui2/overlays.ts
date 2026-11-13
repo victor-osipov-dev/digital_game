@@ -1,6 +1,7 @@
 import { ScrollViewer, StackPanel } from '@babylonjs/gui';
 import { t } from '../core/lang';
 import { fs, loadSettings, saveSettings } from '../core/settings';
+import { applySoundPreference } from '../core/sound';
 import { rulesText } from '../core/rules';
 import { TEXT_SCALE_NAMES, TILE_SIZE_NAMES } from '../core/settings';
 import {
@@ -199,6 +200,8 @@ export function openStatsOverlay(
     });
   } else {
     applyMerged(null);
+    // Площадка без онлайна: серверных данных нет, упоминание о них лишнее.
+    noteLab.isVisible = false;
   }
 
   const closeBtn = mkButton(t('Закрыть'), {
@@ -296,6 +299,19 @@ export function openSettingsOverlay(
   });
   chk.root.horizontalAlignment = 0;
   fields.addControl(chk.root);
+  // Звук применяется сразу, без пересборки экрана (требование «настройки
+  // во время партии действуют немедленно»).
+  const chkSound = checkboxRow(t('Звук'), S.sound, {
+    height: Math.max(fieldHeight, Math.ceil(fieldFont * 2.4)),
+    fontSize: fieldFont,
+    maxLabelWidth: contentWidth - Math.round(fieldHeight * 0.45) - 8,
+    onChange: (v: boolean) => {
+      saveSettings({ sound: v });
+      applySoundPreference(v);
+    },
+  });
+  chkSound.root.horizontalAlignment = 0;
+  fields.addControl(chkSound.root);
   const close = mkButton(t('Закрыть'), { fontSize: fs(16), height: closeHeight, width: Math.min(180, contentWidth), theme: BUTTON_STYLE.green });
   close.onPointerUpObservable.add(() => {
     closeOv();

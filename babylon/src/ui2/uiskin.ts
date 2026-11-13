@@ -11,6 +11,8 @@ import {
 } from '@babylonjs/gui';
 
 import { viewWidth } from './viewport';
+import { play } from '../core/audio';
+import { unlockGameAudio } from '../core/sound';
 
 const FONT = 'Arial, sans-serif';
 
@@ -604,11 +606,13 @@ export function mkButton(label: string, opts: ButtonOpts = {}): Button {
   b.onPointerDownObservable.add(() => {
     b.background = th.press;
     pressedButtons.add(b);
+    unlockGameAudio();
   });
   if (opts.onClick !== undefined) b.onPointerUpObservable.add(opts.onClick);
   b.onPointerUpObservable.add(() => {
     pressedButtons.delete(b);
     b.background = th.hover;
+    play('click');
   });
   pressThemes.set(b, { base: th.bg, press: th.press });
   installButtonReset();

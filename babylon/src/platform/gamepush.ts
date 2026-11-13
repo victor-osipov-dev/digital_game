@@ -3,6 +3,7 @@ import type {
   PlatformLeaderboard,
   PlatformLeaderboardEntry,
   PlatformPlayer,
+  PlatformProgress,
 } from './types';
 import { BasePlatform } from './base';
 import {
@@ -36,6 +37,18 @@ interface GpPlayer {
   sync?: (opts?: Record<string, unknown>) => Promise<unknown>;
   login?: () => Promise<unknown> | void;
   on?: (event: string, cb: (...args: unknown[]) => void) => void;
+}
+
+interface GpStorage {
+  get?: (key: string) => Promise<unknown>;
+  set?: (key: string, value: unknown) => Promise<unknown> | void;
+}
+
+interface GpSounds {
+  isMuted?: boolean;
+  mute?: () => void;
+  unmute?: () => void;
+  on?: (event: string, cb: () => void) => void;
 }
 
 interface GpLeaderboardPlayer {
@@ -79,6 +92,8 @@ interface GamePushSdk {
   leaderboard?: GpLeaderboard;
   fullscreen?: GpFullscreen;
   platform?: GpPlatformInfo;
+  storage?: GpStorage;
+  sounds?: GpSounds;
   language?: string;
   isMobile?: boolean;
   isPaused?: boolean;
@@ -243,10 +258,14 @@ function rewardedFinished(p: Promise<unknown> | void, ms: number): Promise<boole
  */
 export class GamePushPlatform extends BasePlatform {
   readonly id = 'gamepush' as const;
-  readonly supportsRewarded = true;
+  readonly supportsOnline = true;
+  readonly supportsAudio = true;
   readonly supportsFullscreen = true;
   readonly supportsReview = false;
   readonly supportsShortcut = false;
+  // Реклама доступна динамически: значение уточняется в init() по
+  // ads.isRewardedAvailable, чтобы не показывать кнопки награды без рекламы.
+  supportsRewarded = false;
 
   get isEmbedded(): boolean {
     // GamePush — платформенный слой; даже на своём сайте он управляет
@@ -257,7 +276,9 @@ export class GamePushPlatform extends BasePlatform {
   private lang: string | null = null;
   private pauseCbs: Array<() => void> = [];
   private resumeCbs: Array<() => void> = [];
+  private audioCbs: Array<(enabled: boolean) => void> = [];
   private subscribed = false;
+  private soundsSubscribed = false;
   // Какая таблица wins реально ответила: ручная scoped или глобальная.
   private boardRef: ScopedBoardRef | 'global' | null = null;
 
@@ -268,6 +289,7 @@ export class GamePushPlatform extends BasePlatform {
       // позже, методы всё равно увидят его через sdk().
       const gp = await this.waitForSdk(1200);
       if (!gp) return;
+      this.supportsRewarded = !!gp.ads && gp.ads.isRewardedAvailable !== false;
       this.lang = langCode(gp.language);
       this.subscribe();
     } catch {
@@ -288,6 +310,7 @@ export class GamePushPlatform extends BasePlatform {
   }
 
   private subscribe(): void {
+    this.subscribeSounds();
     if (this.subscribed) return;
     const gp = sdk();
     if (!gp?.on) return;
@@ -299,6 +322,34 @@ export class GamePushPlatform extends BasePlatform {
     }
     try {
       gp.on('resume', () => this.fire(this.resumeCbs));
+    } catch {
+      /* ignore */
+    }
+    this.subscribeSounds();
+  }
+
+  private subscribeSounds(): void {
+    if (this.soundsSubscribed) return;
+    const sounds = sdk()?.sounds;
+    if (!sounds?.on) return;
+    this.soundsSubscribed = true;
+    const notify = (): void => {
+      const enabled = !sounds.isMuted;
+      for (const cb of this.audioCbs) {
+        try {
+          cb(enabled);
+        } catch {
+          /* ignore */
+        }
+      }
+    };
+    try {
+      sounds.on('mute', notify);
+    } catch {
+      /* ignore */
+    }
+    try {
+      sounds.on('unmute', notify);
     } catch {
       /* ignore */
     }
@@ -618,6 +669,68 @@ export class GamePushPlatform extends BasePlatform {
 
   getInterfaceLang(): string | null {
     return this.lang ?? navigatorLang();
+  }
+
+  async loadProgress(): Promise<PlatformProgress | null> {
+    try {
+      const storage = sdk()?.storage;
+      if (!storage?.get) return null;
+      const raw = await waitValue(
+        Promise.resolve(storage.get('dg_progress')),
+        5000,
+        null,
+      );
+      if (raw === undefined || raw === null) return null;
+      const parsed = typeof raw === 'string'
+        ? JSON.parse(raw) as Record<string, unknown>
+        : raw as Record<string, unknown>;
+      if (!parsed || typeof parsed !== 'object') return null;
+      const savedAt = Number(parsed.saved_at ?? 0);
+      return { data: parsed, savedAt: Number.isFinite(savedAt) ? savedAt : 0 };
+    } catch {
+      return null;
+    }
+  }
+
+  async saveProgress(data: Record<string, unknown>): Promise<boolean> {
+    const gp = sdk();
+    if (!gp?.storage?.set) return false;
+    try {
+      await waitValue(
+        Promise.resolve(gp.storage.set('dg_progress', data)),
+        5000,
+        undefined,
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  isAudioEnabled(): boolean {
+    try {
+      const sounds = sdk()?.sounds;
+      if (typeof sounds?.isMuted === 'boolean') return !sounds.isMuted;
+    } catch {
+      /* ignore */
+    }
+    return true;
+  }
+
+  onAudioChange(cb: (enabled: boolean) => void): void {
+    this.audioCbs.push(cb);
+    this.subscribeSounds();
+  }
+
+  setAudioEnabled(enabled: boolean): void {
+    try {
+      const sounds = sdk()?.sounds;
+      if (!sounds) return;
+      if (enabled) sounds.unmute?.();
+      else sounds.mute?.();
+    } catch {
+      /* ignore */
+    }
   }
 
   getDevice(): DeviceKind {

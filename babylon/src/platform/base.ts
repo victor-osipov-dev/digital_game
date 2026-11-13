@@ -1,4 +1,11 @@
-import type { DeviceKind, PlatformAPI, PlatformId, PlatformLeaderboard, PlatformPlayer } from './types';
+import type {
+  DeviceKind,
+  PlatformAPI,
+  PlatformId,
+  PlatformLeaderboard,
+  PlatformPlayer,
+  PlatformProgress,
+} from './types';
 import {
   browserExitFullscreen,
   browserFullscreenAvailable,
@@ -17,6 +24,8 @@ export abstract class BasePlatform implements PlatformAPI {
   abstract get isEmbedded(): boolean;
 
   readonly supportsRewarded: boolean = false;
+  readonly supportsOnline: boolean = true;
+  readonly supportsAudio: boolean = false;
   readonly supportsFullscreen: boolean = browserFullscreenAvailable();
   readonly supportsReview: boolean = false;
   readonly supportsShortcut: boolean = false;
@@ -65,6 +74,26 @@ export abstract class BasePlatform implements PlatformAPI {
 
   getDevice(): DeviceKind {
     return 'unknown';
+  }
+
+  async loadProgress(): Promise<PlatformProgress | null> {
+    return null;
+  }
+
+  async saveProgress(_data: Record<string, unknown>): Promise<boolean> {
+    return false;
+  }
+
+  isAudioEnabled(): boolean {
+    return true;
+  }
+
+  onAudioChange(_cb: (enabled: boolean) => void): void {
+    // no-op: у площадки нет управления звуком
+  }
+
+  setAudioEnabled(_enabled: boolean): void {
+    // no-op
   }
 
   isFullscreen(): boolean {

@@ -1,5 +1,8 @@
 import { ArcRotateCamera, Engine, Scene, Vector3 } from '@babylonjs/core';
 import { loadSettings } from './core/settings';
+import { loadProgress, flushProgress } from './core/progress';
+import { setAdMuted } from './core/audio';
+import { initSound } from './core/sound';
 import { initPlatform, platform } from './platform';
 import { App } from './ui/app';
 
@@ -12,9 +15,12 @@ async function main(): Promise<void> {
   camera.detachControl();
   // Платформа инициализируется ДО настроек: автоопределение языка
   // площадки используется как дефолт для первого запуска. Таймаут внутри,
-  // игра стартует даже без сети/SDK.
+  // игра стартует даже без сети/SDK. Затем подтягиваем облачный прогресс
+  // (если он свежее локального) и только после этого читаем настройки.
   await initPlatform({ timeoutMs: 1500 });
-  loadSettings();
+  await loadProgress();
+  const settings = loadSettings();
+  initSound(settings.sound);
   const app = new App(scene, canvas);
   (window as unknown as Record<string, unknown>).__app = app;
 
@@ -60,28 +66,39 @@ async function main(): Promise<void> {
   // Здесь же сообщаем площадке, что игра готова (Yandex Game Ready и аналоги).
   scene.onAfterRenderObservable.addOnce(() => {
     const loader = document.getElementById('boot-loader');
-    if (!loader) return;
-    loader.classList.add('is-hidden');
-    window.setTimeout(() => loader.remove(), 400);
+    if (loader) {
+      loader.classList.add('is-hidden');
+      window.setTimeout(() => loader.remove(), 400);
+    }
+    // gameReady вызываем всегда, даже если стартовый лоадер уже удалён:
+    // площадки (Яндекс/GamePush/CrazyGames/YouTube) ждут этот сигнал.
     platform.gameReady();
   });
 
   // Вкладка скрыта/свернута — игровой процесс останавливается для площадки.
   // При возврате возобновляем, только если партия реально идёт.
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) platform.gameplayStop();
-    else if (app.isPlaying()) platform.gameplayStart();
+    if (document.hidden) {
+      platform.gameplayStop();
+      flushProgress();
+    } else if (app.isPlaying()) platform.gameplayStart();
   });
   window.addEventListener('blur', () => platform.gameplayStop());
   window.addEventListener('focus', () => {
     if (app.isPlaying()) platform.gameplayStart();
   });
+  window.addEventListener('beforeunload', () => flushProgress());
 
   // Платформенные события паузы/возобновления: платформа сама сообщает о
-  // показе рекламы (включая автоматический стартовый interstitial Яндекса)
-  // и сворачивании вкладки — размечаем геймплей теми же методами.
-  platform.onPause(() => platform.gameplayStop());
+  // показе рекламы (включая автоматический стартовый interstitial) и
+  // сворачивании вкладки. На паузе глушим звук и сохраняем прогресс.
+  platform.onPause(() => {
+    setAdMuted(true);
+    flushProgress();
+    platform.gameplayStop();
+  });
   platform.onResume(() => {
+    setAdMuted(false);
     if (app.isPlaying()) platform.gameplayStart();
   });
 

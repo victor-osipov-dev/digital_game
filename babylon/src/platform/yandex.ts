@@ -1,4 +1,10 @@
-import type { DeviceKind, PlatformAPI, PlatformLeaderboard, PlatformPlayer } from './types';
+import type {
+  DeviceKind,
+  PlatformAPI,
+  PlatformLeaderboard,
+  PlatformPlayer,
+  PlatformProgress,
+} from './types';
 import {
   browserExitFullscreen,
   browserIsFullscreen,
@@ -56,6 +62,8 @@ interface YsdkPlayer {
   getUniqueID?: () => string;
   getName?: () => string;
   isAuthorized?: () => boolean;
+  getData?: (keys?: string[]) => Promise<Record<string, unknown>>;
+  setData?: (data: Record<string, unknown>, flush?: boolean) => Promise<unknown>;
 }
 interface YsdkLeaderboardEntry {
   score?: number;
@@ -148,11 +156,14 @@ export class YandexPlatform implements PlatformAPI {
   readonly id = 'yandex' as const;
   readonly isEmbedded = true;
   readonly supportsRewarded = true;
+  readonly supportsOnline = true;
+  readonly supportsAudio = false;
   readonly supportsFullscreen = true;
   readonly supportsReview = true;
   readonly supportsShortcut = true;
 
   private ysdk: Ysdk | null = null;
+  private playerObj: YsdkPlayer | null = null;
   private lang: string | null = null;
   private pauseCbs: Array<() => void> = [];
   private resumeCbs: Array<() => void> = [];
@@ -345,10 +356,21 @@ export class YandexPlatform implements PlatformAPI {
     });
   }
 
-  async getPlayer(): Promise<PlatformPlayer | null> {
+  private async resolvePlayer(ms = 6000): Promise<YsdkPlayer | null> {
+    if (this.playerObj) return this.playerObj;
     try {
       if (!this.ysdk?.getPlayer) return null;
-      const player = await withTimeout(this.ysdk.getPlayer(), 6000, null as unknown as YsdkPlayer);
+      const player = await withTimeout(this.ysdk.getPlayer(), ms, null as unknown as YsdkPlayer);
+      if (player) this.playerObj = player;
+      return player;
+    } catch {
+      return null;
+    }
+  }
+
+  async getPlayer(): Promise<PlatformPlayer | null> {
+    try {
+      const player = await this.resolvePlayer();
       if (!player) return null;
       let uid = '';
       let name = '';
@@ -538,6 +560,56 @@ export class YandexPlatform implements PlatformAPI {
 
   getInterfaceLang(): string | null {
     return this.lang;
+  }
+
+  async loadProgress(): Promise<PlatformProgress | null> {
+    try {
+      const player = await this.resolvePlayer(4000);
+      const getData = player?.getData;
+      if (!getData) return null;
+      const data = await withTimeout(
+        getData.call(player, ['dg_progress']),
+        5000,
+        null as unknown as Record<string, unknown>,
+      );
+      const record = data?.dg_progress;
+      if (!record || typeof record !== 'object') return null;
+      const parsed = record as Record<string, unknown>;
+      const savedAt = Number(parsed.saved_at ?? 0);
+      return { data: parsed, savedAt: Number.isFinite(savedAt) ? savedAt : 0 };
+    } catch {
+      return null;
+    }
+  }
+
+  async saveProgress(data: Record<string, unknown>): Promise<boolean> {
+    try {
+      const player = await this.resolvePlayer(4000);
+      const setData = player?.setData;
+      if (!setData) return false;
+      const timedOut = Symbol('save-timeout');
+      const result = await withTimeout<unknown>(
+        setData.call(player, { dg_progress: data }, true) as Promise<unknown>,
+        5000,
+        timedOut,
+      );
+      return result !== timedOut;
+    } catch {
+      return false;
+    }
+  }
+
+  isAudioEnabled(): boolean {
+    // У Яндекс Игр нет SDK-управления звуком: площадка не глушит игру сама.
+    return true;
+  }
+
+  onAudioChange(_cb: (enabled: boolean) => void): void {
+    // no-op
+  }
+
+  setAudioEnabled(_enabled: boolean): void {
+    // no-op
   }
 
   /**

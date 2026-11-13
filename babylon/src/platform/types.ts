@@ -7,7 +7,13 @@
 // - провайдер обязан никогда не ронять игру: любой вызов SDK обёрнут,
 //   при отсутствии SDK всё превращается в no-op;
 // - инициализация ограничена таймаутом и не блокирует запуск игры.
-export type PlatformId = 'yandex' | 'gamepush' | 'crazygames' | 'gamedistribution' | 'standalone';
+export type PlatformId =
+  | 'yandex'
+  | 'gamepush'
+  | 'crazygames'
+  | 'youtube'
+  | 'gamedistribution'
+  | 'standalone';
 
 export type DeviceKind = 'desktop' | 'mobile' | 'tablet' | 'tv' | 'unknown';
 
@@ -29,12 +35,21 @@ export interface PlatformLeaderboard {
   error?: string;
 }
 
+export interface PlatformProgress {
+  data: Record<string, unknown>;
+  savedAt: number;
+}
+
 export interface PlatformAPI {
   readonly id: PlatformId;
   /** Игра запущена внутри iframe площадки (а не отдельной страницей). */
   readonly isEmbedded: boolean;
-  /** Площадка умеет видеорекламу с вознаграждением. */
+  /** Площадка умеет видеорекламу с вознаграждением (динамически — по доступности). */
   readonly supportsRewarded: boolean;
+  /** Онлайн-партии и серверный рейтинг доступны на площадке. */
+  readonly supportsOnline: boolean;
+  /** У площадки есть API управления звуком (mute/audio state). */
+  readonly supportsAudio: boolean;
   /** Площадка умеет управлять полноэкранным режимом. */
   readonly supportsFullscreen: boolean;
   /** Площадка умеет запрашивать оценку игры. */
@@ -71,6 +86,19 @@ export interface PlatformAPI {
   /** Язык интерфейса площадки в формате 'ru' | 'en' | ..., null — неизвестен. */
   getInterfaceLang(): string | null;
   getDevice(): DeviceKind;
+  /**
+   * Облачное сохранение прогресса площадки. null — облака нет или данных нет.
+   * data — произвольный JSON-объект (у нас настройки/статистика + saved_at).
+   */
+  loadProgress(): Promise<PlatformProgress | null>;
+  /** Записать прогресс в облако площадки; false — не поддерживается/ошибка. */
+  saveProgress(data: Record<string, unknown>): Promise<boolean>;
+  /** Разрешён ли звук настройками площадки (SDK mute). */
+  isAudioEnabled(): boolean;
+  /** Подписка на изменение звука в SDK площадки. */
+  onAudioChange(cb: (enabled: boolean) => void): void;
+  /** Сообщить SDK о собственном переключателе звука (best effort). */
+  setAudioEnabled(enabled: boolean): void;
   /**
    * Текущий полноэкранный статус. На площадках без своего API — статус
    * браузерного fullscreen.

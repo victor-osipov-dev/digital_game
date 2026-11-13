@@ -1,17 +1,26 @@
-import type { DeviceKind, PlatformAPI, PlatformId, PlatformLeaderboard, PlatformPlayer } from './types';
+import type {
+  DeviceKind,
+  PlatformAPI,
+  PlatformId,
+  PlatformLeaderboard,
+  PlatformPlayer,
+  PlatformProgress,
+} from './types';
 import { detectPlatformId } from './detect';
 import { StandalonePlatform } from './noop';
 import { YandexPlatform } from './yandex';
 import { GamePushPlatform } from './gamepush';
 import { CrazyGamesPlatform } from './crazygames';
+import { YouTubePlatform } from './youtube';
 import { GameDistributionPlatform } from './gamedistribution';
+import { setAdMuted } from '../core/audio';
 import {
   installFullscreenBridge,
   reportedFullscreenState,
   requestParentFullscreen,
 } from './fullscreen_bridge';
 
-export type { PlatformAPI, PlatformId, PlatformLeaderboard, PlatformLeaderboardEntry, PlatformPlayer } from './types';
+export type { PlatformAPI, PlatformId, PlatformLeaderboard, PlatformLeaderboardEntry, PlatformPlayer, PlatformProgress } from './types';
 export type { DeviceKind } from './types';
 
 function hasExplicitPlatformParam(): boolean {
@@ -59,6 +68,7 @@ function readGlobals(): {
   hasGamePush: boolean;
   hasCrazyGames: boolean;
   hasGDSdk: boolean;
+  hasYtGame: boolean;
 } {
   try {
     return {
@@ -70,9 +80,16 @@ function readGlobals(): {
         || window.__dgGamePush === true,
       hasCrazyGames: typeof window.CrazyGames?.SDK !== 'undefined',
       hasGDSdk: typeof window.gdsdk !== 'undefined',
+      hasYtGame: typeof window.ytgame !== 'undefined',
     };
   } catch {
-    return { hasYaGames: false, hasGamePush: false, hasCrazyGames: false, hasGDSdk: false };
+    return {
+      hasYaGames: false,
+      hasGamePush: false,
+      hasCrazyGames: false,
+      hasGDSdk: false,
+      hasYtGame: false,
+    };
   }
 }
 
@@ -95,7 +112,7 @@ function buildPlatformTarget(): PlatformId | null {
   try {
     const v = __DG_PLATFORM_TARGET__;
     if (v === 'yandex' || v === 'gamepush' || v === 'crazygames'
-      || v === 'gamedistribution' || v === 'standalone') {
+      || v === 'youtube' || v === 'gamedistribution' || v === 'standalone') {
       return v;
     }
   } catch {
@@ -118,6 +135,8 @@ function createProvider(id: PlatformId): PlatformAPI {
       return new GamePushPlatform();
     case 'crazygames':
       return new CrazyGamesPlatform();
+    case 'youtube':
+      return new YouTubePlatform();
     case 'gamedistribution':
       return new GameDistributionPlatform();
     default:
@@ -151,6 +170,22 @@ class PlatformFacade implements PlatformAPI {
   get supportsRewarded(): boolean {
     try {
       return this.current.supportsRewarded;
+    } catch {
+      return false;
+    }
+  }
+
+  get supportsOnline(): boolean {
+    try {
+      return this.current.supportsOnline;
+    } catch {
+      return false;
+    }
+  }
+
+  get supportsAudio(): boolean {
+    try {
+      return this.current.supportsAudio;
     } catch {
       return false;
     }
@@ -209,18 +244,26 @@ class PlatformFacade implements PlatformAPI {
   }
 
   async showInterstitial(): Promise<boolean> {
+    // Звук на время рекламы выключаем всегда, даже если SDK не сообщает
+    // о паузе (требование площадок). Восстанавливаем в finally.
+    setAdMuted(true);
     try {
       return await this.current.showInterstitial();
     } catch {
       return false;
+    } finally {
+      setAdMuted(false);
     }
   }
 
   async showRewarded(): Promise<boolean> {
+    setAdMuted(true);
     try {
       return await this.current.showRewarded();
     } catch {
       return false;
+    } finally {
+      setAdMuted(false);
     }
   }
 
@@ -269,6 +312,46 @@ class PlatformFacade implements PlatformAPI {
       return this.current.getDevice();
     } catch {
       return 'unknown';
+    }
+  }
+
+  async loadProgress(): Promise<PlatformProgress | null> {
+    try {
+      return await this.current.loadProgress();
+    } catch {
+      return null;
+    }
+  }
+
+  async saveProgress(data: Record<string, unknown>): Promise<boolean> {
+    try {
+      return await this.current.saveProgress(data);
+    } catch {
+      return false;
+    }
+  }
+
+  isAudioEnabled(): boolean {
+    try {
+      return this.current.isAudioEnabled();
+    } catch {
+      return true;
+    }
+  }
+
+  onAudioChange(cb: (enabled: boolean) => void): void {
+    try {
+      this.current.onAudioChange(cb);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  setAudioEnabled(enabled: boolean): void {
+    try {
+      this.current.setAudioEnabled(enabled);
+    } catch {
+      /* ignore */
     }
   }
 

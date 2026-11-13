@@ -10,6 +10,7 @@ export interface DetectInput {
   hasGamePush?: boolean;
   hasCrazyGames?: boolean;
   hasGDSdk?: boolean;
+  hasYtGame?: boolean;
 }
 
 function queryPlatform(query: string | undefined): PlatformId | null {
@@ -20,6 +21,7 @@ function queryPlatform(query: string | undefined): PlatformId | null {
   if (v === 'yandex' || v === 'ya') return 'yandex';
   if (v === 'gamepush' || v === 'gp') return 'gamepush';
   if (v === 'crazygames' || v === 'crazy' || v === 'cg') return 'crazygames';
+  if (v === 'youtube' || v === 'yt' || v === 'playables') return 'youtube';
   if (v === 'gamedistribution' || v === 'gd' || v === 'gamedist') return 'gamedistribution';
   if (v === 'standalone' || v === 'local' || v === 'none') return 'standalone';
   return null;
@@ -39,6 +41,7 @@ export function detectPlatformId(input: DetectInput = {}): PlatformId {
   if (input.hasGamePush) return 'gamepush';
   if (input.hasYaGames) return 'yandex';
   if (input.hasCrazyGames) return 'crazygames';
+  if (input.hasYtGame) return 'youtube';
   if (input.hasGDSdk) return 'gamedistribution';
   const host = (input.hostname ?? '').toLowerCase();
   if (host.includes('yandex')) return 'yandex';
