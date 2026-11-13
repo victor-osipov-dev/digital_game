@@ -7,7 +7,7 @@
 // - провайдер обязан никогда не ронять игру: любой вызов SDK обёрнут,
 //   при отсутствии SDK всё превращается в no-op;
 // - инициализация ограничена таймаутом и не блокирует запуск игры.
-export type PlatformId = 'yandex' | 'crazygames' | 'gamedistribution' | 'standalone';
+export type PlatformId = 'yandex' | 'gamepush' | 'crazygames' | 'gamedistribution' | 'standalone';
 
 export type DeviceKind = 'desktop' | 'mobile' | 'tablet' | 'tv' | 'unknown';
 

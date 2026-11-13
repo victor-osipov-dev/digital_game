@@ -1415,7 +1415,8 @@ export class OnlineLobby {
     if (this.boardOpen) return;
     this.boardOpen = true;
     const { overlay, close } = modalOverlay(this.popups, 'board', { alpha: 0.6, zIndex: 950 });
-    const showYandex = platform.id === 'yandex';
+    const isGamePush = platform.id === 'gamepush';
+    const showPlatformBoard = platform.id === 'yandex' || isGamePush;
     const vh = viewHeight();
     const ROW_H = 26;
     const MAX_ENTRIES = 10;
@@ -1486,7 +1487,9 @@ export class OnlineLobby {
     box.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
     panel.root.addControl(box);
 
-    box.addControl(mkLabel(showYandex ? t('Лидеры Яндекс Игр') : t('Таблица лидеров'), {
+    box.addControl(mkLabel(showPlatformBoard
+      ? t(isGamePush ? 'Лидеры GamePush' : 'Лидеры Яндекс Игр')
+      : t('Таблица лидеров'), {
       fontSize: fs(20), color: GOLD, height: TITLE_H,
     }));
     let yaGrid: StackPanel | null = null;
@@ -1494,7 +1497,7 @@ export class OnlineLobby {
     let yaNoteLab: ReturnType<typeof mkLabel> | null = null;
     let serverToggle: Button | null = null;
     let serverExpanded = false;
-    if (showYandex) {
+    if (showPlatformBoard) {
       yaGrid = new StackPanel('yaBoardGrid');
       yaGrid.isVertical = true;
       yaGrid.spacing = 4;
@@ -1505,7 +1508,9 @@ export class OnlineLobby {
       yaRankLab = mkLabel('', { fontSize: fs(15), color: '#90CAF9', width: '100%', height: RANK_H });
       yaRankLab.isVisible = false;
       box.addControl(yaRankLab);
-      yaNoteLab = mkLabel(t('Загружаем таблицу Яндекса…'), {
+      yaNoteLab = mkLabel(t(isGamePush
+        ? 'Загружаем таблицу GamePush…'
+        : 'Загружаем таблицу Яндекса…'), {
         fontSize: fs(13), color: WHITE85, width: '100%', height: NOTE_H, noWrap: false,
       });
       box.addControl(yaNoteLab);
@@ -1525,8 +1530,8 @@ export class OnlineLobby {
     serverSection.isVertical = true;
     serverSection.spacing = 6;
     serverSection.width = '100%';
-    serverSection.isVisible = !showYandex;
-    serverSection.addControl(mkLabel(t(showYandex ? 'Все платформы' : 'Общий рейтинг всех платформ'), {
+    serverSection.isVisible = !showPlatformBoard;
+    serverSection.addControl(mkLabel(t(showPlatformBoard ? 'Все платформы' : 'Общий рейтинг всех платформ'), {
       fontSize: fs(15), color: WHITE90, height: 24,
     }));
     const grid = new StackPanel('boardGrid');
@@ -1569,13 +1574,13 @@ export class OnlineLobby {
     };
     const calculatePanelHeight = (): number => {
       let children = [TITLE_H];
-      if (showYandex) {
+      if (showPlatformBoard) {
         if (yaGrid?.isVisible) children.push(yaGrid.heightInPixels || 0);
         if (yaRankLab?.isVisible) children.push(RANK_H);
         if (yaNoteLab?.isVisible) children.push(NOTE_H);
         children.push(TOGGLE_H);
       }
-      if (!showYandex || serverExpanded) children.push(getServerSectionHeight());
+      if (!showPlatformBoard || serverExpanded) children.push(getServerSectionHeight());
       children.push(CLOSE_H);
       return PAD_Y * 2 + children.reduce((sum, height) => sum + height, 0)
         + GAP * Math.max(0, children.length - 1);
@@ -1586,7 +1591,7 @@ export class OnlineLobby {
     setPanelHeight(calculatePanelHeight());
     meLab.text = '';
     grid.clearControls();
-    const yaLoad = showYandex
+    const yaLoad = showPlatformBoard
       ? platform.getLeaderboardEntries('wins')
       : Promise.resolve(null);
     const [serverResult, yaResult] = await Promise.allSettled([
@@ -1618,11 +1623,11 @@ export class OnlineLobby {
     }
     serverSection.height = px(getServerSectionHeight());
 
-    if (showYandex && yaGrid && yaRankLab && yaNoteLab) {
+    if (showPlatformBoard && yaGrid && yaRankLab && yaNoteLab) {
       yaGrid.clearControls();
       if (yaResult.status === 'fulfilled' && yaResult.value) {
         const data = yaResult.value;
-        this.renderYandexBoard(data, yaGrid, yaRankLab, yaNoteLab, contentW);
+        this.renderPlatformBoard(data, yaGrid, yaRankLab, yaNoteLab, contentW, isGamePush);
         const n = Math.min(MAX_ENTRIES, data.entries.length);
         yaGrid.isVisible = n > 0;
         yaGrid.height = px(n > 0 ? Math.min(MAX_LIST_H, n * ROW_H + 4) : 0);
@@ -1631,26 +1636,31 @@ export class OnlineLobby {
         yaGrid.height = px(0);
         yaRankLab.text = '';
         yaRankLab.isVisible = false;
-        setNote(yaNoteLab, t('Не удалось загрузить таблицу Яндекса'), true);
+        setNote(yaNoteLab, t(isGamePush
+          ? 'Не удалось загрузить таблицу GamePush'
+          : 'Не удалось загрузить таблицу Яндекса'), true);
       }
     }
     serverSection.height = px(getServerSectionHeight());
     setPanelHeight(calculatePanelHeight());
   }
 
-  private renderYandexBoard(
+  private renderPlatformBoard(
     data: Awaited<ReturnType<typeof platform.getLeaderboardEntries>>,
     grid: StackPanel,
     rankLab: ReturnType<typeof mkLabel>,
     noteLab: ReturnType<typeof mkLabel>,
     contentW: number,
+    isGamePush: boolean,
   ): void {
     grid.clearControls();
     const entries = data.entries.slice(0, 10);
     if (entries.length === 0) {
       grid.isVisible = false;
       setNote(noteLab, data.error
-        ? t('Не удалось загрузить таблицу Яндекса')
+        ? t(isGamePush
+          ? 'Не удалось загрузить таблицу GamePush'
+          : 'Не удалось загрузить таблицу Яндекса')
         : t('Нет сыгранных партий'), !!data.error);
     } else {
       grid.isVisible = true;

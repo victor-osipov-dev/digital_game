@@ -165,7 +165,7 @@ export class OfflineGame {
   private localStatsEligible = false;
   private localStatsHumanSeat = -1;
   private localStatsResultDone = false;
-  private yandexScoreReported = false;
+  private platformScoreReported = false;
   // wait-панель (paused/waiting/grace)
   private waitHost: Container | null = null;
   private waitLab: TextBlock | null = null;
@@ -819,7 +819,7 @@ export class OfflineGame {
   startGame(state: GameState): void {
     this.state = state;
     this.running = true;
-    this.yandexScoreReported = false;
+    this.platformScoreReported = false;
     this.cancelBotTableScroll();
     this.clearDraftPresentation();
     this.hintsUsed.clear();
@@ -2241,7 +2241,7 @@ export class OfflineGame {
 
   showWin(): void {
     this.clearOverlays();
-    this.reportYandexWins();
+    this.reportPlatformWins();
     platform.gameplayStop();
     this.running = false;
     this.stopTimers();
@@ -2314,13 +2314,15 @@ export class OfflineGame {
     }
   }
 
-  // Сервер остаётся источником истины: SDK получает только значение wins
-  // из board.list после подтверждённой сетевой победы. Локальные результаты
-  // и переданные клиентом очки в таблицу Яндекса не отправляем.
-  private reportYandexWins(): void {
-    if (this.yandexScoreReported || !this.onlineMode || platform.id !== 'yandex'
+  // Сервер остаётся источником истины: площадочный SDK (Яндекс или GamePush)
+  // получает только значение wins из board.list после подтверждённой сетевой
+  // победы. Локальные результаты и переданные клиентом очки не отправляем.
+  private reportPlatformWins(): void {
+    const platformId = platform.id;
+    const supportsWins = platformId === 'yandex' || platformId === 'gamepush';
+    if (this.platformScoreReported || !this.onlineMode || !supportsWins
       || !this.state || this.state.winner !== this.state.local_seat) return;
-    this.yandexScoreReported = true;
+    this.platformScoreReported = true;
     void this.host.gameApi().boardList().then((board) => {
       if (board.me && Number.isFinite(board.me.wins)) {
         return platform.reportLeaderboardScore('wins', Math.max(0, board.me.wins));

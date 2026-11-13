@@ -9,6 +9,7 @@
 | Площадка | Файл | SDK | Статус |
 |---|---|---|---|
 | Яндекс Игры | `yandex.ts` | `/sdk.js` → фолбэк `https://yandex.ru/games/sdk/v2` | Полная интеграция |
+| GamePush | `gamepush.ts` | сниппет `game-score.js` в `index.html` (только `--mode gamepush`) | Интеграция, нужен проект и поле `wins` |
 | CrazyGames | `crazygames.ts` | `https://sdk.crazygames.com/crazygames-sdk-v2.js` (тег в `index.html`) | Полная интеграция |
 | GameDistribution | `gamedistribution.ts` | `https://html5.api.gamedistribution.com/main.min.js` (грузится сам) | Интеграция, нужен `gameId` |
 | Свой сайт / прочие | `noop.ts` | — | Игра работает без рекламы |
@@ -23,12 +24,51 @@
 | `npm run build` | `auto` (детект в рантайме) | `dist/` | Архив для Яндекс Игр |
 | `npm run build:yandex` | принудительно Яндекс | `dist/` | Явная сборка под Яндекс |
 | `npm run build:site` | `standalone` | `dist-site/` | Свой сайт, без функций Яндекса |
+| `npm run build:gamepush` | `gamepush` | `dist-gamepush/` | Публикация через GamePush |
 
 В режиме `standalone` площадка фиксируется на «свой сайт»: Яндекс-провайдер
 не создаётся, `/sdk.js` не запрашивается, и вся Яндекс-специфичная
 разметка (вход через Yandex ID, таблица Яндекс Игр, подсказки про
 сохранение прогресса) скрыта. Обычная сборка (`auto`) не меняется и
 по-прежнему годится для архива на Яндекс.
+
+В режиме `gamepush` в `index.html` перед `</body>` вставляется сниппет
+GamePush (`window.onGPInit`, загрузчик `game-score.js`), а площадка
+фиксируется на `gamepush`. Сниппет, `projectId` и `publicToken` лежат в
+`vite.config.ts`; их можно переопределить переменными окружения
+`GP_PROJECT_ID` и `GP_PUBLIC_TOKEN`. В обычной и site-сборке сниппета нет.
+
+### Настройка проекта GamePush
+
+1. Добавить домен игры в **Allowed Origins** панели GamePush (иначе SDK
+   считает источник недоверенным). Для локальной проверки — `localhost`.
+2. В разделе **Players** создать числовое поле `wins` (number) — по нему
+   строится таблица GamePush. Без поля игра работает, но витрина GamePush
+   в лобби покажет ошибку; серверный рейтинг остаётся основным.
+3. В настройках рекламы включить fullscreen/interstitial, rewarded и
+   sticky-баннер. Игра показывает interstitial только в логических паузах
+   (конец партии, выход в меню), rewarded — только по нажатию «Подск.»,
+   sticky — в меню/лобби и скрывает его во время партии.
+4. Проверить на домене: `[platform] id=gamepush`, `window.__dgGP` заполнен,
+   в консоли нет ошибок SDK. Проверка на черновике GamePush — через их
+   панель/хостинг.
+
+Что делает провайдер GamePush:
+
+- `gp.gameStart()` после первого кадра, `gameplayStart/Stop` вокруг партии;
+- `gp.ads.showFullscreen()` и `showRewardedVideo()` с таймаутами;
+- `gp.ads.showSticky()/closeSticky()` для баннера в меню;
+- `gp.player.ready`, профиль, `gp.player.login()` по явному нажатию;
+- `gp.leaderboard.fetch({ orderBy: ['wins'] })` и запись `wins` через
+  `gp.player.set(...)` + `gp.player.sync()`;
+- `gp.fullscreen`, `gp.language`, `gp.isMobile`, события `pause/resume`;
+- `gp.gameStart()` — аналог Game Ready; `LoadingAPI` у GamePush нет.
+
+Осознанное ограничение: вход GamePush не создаёт отдельный аккаунт на
+игровом сервере. Сетевые партии, как и раньше, используют серверный
+гостевой вход (имя в форме), а профиль GamePush нужен для платформенной
+таблицы и рекламы. Серверный рейтинг остаётся источником истины: в
+`wins` уходит только подтверждённое сервером число побед.
 
 ## Что уже покрыто из требований Яндекс Игр
 
@@ -130,9 +170,10 @@
 3. Добавить тесты детекта в `tests/platform.test.ts`.
 4. Дописать строку в таблицу выше и чек-лист подключения SDK.
 
-Переопределение площадки вручную: `?platform=yandex|crazygames|gamedistribution|standalone`.
+Переопределение площадки вручную: `?platform=yandex|gamepush|crazygames|gamedistribution|standalone`.
 GameDistribution дополнительно: `?gamedist_id=ВАШ_ID`.
 В сборке `--mode site` цель `standalone` жёсткая: `?platform=` её не переопределяет.
+В сборке `--mode gamepush` цель `gamepush` тоже жёсткая.
 
 ## Как проверить рекламу локально
 

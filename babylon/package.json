@@ -8,6 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "build:yandex": "tsc --noEmit && vite build --mode yandex",
     "build:site": "tsc --noEmit && vite build --mode site",
+    "build:gamepush": "tsc --noEmit && vite build --mode gamepush",
     "test": "vitest run",
     "preview": "vite preview",
     "yandex:proxy": "node tools/yandex-proxy.mjs",

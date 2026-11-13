@@ -2,6 +2,7 @@ import type { DeviceKind, PlatformAPI, PlatformId, PlatformLeaderboard, Platform
 import { detectPlatformId } from './detect';
 import { StandalonePlatform } from './noop';
 import { YandexPlatform } from './yandex';
+import { GamePushPlatform } from './gamepush';
 import { CrazyGamesPlatform } from './crazygames';
 import { GameDistributionPlatform } from './gamedistribution';
 import {
@@ -53,15 +54,25 @@ function yaGamesPresent(): boolean {
     return false;
   }
 }
-function readGlobals(): { hasYaGames: boolean; hasCrazyGames: boolean; hasGDSdk: boolean } {
+function readGlobals(): {
+  hasYaGames: boolean;
+  hasGamePush: boolean;
+  hasCrazyGames: boolean;
+  hasGDSdk: boolean;
+} {
   try {
     return {
       hasYaGames: typeof window.YaGames !== 'undefined',
+      // __dgGamePush ставится синхронным сниппетом до загрузки SDK, поэтому
+      // площадка опознаётся даже если game-score.js ещё не пришёл.
+      hasGamePush: typeof window.__dgGP !== 'undefined'
+        || typeof window.gp !== 'undefined'
+        || window.__dgGamePush === true,
       hasCrazyGames: typeof window.CrazyGames?.SDK !== 'undefined',
       hasGDSdk: typeof window.gdsdk !== 'undefined',
     };
   } catch {
-    return { hasYaGames: false, hasCrazyGames: false, hasGDSdk: false };
+    return { hasYaGames: false, hasGamePush: false, hasCrazyGames: false, hasGDSdk: false };
   }
 }
 
@@ -83,7 +94,8 @@ function readLocation(): { query: string; hostname: string } {
 function buildPlatformTarget(): PlatformId | null {
   try {
     const v = __DG_PLATFORM_TARGET__;
-    if (v === 'yandex' || v === 'crazygames' || v === 'gamedistribution' || v === 'standalone') {
+    if (v === 'yandex' || v === 'gamepush' || v === 'crazygames'
+      || v === 'gamedistribution' || v === 'standalone') {
       return v;
     }
   } catch {
@@ -102,6 +114,8 @@ function createProvider(id: PlatformId): PlatformAPI {
   switch (id) {
     case 'yandex':
       return new YandexPlatform();
+    case 'gamepush':
+      return new GamePushPlatform();
     case 'crazygames':
       return new CrazyGamesPlatform();
     case 'gamedistribution':

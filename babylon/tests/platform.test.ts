@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { detectPlatformId } from '../src/platform/detect';
 import { StandalonePlatform } from '../src/platform/noop';
 import { YandexPlatform } from '../src/platform/yandex';
+import { GamePushPlatform } from '../src/platform/gamepush';
 
 // Минимальная заглушка window для провайдера Яндекса: SDK уже «внедрён»,
 // поэтому init не грузит /sdk.js, а берёт готовый объект.
@@ -11,6 +12,18 @@ function installYandex(ysdk: Record<string, unknown>): void {
     clearTimeout: (id: number) => clearTimeout(id as unknown as ReturnType<typeof setTimeout>),
     location: { search: '', hostname: 'example.com' },
     YaGames: { init: () => Promise.resolve(ysdk) },
+    self: {},
+  };
+  win.top = win;
+  (globalThis as unknown as Record<string, unknown>).window = win;
+}
+
+// Заглушка GamePush: SDK «пришёл» в onGPInit, поэтому init не ждёт загрузку.
+function installGamePush(gp: Record<string, unknown>): void {
+  const win: Record<string, unknown> = {
+    location: { search: '', hostname: 'example.com' },
+    __dgGP: gp,
+    __dgGamePush: true,
     self: {},
   };
   win.top = win;
@@ -29,6 +42,8 @@ describe('detectPlatformId', () => {
 
   it('явный ?platform= имеет наивысший приоритет', () => {
     expect(detectPlatformId({ query: '?platform=yandex', hasCrazyGames: true })).toBe('yandex');
+    expect(detectPlatformId({ query: '?platform=gamepush', hasYaGames: true })).toBe('gamepush');
+    expect(detectPlatformId({ query: '?platform=gp', hasYaGames: true })).toBe('gamepush');
     expect(detectPlatformId({ query: '?platform=crazygames', hasYaGames: true })).toBe('crazygames');
     expect(detectPlatformId({ query: '?platform=gd', hasYaGames: true })).toBe('gamedistribution');
     expect(detectPlatformId({ query: '?platform=local', hasYaGames: true })).toBe('standalone');
@@ -36,6 +51,8 @@ describe('detectPlatformId', () => {
 
   it('глобальные объекты SDK', () => {
     expect(detectPlatformId({ hasYaGames: true })).toBe('yandex');
+    // GamePush — агрегатор: его SDK важнее нативного SDK площадки.
+    expect(detectPlatformId({ hasGamePush: true, hasYaGames: true })).toBe('gamepush');
     expect(detectPlatformId({ hasCrazyGames: true })).toBe('crazygames');
     expect(detectPlatformId({ hasGDSdk: true })).toBe('gamedistribution');
   });
@@ -258,5 +275,130 @@ describe('YandexPlatform: новые возможности SDK', () => {
     await p.init();
     expect(await p.writeClipboard('ABC123')).toBe(true);
     expect(written).toEqual(['ABC123']);
+  });
+});
+
+describe('GamePushPlatform', () => {
+  it('читает язык, устройство и профиль игрока', async () => {
+    installGamePush({
+      language: 'en-US',
+      isMobile: true,
+      player: {
+        id: 42,
+        name: 'Игрок',
+        isLoggedIn: true,
+        ready: Promise.resolve(),
+      },
+    });
+    const p = new GamePushPlatform();
+    await p.init();
+    expect(p.id).toBe('gamepush');
+    expect(p.getInterfaceLang()).toBe('en');
+    expect(p.getDevice()).toBe('mobile');
+    expect(await p.getPlayer()).toEqual({ uid: '42', name: 'Игрок', authorized: true });
+  });
+
+  it('вход через GamePush: login + событие login', async () => {
+    const handlers: Record<string, (...args: unknown[]) => void> = {};
+    let loggedIn = false;
+    installGamePush({
+      player: {
+        id: 7,
+        isLoggedIn: false,
+        on: (ev: string, cb: (...args: unknown[]) => void) => { handlers[ev] = cb; },
+        login: () => {
+          loggedIn = true;
+          handlers.login?.(true);
+        },
+      },
+    });
+    const p = new GamePushPlatform();
+    await p.init();
+    expect(await p.openAuthDialog()).toBe(true);
+    expect(loggedIn).toBe(true);
+  });
+
+  it('таблица GamePush: fetch по полю wins и запись через sync', async () => {
+    const setCalls: unknown[][] = [];
+    let synced = 0;
+    installGamePush({
+      leaderboard: {
+        fetch: async (opts: Record<string, unknown>) => {
+          expect(opts).toMatchObject({ orderBy: ['wins'], order: 'DESC', limit: 10 });
+          return {
+            players: [
+              { id: 1, name: 'Первый', position: 1, wins: 9 },
+              { id: 1, name: 'Первый', position: 1, wins: 9 },
+              { id: 2, name: 'Второй', position: 2, wins: 4 },
+            ],
+            player: { id: 3, name: 'Я', position: 7, wins: 2 },
+          };
+        },
+      },
+      player: {
+        id: 3,
+        set: (key: string, value: unknown) => { setCalls.push([key, value]); },
+        sync: async () => { synced += 1; },
+      },
+    });
+    const p = new GamePushPlatform();
+    await p.init();
+    expect(await p.getLeaderboardEntries('wins')).toEqual({
+      entries: [
+        { name: 'Первый', score: 9, rank: 1 },
+        { name: 'Второй', score: 4, rank: 2 },
+      ],
+      userRank: 7,
+    });
+    expect(await p.reportLeaderboardScore('wins', 12)).toBe(true);
+    expect(setCalls).toEqual([['wins', 12]]);
+    expect(synced).toBe(1);
+  });
+
+  it('реклама и sticky-баннер', async () => {
+    const calls: string[] = [];
+    installGamePush({
+      ads: {
+        isFullscreenAvailable: true,
+        isRewardedAvailable: true,
+        showFullscreen: async () => true,
+        showRewardedVideo: async () => true,
+        showSticky: () => { calls.push('show'); },
+        closeSticky: () => { calls.push('close'); },
+      },
+    });
+    const p = new GamePushPlatform();
+    await p.init();
+    expect(await p.showInterstitial()).toBe(true);
+    expect(await p.showRewarded()).toBe(true);
+    p.setBannerVisible(true);
+    p.setBannerVisible(false);
+    expect(calls).toEqual(['show', 'close']);
+  });
+
+  it('полноэкранный режим и события паузы', async () => {
+    const handlers: Record<string, (...args: unknown[]) => void> = {};
+    let fsOn = false;
+    installGamePush({
+      fullscreen: {
+        get isEnabled() { return fsOn; },
+        toggle: () => { fsOn = !fsOn; },
+        close: () => { fsOn = false; },
+      },
+      on: (ev: string, cb: (...args: unknown[]) => void) => { handlers[ev] = cb; },
+    });
+    const p = new GamePushPlatform();
+    await p.init();
+    expect(p.isFullscreen()).toBe(false);
+    expect(await p.toggleFullscreen()).toBe(true);
+    expect(await p.exitFullscreen()).toBe(false);
+    let paused = 0;
+    let resumed = 0;
+    p.onPause(() => { paused += 1; });
+    p.onResume(() => { resumed += 1; });
+    handlers.pause?.();
+    handlers.resume?.();
+    expect(paused).toBe(1);
+    expect(resumed).toBe(1);
   });
 });
