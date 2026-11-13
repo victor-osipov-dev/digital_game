@@ -66,7 +66,9 @@ function sdk(): GDSdk | null {
  */
 export class GameDistributionPlatform extends BasePlatform {
   readonly id = 'gamedistribution' as const;
-  readonly supportsRewarded = true;
+  // Реклама доступна только после загрузки SDK (нужен gameId). Без SDK
+  // кнопку награды и упоминания рекламы не показываем.
+  supportsRewarded = false;
   readonly supportsOnline = false;
 
   private preloadCalled = false;
@@ -98,6 +100,7 @@ export class GameDistributionPlatform extends BasePlatform {
       // Прелоадер вызывается ровно один раз за запуск (требование площадки).
       if (!this.preloadCalled && window.gdsdk) {
         this.preloadCalled = true;
+        this.supportsRewarded = true;
         try {
           sdk()?.preloadAd?.('rewarded');
         } catch {
