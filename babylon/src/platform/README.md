@@ -46,6 +46,9 @@ GamePush (`window.onGPInit`, загрузчик `game-score.js`), а площа�
 2. В разделе **Players** создать числовое поле `wins` (number, public) —
    по нему строится таблица GamePush. Без поля игра работает, но витрина
    GamePush в лобби покажет ошибку; серверный рейтинг остаётся основным.
+   Таблицу можно создать и вручную (**Leaderboards**): игра ищет её по ID
+   `101345` или тегу `wins` через scoped-API. Глобальная `global@wins`
+   поддерживается как резерв.
 3. В настройках рекламы включить fullscreen/interstitial, rewarded и
    sticky-баннер. Игра показывает interstitial только в логических паузах
    (конец партии, выход в меню), rewarded — только по нажатию «Подск.»,
@@ -60,8 +63,10 @@ GamePush (`window.onGPInit`, загрузчик `game-score.js`), а площа�
 - `gp.ads.showFullscreen()` и `showRewardedVideo()` с таймаутами;
 - `gp.ads.showSticky()/closeSticky()` для баннера в меню;
 - `gp.player.ready`, профиль, `gp.player.login()` по явному нажатию;
-- `gp.leaderboard.fetch({ orderBy: ['wins'] })` и запись `wins` через
-  `gp.player.set(...)` + `gp.player.sync()`;
+- `gp.leaderboard.fetchScoped({ id: 101345 })` (резерв — тег `wins`,
+  затем глобальный `fetch({ orderBy: ['wins'] })`); рекорд scoped-таблицы
+  публикуется через `gp.leaderboard.publishRecord(...)`, а `wins` для
+  глобальной таблицы — через `gp.player.set(...)` + `gp.player.sync()`;
 - `gp.fullscreen`, `gp.language`, `gp.isMobile`, события `pause/resume`;
 - `gp.gameStart()` — аналог Game Ready; `LoadingAPI` у GamePush нет.
 

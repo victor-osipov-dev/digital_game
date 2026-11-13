@@ -55,6 +55,8 @@ interface GpLeaderboardResult {
 
 interface GpLeaderboard {
   fetch?: (opts: Record<string, unknown>) => Promise<GpLeaderboardResult>;
+  fetchScoped?: (opts: Record<string, unknown>) => Promise<GpLeaderboardResult>;
+  publishRecord?: (opts: Record<string, unknown>) => Promise<unknown>;
 }
 
 interface GpFullscreen {
@@ -119,6 +121,16 @@ function navigatorLang(): string | null {
   }
 }
 
+// Таблица wins, созданная в панели GamePush (Leaderboards → #101345).
+// Глобальный fetch ищет таблицу по тегу global@wins; ручная таблица имеет тег
+// wins и доступна через scoped-API. Сначала используем точный ID, затем тег,
+// чтобы пересоздание таблицы с тем же тегом не ломало игру.
+const WINS_BOARD_ID = 101345;
+const WINS_BOARD_TAG = 'wins';
+const WINS_BOARD_VARIANT = 'all';
+
+type ScopedBoardRef = { id?: number; tag?: string; variant?: string };
+
 function waitValue<T>(p: Promise<T> | undefined, ms: number, fallback: T): Promise<T> {
   if (!p) return Promise.resolve(fallback);
   return new Promise<T>((resolve) => {
@@ -137,6 +149,28 @@ function waitValue<T>(p: Promise<T> | undefined, ms: number, fallback: T): Promi
     }
   });
 }
+
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let done = false;
+    const finish = (fn: () => void): void => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      fn();
+    };
+    const timer = setTimeout(() => finish(() => reject(new Error(label))), ms);
+    try {
+      p.then(
+        (value) => finish(() => resolve(value)),
+        (error) => finish(() => reject(error instanceof Error ? error : new Error(String(error)))),
+      );
+    } catch (error) {
+      finish(() => reject(error instanceof Error ? error : new Error(String(error))));
+    }
+  });
+}
+
 
 // Рекламные методы GamePush возвращают Promise. Для fullscreen «успех» — это
 // любое завершение, кроме явного false; для rewarded награда только при true.
@@ -200,10 +234,12 @@ function rewardedFinished(p: Promise<unknown> | void, ms: number): Promise<boole
  * - `gp.fullscreen` — полноэкранный режим;
  * - `gp.language`, `gp.isMobile`, события pause/resume.
  *
- * Ограничение: GamePush-лидерборд строится по числовому полю игрока. Чтобы
- * блок работал, в панели GamePush нужно создать поле `wins` (number). Если
- * поля нет, игра продолжает работать, а витрина просто покажет ошибку —
- * серверный рейтинг остаётся основным.
+ * Ограничение и особенности лидерборда: в панели GamePush нужно числовое
+ * поле `wins` (number, public). Ручная таблица `wins` — это scoped-таблица:
+ * игра сначала ищет её по ID/тегу и публикует рекорд через
+ * `publishRecord`, а глобальную `global@wins` (если она есть) обновляет
+ * через `player.set('wins') + sync`. Если ни одной таблицы нет, витрина
+ * покажет ошибку — серверный рейтинг остаётся основным.
  */
 export class GamePushPlatform extends BasePlatform {
   readonly id = 'gamepush' as const;
@@ -222,6 +258,8 @@ export class GamePushPlatform extends BasePlatform {
   private pauseCbs: Array<() => void> = [];
   private resumeCbs: Array<() => void> = [];
   private subscribed = false;
+  // Какая таблица wins реально ответила: ручная scoped или глобальная.
+  private boardRef: ScopedBoardRef | 'global' | null = null;
 
   async init(): Promise<void> {
     try {
@@ -413,12 +451,50 @@ export class GamePushPlatform extends BasePlatform {
     });
   }
 
-  async getLeaderboardEntries(name: string): Promise<PlatformLeaderboard> {
+  private scopedRefs(): ScopedBoardRef[] {
+    const refs: ScopedBoardRef[] = [
+      { id: WINS_BOARD_ID },
+      { tag: WINS_BOARD_TAG, variant: WINS_BOARD_VARIANT },
+      { tag: WINS_BOARD_TAG },
+    ];
+    if (this.boardRef && this.boardRef !== 'global') {
+      const key = JSON.stringify(this.boardRef);
+      return [this.boardRef, ...refs.filter((ref) => JSON.stringify(ref) !== key)];
+    }
+    return refs;
+  }
+
+  private async fetchScopedBoard(
+    ref: ScopedBoardRef,
+    field: string,
+  ): Promise<{ result: GpLeaderboardResult | null; error?: string }> {
+    const leaderboard = sdk()?.leaderboard;
+    if (!leaderboard?.fetchScoped) return { result: null, error: 'no scoped leaderboard API' };
     try {
-      const leaderboard = sdk()?.leaderboard;
-      if (!leaderboard?.fetch) return { entries: [], userRank: 0, error: 'no leaderboard API' };
-      const field = String(name || 'wins');
-      const result = await waitValue(
+      const result = await withTimeout(
+        leaderboard.fetchScoped({
+          ...ref,
+          order: 'DESC',
+          limit: 10,
+          includeFields: ['rank'],
+          withMe: 'first',
+        }),
+        10000,
+        'leaderboard timeout',
+      );
+      return { result };
+    } catch (error) {
+      return { result: null, error: (error as Error).message || 'leaderboard unavailable' };
+    }
+  }
+
+  private async fetchGlobalBoard(
+    field: string,
+  ): Promise<{ result: GpLeaderboardResult | null; error?: string }> {
+    const leaderboard = sdk()?.leaderboard;
+    if (!leaderboard?.fetch) return { result: null, error: 'no leaderboard API' };
+    try {
+      const result = await withTimeout(
         leaderboard.fetch({
           orderBy: [field],
           order: 'DESC',
@@ -427,55 +503,117 @@ export class GamePushPlatform extends BasePlatform {
           withMe: 'first',
         }),
         10000,
-        null as unknown as GpLeaderboardResult,
+        'leaderboard timeout',
       );
-      if (!result) return { entries: [], userRank: 0, error: 'leaderboard timeout' };
-      const raw = Array.isArray(result.players)
-        ? result.players
-        : Array.isArray(result.topPlayers)
-          ? result.topPlayers
-          : [];
-      const entries: PlatformLeaderboardEntry[] = [];
-      const seen = new Set<string>();
-      raw.forEach((entry, index) => {
-        const key = `${entry.id ?? ''}|${entry.name ?? ''}|${entry.position ?? index}`;
-        if (seen.has(key)) return;
-        seen.add(key);
-        const score = Number(entry[field] ?? entry.score ?? 0);
-        const rank = Number(entry.position ?? entry.rank ?? index + 1);
-        entries.push({
-          name: String(entry.name ?? '').trim() || '—',
-          score: Math.max(0, Math.floor(Number.isFinite(score) ? score : 0)),
-          rank: Math.max(0, Math.floor(Number.isFinite(rank) ? rank : index + 1)),
-        });
-      });
-      entries.sort((a, b) => (a.rank || 9999) - (b.rank || 9999));
-      const userRank = Number(result.player?.position ?? result.player?.rank ?? 0);
-      return {
-        entries: entries.slice(0, 10),
-        userRank: Math.max(0, Math.floor(Number.isFinite(userRank) ? userRank : 0)),
-      };
-    } catch (e) {
-      return { entries: [], userRank: 0, error: (e as Error).message || 'leaderboard unavailable' };
+      return { result };
+    } catch (error) {
+      return { result: null, error: (error as Error).message || 'leaderboard unavailable' };
     }
   }
 
-  async reportLeaderboardScore(name: string, score: number): Promise<boolean> {
-    try {
-      const player = sdk()?.player;
-      if (!player?.set || !Number.isFinite(score) || score < 0) return false;
-      const field = String(name || 'wins');
-      player.set(field, Math.max(0, Math.floor(score)));
-      if (!player.sync) return true;
-      const result = await waitValue(
-        player.sync({ storage: 'preferred' }) as Promise<unknown>,
-        10000,
-        null,
-      );
-      return result !== null;
-    } catch {
-      return false;
+  private parseBoard(result: GpLeaderboardResult, field: string): PlatformLeaderboard {
+    // topPlayers — чистый список лидеров. players может содержать моего
+    // игрока первым (withMe: 'first'), поэтому он только резерв.
+    const raw = Array.isArray(result.topPlayers)
+      ? result.topPlayers
+      : Array.isArray(result.players)
+        ? result.players
+        : [];
+    const entries: PlatformLeaderboardEntry[] = [];
+    const seen = new Set<string>();
+    raw.forEach((entry, index) => {
+      const key = `${entry.id ?? ''}|${entry.name ?? ''}|${entry.position ?? index}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      const score = Number(entry[field] ?? entry.score ?? 0);
+      const rank = Number(entry.position ?? entry.rank ?? index + 1);
+      entries.push({
+        name: String(entry.name ?? '').trim() || '—',
+        score: Math.max(0, Math.floor(Number.isFinite(score) ? score : 0)),
+        rank: Math.max(0, Math.floor(Number.isFinite(rank) ? rank : index + 1)),
+      });
+    });
+    entries.sort((a, b) => (a.rank || 9999) - (b.rank || 9999));
+    const userRank = Number(result.player?.position ?? result.player?.rank ?? 0);
+    return {
+      entries: entries.slice(0, 10),
+      userRank: Math.max(0, Math.floor(Number.isFinite(userRank) ? userRank : 0)),
+    };
+  }
+
+  async getLeaderboardEntries(name: string): Promise<PlatformLeaderboard> {
+    const field = String(name || 'wins');
+    let lastError = '';
+    // Ручная таблица wins — scoped: именно её создают в панели GamePush.
+    // Глобальная таблица global@wins используется как резерв.
+    if (this.boardRef !== 'global') {
+      for (const ref of this.scopedRefs()) {
+        const res = await this.fetchScopedBoard(ref, field);
+        if (res.result) {
+          this.boardRef = ref;
+          return this.parseBoard(res.result, field);
+        }
+        lastError = res.error || lastError;
+      }
     }
+    const global = await this.fetchGlobalBoard(field);
+    if (global.result) {
+      this.boardRef = 'global';
+      return this.parseBoard(global.result, field);
+    }
+    lastError = global.error || lastError;
+    return { entries: [], userRank: 0, error: lastError || 'leaderboard unavailable' };
+  }
+
+  async reportLeaderboardScore(name: string, score: number): Promise<boolean> {
+    const gp = sdk();
+    const leaderboard = gp?.leaderboard;
+    const player = gp?.player;
+    if (!Number.isFinite(score) || score < 0) return false;
+    const field = String(name || 'wins');
+    const wins = Math.max(0, Math.floor(score));
+    let ok = false;
+
+    // Scoped-таблица не синхронизируется автоматически: рекорд нужно
+    // опубликовать явно. Если таблицу пересоздали, пробуем ID, тег и scope.
+    if (this.boardRef !== 'global' && leaderboard?.publishRecord) {
+      const refs = this.boardRef ? [this.boardRef] : this.scopedRefs();
+      for (const ref of refs) {
+        try {
+          await withTimeout(
+            Promise.resolve(leaderboard.publishRecord({
+              ...ref,
+              record: { [field]: wins },
+              override: true,
+            })),
+            10000,
+            'publish timeout',
+          );
+          this.boardRef = ref;
+          ok = true;
+          break;
+        } catch {
+          /* пробуем следующую форму таблицы */
+        }
+      }
+    }
+
+    // Поле wins всё равно синхронизируем: если в проекте есть глобальная
+    // таблица global@wins, она обновится автоматически.
+    if (player?.set && player.sync) {
+      try {
+        player.set(field, wins);
+        await withTimeout(
+          player.sync({ storage: 'preferred' }) as Promise<unknown>,
+          10000,
+          'sync timeout',
+        );
+        ok = true;
+      } catch {
+        /* глобальная таблица не настроена — scoped-публикация уже могла пройти */
+      }
+    }
+    return ok;
   }
 
   getInterfaceLang(): string | null {

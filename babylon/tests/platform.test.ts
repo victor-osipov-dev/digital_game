@@ -318,21 +318,28 @@ describe('GamePushPlatform', () => {
     expect(loggedIn).toBe(true);
   });
 
-  it('таблица GamePush: fetch по полю wins и запись через sync', async () => {
+  it('таблица GamePush: scoped fetch по ID и publishRecord', async () => {
     const setCalls: unknown[][] = [];
+    const publishCalls: unknown[] = [];
     let synced = 0;
     installGamePush({
       leaderboard: {
-        fetch: async (opts: Record<string, unknown>) => {
-          expect(opts).toMatchObject({ orderBy: ['wins'], order: 'DESC', limit: 10 });
+        fetchScoped: async (opts: Record<string, unknown>) => {
+          expect(opts).toMatchObject({ id: 101345, order: 'DESC', limit: 10 });
           return {
-            players: [
-              { id: 1, name: 'Первый', position: 1, wins: 9 },
+            topPlayers: [
               { id: 1, name: 'Первый', position: 1, wins: 9 },
               { id: 2, name: 'Второй', position: 2, wins: 4 },
             ],
             player: { id: 3, name: 'Я', position: 7, wins: 2 },
           };
+        },
+        publishRecord: async (opts: Record<string, unknown>) => {
+          publishCalls.push(opts);
+          return { record: opts.record };
+        },
+        fetch: async () => {
+          throw new Error('global fetch не должен вызываться');
         },
       },
       player: {
@@ -351,8 +358,55 @@ describe('GamePushPlatform', () => {
       userRank: 7,
     });
     expect(await p.reportLeaderboardScore('wins', 12)).toBe(true);
+    expect(publishCalls).toEqual([
+      { id: 101345, record: { wins: 12 }, override: true },
+    ]);
     expect(setCalls).toEqual([['wins', 12]]);
     expect(synced).toBe(1);
+  });
+
+  it('таблица GamePush: резерв по тегу и глобальному полю', async () => {
+    const scopedCalls: Array<Record<string, unknown>> = [];
+    installGamePush({
+      leaderboard: {
+        fetchScoped: async (opts: Record<string, unknown>) => {
+          scopedCalls.push(opts);
+          if (opts.id) throw new Error('leaderboard_not_found');
+          return { topPlayers: [{ id: 4, name: 'Тег', position: 1, wins: 5 }] };
+        },
+        fetch: async () => {
+          throw new Error('global fetch не должен вызываться');
+        },
+      },
+    });
+    const p = new GamePushPlatform();
+    await p.init();
+    expect(await p.getLeaderboardEntries('wins')).toMatchObject({
+      entries: [{ name: 'Тег', score: 5, rank: 1 }],
+    });
+    expect(scopedCalls[0]).toMatchObject({ id: 101345 });
+    expect(scopedCalls[1]).toMatchObject({ tag: 'wins', variant: 'all' });
+  });
+
+  it('таблица GamePush: глобальный fetch, когда scoped недоступен', async () => {
+    installGamePush({
+      leaderboard: {
+        fetchScoped: async () => {
+          throw new Error('leaderboard_not_found');
+        },
+        fetch: async (opts: Record<string, unknown>) => {
+          expect(opts).toMatchObject({ orderBy: ['wins'], order: 'DESC', limit: 10 });
+          return {
+            topPlayers: [{ id: 5, name: 'Глобальный', position: 1, wins: 3 }],
+          };
+        },
+      },
+    });
+    const p = new GamePushPlatform();
+    await p.init();
+    expect(await p.getLeaderboardEntries('wins')).toMatchObject({
+      entries: [{ name: 'Глобальный', score: 3, rank: 1 }],
+    });
   });
 
   it('реклама и sticky-баннер', async () => {
