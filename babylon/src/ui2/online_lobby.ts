@@ -83,6 +83,7 @@ interface BoardRowStyle {
   nameW: number;
   gap: number;
   spacing: number;
+  width: number;
 }
 
 type BoardNoteFn = (
@@ -1463,13 +1464,21 @@ export class OnlineLobby {
     const rowSpacing = Math.max(4, Math.ceil(rowFont * 0.3));
     const MAX_LIST_H = MAX_ENTRIES * rowH + (MAX_ENTRIES - 1) * rowSpacing + 4;
     const rowStyle: BoardRowStyle = {
-      font: rowFont, rowH, rankW, scoreW, nameW, gap: rowGap, spacing: rowSpacing,
+      font: rowFont, rowH, rankW, scoreW, nameW, gap: rowGap, spacing: rowSpacing, width: contentW,
     };
     const modalScrollH = Math.max(120, vh - 24);
     const GAP = Math.max(8, Math.ceil(fs(12) * 0.5));
     const PAD_Y = 12;
     const titleFont = fs(20);
-    const TITLE_H = Math.ceil(titleFont * 1.5);
+    const titleText = showPlatformBoard
+      ? t(isGamePush ? 'Лидеры GamePush' : 'Лидеры Яндекс Игр')
+      : t('Таблица лидеров');
+    // Заголовок переносится на две строки на узком экране — считаем высоту
+    // по реальному переносу, иначе верхняя/нижняя строчка обрезается.
+    const TITLE_H = Math.max(
+      Math.ceil(titleFont * 1.5),
+      Math.ceil(estimateWrappedTextHeight(titleText, contentW, titleFont) + 8),
+    );
     const rankFont = fs(15);
     const RANK_H = Math.ceil(rankFont * 1.5);
     const noteFont = fs(13);
@@ -1479,7 +1488,11 @@ export class OnlineLobby {
     const closeFont = fs(16);
     const CLOSE_H = Math.max(44, Math.ceil(closeFont * 2));
     const sectionFont = fs(15);
-    const SECTION_H = Math.ceil(sectionFont * 1.5);
+    const sectionText = t(showPlatformBoard ? 'Все платформы' : 'Общий рейтинг всех платформ');
+    const SECTION_H = Math.max(
+      Math.ceil(sectionFont * 1.5),
+      Math.ceil(estimateWrappedTextHeight(sectionText, contentW, sectionFont) + 8),
+    );
     const meFont = fs(14);
     const ME_LINE_H = Math.ceil(meFont * 1.5);
     let yaNoteH = NOTE_LINE_H;
@@ -1563,10 +1576,8 @@ export class OnlineLobby {
     box.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
     panel.root.addControl(box);
 
-    box.addControl(mkLabel(showPlatformBoard
-      ? t(isGamePush ? 'Лидеры GamePush' : 'Лидеры Яндекс Игр')
-      : t('Таблица лидеров'), {
-      fontSize: titleFont, color: GOLD, height: TITLE_H,
+    box.addControl(mkLabel(titleText, {
+      fontSize: titleFont, color: GOLD, width: contentW, height: TITLE_H,
     }));
     let yaGrid: StackPanel | null = null;
     let yaRankLab: ReturnType<typeof mkLabel> | null = null;
@@ -1605,8 +1616,8 @@ export class OnlineLobby {
     serverSection.spacing = Math.max(6, Math.ceil(fs(12) * 0.5));
     serverSection.width = '100%';
     serverSection.isVisible = !showPlatformBoard;
-    serverSection.addControl(mkLabel(t(showPlatformBoard ? 'Все платформы' : 'Общий рейтинг всех платформ'), {
-      fontSize: sectionFont, color: WHITE90, height: SECTION_H,
+    serverSection.addControl(mkLabel(sectionText, {
+      fontSize: sectionFont, color: WHITE90, width: contentW, height: SECTION_H,
     }));
     const grid = new StackPanel('boardGrid');
     grid.isVertical = true;
@@ -1650,7 +1661,7 @@ export class OnlineLobby {
       let children = [TITLE_H];
       if (showPlatformBoard) {
         if (yaGrid?.isVisible) children.push(yaGrid.heightInPixels || 0);
-        if (yaRankLab?.isVisible) children.push(RANK_H);
+        if (yaRankLab?.isVisible) children.push(yaRankLab.heightInPixels || RANK_H);
         if (yaNoteLab?.isVisible) children.push(yaNoteH);
         children.push(TOGGLE_H);
       }
@@ -1773,6 +1784,12 @@ export class OnlineLobby {
     rankLab.text = data.userRank > 0
       ? t('Ваше место: %d', data.userRank)
       : '';
+    rankLab.fontSize = style.font;
+    rankLab.width = px(style.width);
+    rankLab.height = px(Math.max(
+      Math.ceil(style.font * 1.5),
+      Math.ceil(estimateWrappedTextHeight(rankLab.text || '0', style.width, style.font) + 6),
+    ));
     rankLab.isVisible = data.userRank > 0;
   }
 
