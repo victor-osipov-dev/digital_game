@@ -195,13 +195,6 @@ function _openRules(host: import('@babylonjs/gui').Container): void {
       height: Math.ceil(estimateWrappedTextHeight(text, contentW, headFont) + 6),
     }));
   };
-  const addNote = (text: string): void => {
-    col.addControl(mkLabel(text, {
-      color: '#ffffffDD', fontSize: noteFont, width: contentW, noWrap: false, vAlign: 'top',
-      align: 'left', hAlign: 'left',
-      height: Math.ceil(estimateWrappedTextHeight(text, contentW, noteFont) + 6),
-    }));
-  };
   const addCaption = (text: string): void => {
     col.addControl(mkLabel(text, {
       color: SKIN.textDim, fontSize: capFont, width: contentW, noWrap: false, vAlign: 'top',
@@ -215,46 +208,58 @@ function _openRules(host: import('@babylonjs/gui').Container): void {
   };
 
   addHead(t('Цель'));
-  addNote(t('Победа: выложите все фишки и завершите ход'));
+  addCaption(t('Зелёное — ваша рука, тёмное — стол'));
+  addCaption(t('Ваши фишки в руке'));
   addDemo(ruleField([tile(3, RED), tile(5, BLUE), tile(9, ORANGE)], tileH, true));
   addDemo(ruleArrow('↓', noteFont));
+  addCaption(t('Рука пуста — вы победили'));
   addDemo(ruleField([], tileH, true));
 
-  addHead(t('Колода'));
-  addNote(t('Джокер заменяет любую фишку'));
-  addNote(t('В ряду минимум 3 фишки'));
-  addDemo(ruleField([tile(5, RED), tile('★', YELLOW, true), tile(7, RED)], tileH, false, RULE_OK));
-
-  addHead(t('Ход'));
-  addNote(t('Выкладывайте сколько угодно фишек за ход'));
-  addNote(t('Переставляйте любые на столе, даже чужие'));
-  addNote(t('Главное — правильные ряды к концу хода'));
-  addDemo(ruleField([tile(2, RED), tile(4, BLUE), tile(6, ORANGE)], tileH, true));
-  addDemo(ruleArrow('↓', noteFont));
-  addDemo(ruleField([tile(2, RED), tile(4, BLUE), tile(6, ORANGE)], tileH, false, RULE_OK));
-  addNote(t('Или возьмите одну из колоды — ход завершится'));
+  addHead(t('Фишки'));
+  addCaption(t('Четыре цвета и джокер'));
+  addDemo(ruleField([tile(1, RED), tile(7, BLUE), tile(13, BLACK), tile('★', YELLOW, true)], tileH, false));
+  addCaption(t('Джокер заменяет любую фишку'));
+  addCaption(t('В ряду минимум 3 фишки'));
 
   addHead(t('Ряды'));
-  addNote(t('Серия: по порядку, одного цвета'));
+  addCaption(t('Серия: по порядку, одного цвета'));
   addDemo(ruleField([tile(5, RED), tile(6, RED), tile(7, RED)], tileH, false, RULE_OK));
-  addNote(t('Набор: одинаковое число, разные цвета'));
+  addCaption(t('Набор: одно число, разные цвета'));
   addDemo(ruleField([tile(7, RED), tile(7, BLUE), tile(7, BLACK)], tileH, false, RULE_OK));
 
-  addHead(t('Первый ход'));
-  addNote(t('Первый ход: от 30 очков, если правило включено'));
-  addDemo(ruleField([tile(10, RED), tile(10, BLUE), tile(10, BLACK)], tileH, false, RULE_OK));
-  addCaption('30');
+  addHead(t('Ход'));
+  addCaption(t('Ваши фишки в руке'));
+  addDemo(ruleField([tile(5, RED), tile(6, RED), tile(7, RED)], tileH, true));
+  addDemo(ruleArrow('↓', noteFont));
+  addCaption(t('Выложили их на стол'));
+  addDemo(ruleField([tile(5, RED), tile(6, RED), tile(7, RED)], tileH, false, RULE_OK));
+  addDemo(ruleArrow('↓', noteFont));
+  addCaption(t('Можно переставлять и чужие фишки'));
+  addDemo(ruleField([tile(7, RED), tile(7, BLUE), tile(7, BLACK)], tileH, false, RULE_OK));
+  addDemo(ruleArrow('↓', noteFont));
+  addDemo(ruleField([tile(7, BLUE), tile(7, RED), tile(7, BLACK)], tileH, false, RULE_OK));
+  addDemo(ruleArrow('↓', noteFont));
+  addCaption(t('Или возьмите фишку из колоды — ход завершится'));
 
   addHead(t('Сохранить и вернуть'));
-  addNote(t('Сохранить — запомнить расклад стола'));
-  addNote(t('Вернуть — восстановить его'));
   const ruleBtnH = Math.max(36, Math.ceil(noteFont * 1.9));
+  addCaption(t('Нажмите «Сохранить» — запомнится расклад'));
   addDemo(ruleButton(t('Сохранить'), ruleBtnH, noteFont, BUTTON_STYLE.green));
+  addDemo(ruleArrow('↓', noteFont));
   addDemo(ruleField([tile(5, RED), tile(6, RED), tile(7, RED)], tileH, false, RULE_OK));
-  addCaption(t('После перестановки'));
+  addDemo(ruleArrow('↓', noteFont));
+  addCaption(t('Переставили фишки'));
   addDemo(ruleField([tile(5, RED), tile(6, RED), tile(7, RED), tile(8, RED)], tileH, false, RULE_WARN));
+  addDemo(ruleArrow('↓', noteFont));
+  addCaption(t('Нажмите «Вернуть» — расклад восстановится'));
   addDemo(ruleButton(t('Вернуть'), ruleBtnH, noteFont, BUTTON_STYLE.deck));
+  addDemo(ruleArrow('↓', noteFont));
   addDemo(ruleField([tile(5, RED), tile(6, RED), tile(7, RED)], tileH, false, RULE_OK));
+
+  addHead(t('Первый ход'));
+  addCaption(t('Необязательно: от 30 очков, если включено в настройках'));
+  addDemo(ruleField([tile(10, RED), tile(10, BLUE), tile(10, BLACK)], tileH, false, RULE_OK));
+  addCaption('30');
 
   const btn = mkButton(t('Закрыть'), {
     fontSize: fs(17), height: buttonHeight, width: Math.min(200, panelWidth - 40), theme: BUTTON_STYLE.green,
