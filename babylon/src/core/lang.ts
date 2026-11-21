@@ -552,6 +552,28 @@ export function getLang(): LangCode {
   return current;
 }
 
+/**
+ * Язык при запуске.
+ *
+ * - `platformCode` — язык, который сейчас сообщает SDK площадки (ru/en/...);
+ * - `recordedPlatform` — язык площадки, который был при последнем сохранении
+ *   настроек. Если он отличается (например, в панели GamePush сменили язык),
+ *   язык площадки выигрывает — иначе ручная настройка переживает перезагрузку;
+ * - неподдерживаемый язык SDK → английский.
+ */
+export function resolveLang(
+  stored: LangCode | null,
+  platformCode: string | null,
+  recordedPlatform: string | null,
+): LangCode {
+  const code = platformCode ? platformCode.toLowerCase().slice(0, 2) : null;
+  const recorded = recordedPlatform ? recordedPlatform.toLowerCase().slice(0, 2) : null;
+  const fromPlatform = (): LangCode => (code === 'ru' ? 'ru' : 'en');
+  // У старых сохранений нет метки: считаем, что язык площадки мог измениться.
+  if (code && recorded !== code) return fromPlatform();
+  return stored ?? (code ? fromPlatform() : 'ru');
+}
+
 export function t(key: string, ...args: Array<string | number>): string {
   let base = current === 'en' && EN[key] ? EN[key] : key;
   if (current === 'en' && base === key) {

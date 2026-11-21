@@ -1,4 +1,4 @@
-import { getLang, LangCode, setLang, t } from './lang';
+import { getLang, LangCode, resolveLang, setLang, t } from './lang';
 import { getPlatformInterfaceLang } from '../platform';
 import { scheduleProgressSave } from './progress';
 
@@ -25,6 +25,8 @@ export const TILE_SIZE_NAMES = ['Крошечный', 'Маленький', 'С�
 
 export interface Settings {
   lang: LangCode;
+  /** Язык площадки, при котором был сохранён lang (нужен, чтобы заметить смену в SDK). */
+  lang_platform: string | null;
   sound: boolean;
   player_count: number;
   require_30: boolean;
@@ -48,6 +50,7 @@ function defaults(): Settings {
   // Godot: дефолт жёстко «ru» (авто-язык был только из SDK Яндекс Игр).
   return {
     lang: 'ru' as LangCode,
+    lang_platform: null,
     sound: true,
     player_count: MIN_PLAYERS,
     require_30: false,
@@ -83,13 +86,11 @@ export function loadSettings(): Settings {
   // интерфейса площадки (требование Яндекс Игр 2.14); ручная настройка
   // всегда приоритетнее.
   const storedLang = parsed.lang === 'en' || parsed.lang === 'ru' ? parsed.lang : null;
-  // Язык площадки: поддерживаем только ru, любой другой/неизвестный — en
-  // (требование CrazyGames/YouTube/GamePush). Без SDK — прежний дефолт ru.
   const sdkLang = getPlatformInterfaceLang();
-  const platformLang: LangCode | null = sdkLang
-    ? (sdkLang.toLowerCase().startsWith('ru') ? 'ru' : 'en')
-    : null;
-  const lang = storedLang ?? platformLang ?? 'ru';
+  const recordedPlatform = typeof parsed.lang_platform === 'string' ? parsed.lang_platform : null;
+  // Если в панели площадки сменили язык, он выигрывает у сохранённого.
+  // Иначе сохраняем ручной выбор игрока между перезагрузками.
+  const lang = resolveLang(storedLang, sdkLang, recordedPlatform);
   setLang(lang);
   const d = defaults();
   const playerCount = clampi(Number(parsed.player_count ?? d.player_count), MIN_PLAYERS, MAX_PLAYERS);
@@ -105,6 +106,7 @@ export function loadSettings(): Settings {
   }
   const s: Settings = {
     lang,
+    lang_platform: sdkLang ? sdkLang.toLowerCase().slice(0, 2) : null,
     sound: typeof parsed.sound === 'boolean' ? parsed.sound : d.sound,
     player_count: playerCount,
     require_30: typeof parsed.require_30 === 'boolean' ? parsed.require_30 : d.require_30,
@@ -126,7 +128,14 @@ export function loadSettings(): Settings {
 }
 
 export function saveSettings(patch: Partial<Settings>): Settings {
-  const s = { ...loadSettings(), ...patch };
+  const sdkLang = getPlatformInterfaceLang();
+  const s = {
+    ...loadSettings(),
+    ...patch,
+    // Запоминаем язык площадки, при котором сделан выбор, чтобы позже
+    // отличить смену языка в панели от ручной настройки игрока.
+    lang_platform: sdkLang ? sdkLang.toLowerCase().slice(0, 2) : null,
+  };
   cache = s;
   fixup();
   // saved_at нужен для выбора более свежей копии между устройством и облаком.

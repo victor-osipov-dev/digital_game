@@ -18,6 +18,16 @@ async function main(): Promise<void> {
   // игра стартует даже без сети/SDK. Затем подтягиваем облачный прогресс
   // (если он свежее локального) и только после этого читаем настройки.
   await initPlatform({ timeoutMs: 1500 });
+  // GamePush-сниппет иногда подгружает SDK позже стартового таймаута.
+  // Язык из gp.language нужен ДО чтения настроек, иначе перезагрузка
+  // сохранит прежний язык из localStorage и смена в панели не применится.
+  if (platform.id === 'gamepush') {
+    const deadline = Date.now() + 1500;
+    const marker = window as unknown as { __dgGP?: unknown };
+    while (Date.now() < deadline && !marker.__dgGP) {
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 50));
+    }
+  }
   await loadProgress();
   const settings = loadSettings();
   initSound(settings.sound);

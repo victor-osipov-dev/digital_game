@@ -668,7 +668,18 @@ export class GamePushPlatform extends BasePlatform {
   }
 
   getInterfaceLang(): string | null {
-    return this.lang ?? navigatorLang();
+    // SDK может прийти позже инициализации — читаем язык каждый раз, а не
+    // только в init(). Это позволяет поймать смену языка в панели GamePush.
+    const gp = sdk();
+    if (gp && typeof gp.language === 'string') {
+      const code = langCode(gp.language);
+      if (code) this.lang = code;
+    }
+    if (this.lang) return this.lang;
+    // Пока SDK на странице, но язык неизвестен, не подменяем его языком
+    // браузера: иначе новая настройка не будет обнаружена.
+    if (gp) return null;
+    return navigatorLang();
   }
 
   async loadProgress(): Promise<PlatformProgress | null> {
