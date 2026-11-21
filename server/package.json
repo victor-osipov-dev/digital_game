@@ -1,0 +1,18 @@
+{
+  "name": "digital-game-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Авторитетный игровой сервер Digital Game (руммикуб-подобная игра)",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node tools/run_tests.js",
+    "gencorpus": "node tools/gen_corpus.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
