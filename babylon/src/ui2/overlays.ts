@@ -265,11 +265,16 @@ function _openRules(host: import('@babylonjs/gui').Container): void {
   };
   // Только в разделе «Ряды»: отступ перед подписью (общий spacing колонки),
   // а подпись плотно прижата к своему ряду.
+  let rowGroupCount = 0;
   const addRowGroup = (text: string, demo: Control): void => {
     const group = new StackPanel('ruleGroup');
     group.isVertical = true;
-    group.spacing = Math.max(2, Math.round(capFont * 0.25));
+    group.spacing = Math.max(0, Math.round(capFont * 0.1));
     group.width = '100%';
+    // Дополнительный отступ сверху у всех групп, кроме первой: между рядом
+    // и следующей подписью становится больше воздуха.
+    group.paddingTop = px(rowGroupCount > 0 ? Math.max(8, Math.round(capFont * 0.6)) : 0);
+    rowGroupCount += 1;
     const lab = ruleCaption(text);
     lab.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
     group.addControl(lab);
