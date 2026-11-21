@@ -226,18 +226,19 @@ function _openRules(host: import('@babylonjs/gui').Container): void {
   addDemo(ruleField([tile(5, RED), tile('★', YELLOW, true), tile(7, RED)], tileH, false, RULE_OK));
 
   addHead(t('Ход'));
-  addNote(t('Одно действие за ход'));
-  addNote(t('Выложите фишку или возьмите из колоды'));
+  addNote(t('Выкладывайте сколько угодно фишек за ход'));
+  addNote(t('Переставляйте любые на столе, даже чужие'));
+  addNote(t('Главное — правильные ряды к концу хода'));
   addDemo(ruleField([tile(2, RED), tile(4, BLUE), tile(6, ORANGE)], tileH, true));
   addDemo(ruleArrow('↓', noteFont));
-  addDemo(ruleField([tile(6, ORANGE)], tileH, false, RULE_OK));
+  addDemo(ruleField([tile(2, RED), tile(4, BLUE), tile(6, ORANGE)], tileH, false, RULE_OK));
+  addNote(t('Или возьмите одну из колоды — ход завершится'));
 
   addHead(t('Ряды'));
   addNote(t('Серия: по порядку, одного цвета'));
   addDemo(ruleField([tile(5, RED), tile(6, RED), tile(7, RED)], tileH, false, RULE_OK));
   addNote(t('Набор: одинаковое число, разные цвета'));
   addDemo(ruleField([tile(7, RED), tile(7, BLUE), tile(7, BLACK)], tileH, false, RULE_OK));
-  addNote(t('Можно перестраивать стол'));
 
   addHead(t('Первый ход'));
   addNote(t('Первый ход: от 30 очков, если правило включено'));
