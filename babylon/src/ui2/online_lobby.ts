@@ -71,6 +71,28 @@ const ROOMS_MIN_H = 190;
 const PLAYERS_MIN_H = 160;
 const HEALTH_TICK_MS = 20000;
 const ROOMS_TICK_MS = 10000;
+
+// Строки таблицы лидеров должны расти вместе с масштабом текста: фиксированные
+// 22 px обрезали подписи при fs() ×2. Размеры считаются один раз при открытии
+// модалки и передаются в оба рендера (серверный топ и витрину площадки).
+interface BoardRowStyle {
+  font: number;
+  rowH: number;
+  rankW: number;
+  scoreW: number;
+  nameW: number;
+  gap: number;
+  spacing: number;
+}
+
+type BoardNoteFn = (
+  lab: ReturnType<typeof mkLabel>,
+  text: string,
+  warn: boolean,
+  setHeight: (h: number) => void,
+) => void;
+
+type BoardMeFn = (lab: ReturnType<typeof mkLabel>, text: string) => void;
 // uid, в который мы сами вошли по авторизованному Yandex ID. По нему
 // отличаем настоящий вход от гостевого lite-ID (у обоих логин «ya:»).
 const YA_AUTH_UID_KEY = 'dg.ya_auth_uid';
@@ -1418,21 +1440,75 @@ export class OnlineLobby {
     const isGamePush = platform.id === 'gamepush';
     const showPlatformBoard = platform.id === 'yandex' || isGamePush;
     const vh = viewHeight();
-    const ROW_H = 26;
     const MAX_ENTRIES = 10;
-    const MAX_LIST_H = MAX_ENTRIES * ROW_H + 4;
     const panelW = Math.max(160, Math.min(480, viewWidth() - 32));
     // Убираем горизонтальный скролл геометрией: контентная ширина фиксирована
     // с вычетом полей панели, а строки таблицы используют только её остаток.
     const contentW = Math.max(128, panelW - 32);
+    // Размеры считаем от реального размера шрифта. При fs() ×2 старые
+    // константы (22/26/30 px) обрезали и цифры, и имена сверху/снизу.
+    const rowFont = fs(15);
+    const rowH = Math.max(26, Math.ceil(rowFont * 1.6));
+    // На узком экране экономим пиксели: меньше отступы и лимиты колонок.
+    const rowGap = contentW < 300 ? 6 : 10;
+    const rankW = Math.min(
+      Math.max(34, Math.ceil(measureTextWidth('99.', rowFont)) + 8),
+      Math.floor(contentW * 0.24),
+    );
+    const scoreW = Math.min(
+      Math.max(42, Math.ceil(measureTextWidth('999', rowFont)) + 8),
+      Math.floor(contentW * 0.28),
+    );
+    const nameW = Math.max(28, contentW - rankW - scoreW - rowGap * 2);
+    const rowSpacing = Math.max(4, Math.ceil(rowFont * 0.3));
+    const MAX_LIST_H = MAX_ENTRIES * rowH + (MAX_ENTRIES - 1) * rowSpacing + 4;
+    const rowStyle: BoardRowStyle = {
+      font: rowFont, rowH, rankW, scoreW, nameW, gap: rowGap, spacing: rowSpacing,
+    };
     const modalScrollH = Math.max(120, vh - 24);
-    const GAP = 8;
+    const GAP = Math.max(8, Math.ceil(fs(12) * 0.5));
     const PAD_Y = 12;
-    const TITLE_H = 30;
-    const RANK_H = 24;
-    const NOTE_H = 34;
-    const TOGGLE_H = 36;
-    const CLOSE_H = 44;
+    const titleFont = fs(20);
+    const TITLE_H = Math.ceil(titleFont * 1.5);
+    const rankFont = fs(15);
+    const RANK_H = Math.ceil(rankFont * 1.5);
+    const noteFont = fs(13);
+    const NOTE_LINE_H = Math.ceil(noteFont * 1.5);
+    const toggleFont = fs(13);
+    const TOGGLE_H = Math.max(36, Math.ceil(toggleFont * 1.9));
+    const closeFont = fs(16);
+    const CLOSE_H = Math.max(44, Math.ceil(closeFont * 2));
+    const sectionFont = fs(15);
+    const SECTION_H = Math.ceil(sectionFont * 1.5);
+    const meFont = fs(14);
+    const ME_LINE_H = Math.ceil(meFont * 1.5);
+    let yaNoteH = NOTE_LINE_H;
+    let serverNoteH = NOTE_LINE_H;
+    let meH = ME_LINE_H;
+    // Примечания и строка «Ваше место» многострочные при крупном тексте —
+    // их высота считается по реальному переносу, поэтому ничего не режется.
+    const setBoardNote: BoardNoteFn = (
+      lab,
+      text,
+      warn,
+      setHeight,
+    ): void => {
+      setNote(lab, text, warn);
+      const h = text
+        ? Math.max(NOTE_LINE_H + 4, estimateWrappedTextHeight(text, contentW, noteFont) + 6)
+        : 0;
+      lab.fontSize = noteFont;
+      lab.width = px(contentW);
+      lab.height = px(h);
+      setHeight(h);
+    };
+    const setMeText: BoardMeFn = (lab, text): void => {
+      lab.text = text;
+      meH = Math.max(ME_LINE_H, estimateWrappedTextHeight(text, contentW, meFont) + 6);
+      lab.fontSize = meFont;
+      lab.width = px(contentW);
+      lab.height = px(meH);
+    };
 
     const panel = softPanel({
       bg: SKIN.panelDark,
@@ -1490,7 +1566,7 @@ export class OnlineLobby {
     box.addControl(mkLabel(showPlatformBoard
       ? t(isGamePush ? 'Лидеры GamePush' : 'Лидеры Яндекс Игр')
       : t('Таблица лидеров'), {
-      fontSize: fs(20), color: GOLD, height: TITLE_H,
+      fontSize: titleFont, color: GOLD, height: TITLE_H,
     }));
     let yaGrid: StackPanel | null = null;
     let yaRankLab: ReturnType<typeof mkLabel> | null = null;
@@ -1500,21 +1576,19 @@ export class OnlineLobby {
     if (showPlatformBoard) {
       yaGrid = new StackPanel('yaBoardGrid');
       yaGrid.isVertical = true;
-      yaGrid.spacing = 4;
+      yaGrid.spacing = rowSpacing;
       yaGrid.width = '100%';
       yaGrid.height = px(0);
       yaGrid.isVisible = false;
       box.addControl(yaGrid);
-      yaRankLab = mkLabel('', { fontSize: fs(15), color: '#90CAF9', width: '100%', height: RANK_H });
+      yaRankLab = mkLabel('', { fontSize: rankFont, color: '#90CAF9', width: '100%', height: RANK_H });
       yaRankLab.isVisible = false;
       box.addControl(yaRankLab);
-      yaNoteLab = mkLabel(t(isGamePush
-        ? 'Загружаем таблицу GamePush…'
-        : 'Загружаем таблицу Яндекса…'), {
-        fontSize: fs(13), color: WHITE85, width: '100%', height: NOTE_H, noWrap: false,
+      yaNoteLab = mkLabel('', {
+        fontSize: noteFont, color: WHITE85, width: '100%', height: noteFont, noWrap: false,
       });
       box.addControl(yaNoteLab);
-      serverToggle = greyButton(t('Показать общий топ'), TOGGLE_H, fs(13), contentW);
+      serverToggle = greyButton(t('Показать общий топ'), TOGGLE_H, toggleFont, contentW);
       serverToggle.onPointerUpObservable.add(() => {
         serverExpanded = !serverExpanded;
         serverSection.isVisible = serverExpanded;
@@ -1528,24 +1602,24 @@ export class OnlineLobby {
 
     const serverSection = new StackPanel('serverBoardSection');
     serverSection.isVertical = true;
-    serverSection.spacing = 6;
+    serverSection.spacing = Math.max(6, Math.ceil(fs(12) * 0.5));
     serverSection.width = '100%';
     serverSection.isVisible = !showPlatformBoard;
     serverSection.addControl(mkLabel(t(showPlatformBoard ? 'Все платформы' : 'Общий рейтинг всех платформ'), {
-      fontSize: fs(15), color: WHITE90, height: 24,
+      fontSize: sectionFont, color: WHITE90, height: SECTION_H,
     }));
     const grid = new StackPanel('boardGrid');
     grid.isVertical = true;
-    grid.spacing = 4;
+    grid.spacing = rowSpacing;
     grid.width = '100%';
     grid.height = px(0);
     grid.isVisible = false;
     serverSection.addControl(grid);
 
-    const meLab = mkLabel('', { fontSize: fs(14), color: '#90CAF9', width: '100%', height: 40, noWrap: false });
+    const meLab = mkLabel('', { fontSize: meFont, color: '#90CAF9', width: '100%', height: ME_LINE_H, noWrap: false });
     serverSection.addControl(meLab);
     const serverNoteLab = mkLabel('', {
-      fontSize: fs(13), color: NOTE, width: '100%', height: NOTE_H, noWrap: false,
+      fontSize: noteFont, color: NOTE, width: '100%', height: NOTE_LINE_H, noWrap: false,
     });
     serverSection.addControl(serverNoteLab);
     box.addControl(serverSection);
@@ -1557,7 +1631,7 @@ export class OnlineLobby {
       this.boardOpen = false;
       close();
     };
-    const cl = accentButton(t('Закрыть'), BUTTON_STYLE.green, CLOSE_H, fs(16), contentW);
+    const cl = accentButton(t('Закрыть'), BUTTON_STYLE.green, CLOSE_H, closeFont, contentW);
     cl.onPointerUpObservable.add(doClose);
     box.addControl(cl);
     const dim = overlay.children[0] as Rectangle;
@@ -1565,10 +1639,10 @@ export class OnlineLobby {
 
     let serverListH = 0;
     const getServerSectionHeight = (): number => {
-      const heights = [24];
+      const heights = [SECTION_H];
       if (grid.isVisible) heights.push(serverListH);
-      heights.push(40);
-      if (serverNoteLab.isVisible) heights.push(NOTE_H);
+      heights.push(meH);
+      if (serverNoteLab.isVisible) heights.push(serverNoteH);
       return heights.reduce((sum, height) => sum + height, 0)
         + serverSection.spacing * Math.max(0, heights.length - 1);
     };
@@ -1577,7 +1651,7 @@ export class OnlineLobby {
       if (showPlatformBoard) {
         if (yaGrid?.isVisible) children.push(yaGrid.heightInPixels || 0);
         if (yaRankLab?.isVisible) children.push(RANK_H);
-        if (yaNoteLab?.isVisible) children.push(NOTE_H);
+        if (yaNoteLab?.isVisible) children.push(yaNoteH);
         children.push(TOGGLE_H);
       }
       if (!showPlatformBoard || serverExpanded) children.push(getServerSectionHeight());
@@ -1585,11 +1659,12 @@ export class OnlineLobby {
       return PAD_Y * 2 + children.reduce((sum, height) => sum + height, 0)
         + GAP * Math.max(0, children.length - 1);
     };
-    setNote(serverNoteLab, t('Загружаем таблицу…'), false);
-    serverNoteLab.isVisible = true;
+    const setServerNoteHeight = (h: number): void => { serverNoteH = h; };
+    const setYaNoteHeight = (h: number): void => { yaNoteH = h; };
+    setBoardNote(serverNoteLab, t('Загружаем таблицу…'), false, setServerNoteHeight);
     serverSection.height = px(getServerSectionHeight());
     setPanelHeight(calculatePanelHeight());
-    meLab.text = '';
+    setMeText(meLab, '');
     grid.clearControls();
     const yaLoad = showPlatformBoard
       ? platform.getLeaderboardEntries('wins')
@@ -1602,24 +1677,28 @@ export class OnlineLobby {
 
     if (serverResult.status === 'fulfilled') {
       const res: BoardListMsg = serverResult.value;
-      this.renderBoard(res, grid, meLab, serverNoteLab, contentW);
+      this.renderBoard(res, grid, meLab, serverNoteLab, rowStyle, setBoardNote, setMeText, setServerNoteHeight);
       const n = Math.min(MAX_ENTRIES, (res.entries ?? []).length);
       if (n === 0) {
         grid.isVisible = false;
         grid.height = px(0);
         serverListH = 0;
-        setNote(serverNoteLab, '', false);
       } else {
         grid.isVisible = true;
-        serverListH = Math.min(MAX_LIST_H, n * ROW_H + 4);
+        serverListH = Math.min(MAX_LIST_H, n * rowH + (n - 1) * rowSpacing + 4);
         grid.height = px(serverListH);
       }
     } else {
       grid.isVisible = false;
       grid.height = px(0);
       serverListH = 0;
-      meLab.text = '';
-      setNote(serverNoteLab, t((serverResult.reason as Error).message) || t('Не удалось загрузить таблицу'), true);
+      setMeText(meLab, '');
+      setBoardNote(
+        serverNoteLab,
+        t((serverResult.reason as Error).message) || t('Не удалось загрузить таблицу'),
+        true,
+        setServerNoteHeight,
+      );
     }
     serverSection.height = px(getServerSectionHeight());
 
@@ -1627,18 +1706,22 @@ export class OnlineLobby {
       yaGrid.clearControls();
       if (yaResult.status === 'fulfilled' && yaResult.value) {
         const data = yaResult.value;
-        this.renderPlatformBoard(data, yaGrid, yaRankLab, yaNoteLab, contentW, isGamePush);
+        this.renderPlatformBoard(
+          data, yaGrid, yaRankLab, yaNoteLab, rowStyle, isGamePush, setBoardNote, setYaNoteHeight,
+        );
         const n = Math.min(MAX_ENTRIES, data.entries.length);
         yaGrid.isVisible = n > 0;
-        yaGrid.height = px(n > 0 ? Math.min(MAX_LIST_H, n * ROW_H + 4) : 0);
+        yaGrid.height = px(n > 0
+          ? Math.min(MAX_LIST_H, n * rowH + (n - 1) * rowSpacing + 4)
+          : 0);
       } else {
         yaGrid.isVisible = false;
         yaGrid.height = px(0);
         yaRankLab.text = '';
         yaRankLab.isVisible = false;
-        setNote(yaNoteLab, t(isGamePush
+        setBoardNote(yaNoteLab, t(isGamePush
           ? 'Не удалось загрузить таблицу GamePush'
-          : 'Не удалось загрузить таблицу Яндекса'), true);
+          : 'Не удалось загрузить таблицу Яндекса'), true, setYaNoteHeight);
       }
     }
     serverSection.height = px(getServerSectionHeight());
@@ -1650,38 +1733,39 @@ export class OnlineLobby {
     grid: StackPanel,
     rankLab: ReturnType<typeof mkLabel>,
     noteLab: ReturnType<typeof mkLabel>,
-    contentW: number,
+    style: BoardRowStyle,
     isGamePush: boolean,
+    note: BoardNoteFn,
+    setNoteHeight: (h: number) => void,
   ): void {
     grid.clearControls();
     const entries = data.entries.slice(0, 10);
     if (entries.length === 0) {
       grid.isVisible = false;
-      setNote(noteLab, data.error
+      note(noteLab, data.error
         ? t(isGamePush
           ? 'Не удалось загрузить таблицу GamePush'
           : 'Не удалось загрузить таблицу Яндекса')
-        : t('Нет сыгранных партий'), !!data.error);
+        : t('Нет сыгранных партий'), !!data.error, setNoteHeight);
     } else {
       grid.isVisible = true;
-      setNote(noteLab, '', false);
-      const nameW = Math.max(28, contentW - 100);
+      note(noteLab, '', false, setNoteHeight);
       entries.forEach((entry, i) => {
         const rank = entry.rank > 0 ? entry.rank : i + 1;
-        const row = hrow(12);
+        const row = hrow(style.gap);
         row.width = '100%';
-        row.height = px(22);
+        row.height = px(style.rowH);
         row.addControl(mkLabel(`${rank}.`, {
-          fontSize: fs(15), noWrap: true, color: rankColor(rank, false),
-          width: 34, height: 22, hAlign: 'left',
+          fontSize: style.font, noWrap: true, color: rankColor(rank, false),
+          width: style.rankW, height: style.rowH, hAlign: 'left',
         }));
-        row.addControl(mkLabel(textTruncate(entry.name, fs(15), nameW), {
-          fontSize: fs(15), noWrap: true, color: WHITE90,
-          width: nameW, height: 22, hAlign: 'left',
+        row.addControl(mkLabel(textTruncate(entry.name, style.font, style.nameW), {
+          fontSize: style.font, noWrap: true, color: WHITE90,
+          width: style.nameW, height: style.rowH, hAlign: 'left',
         }));
         row.addControl(mkLabel(String(entry.score), {
-          fontSize: fs(15), noWrap: true, color: WHITE90,
-          width: 42, height: 22, hAlign: 'right',
+          fontSize: style.font, noWrap: true, color: WHITE90,
+          width: style.scoreW, height: style.rowH, hAlign: 'right',
         }));
         grid.addControl(row);
       });
@@ -1698,41 +1782,43 @@ export class OnlineLobby {
     grid: StackPanel,
     meLab: ReturnType<typeof mkLabel>,
     noteLab: ReturnType<typeof mkLabel>,
-    contentW: number,
+    style: BoardRowStyle,
+    note: BoardNoteFn,
+    me: BoardMeFn,
+    setNoteHeight: (h: number) => void,
   ): void {
     grid.clearControls();
-    const nameW = Math.max(28, Math.min(340, contentW - 100));
     const entries = (res.entries ?? []).slice(0, 10);
     if (entries.length === 0) {
-      setNote(noteLab, t('Нет сыгранных партий'), false);
+      note(noteLab, t('Нет сыгранных партий'), false, setNoteHeight);
     } else {
-      setNote(noteLab, '', false);
+      note(noteLab, '', false, setNoteHeight);
     }
     const myNick = res.me?.nick ?? '';
     entries.forEach((e, i) => {
       const mine = myNick !== '' && e.nick === myNick;
-      const row = hrow(12);
+      const row = hrow(style.gap);
       row.width = '100%';
-      row.height = px(22);
+      row.height = px(style.rowH);
       row.addControl(mkLabel(`${i + 1}.`, {
-        fontSize: fs(15), noWrap: true,
-        color: rankColor(i + 1, mine), width: 34, height: 22, hAlign: 'left',
+        fontSize: style.font, noWrap: true,
+        color: rankColor(i + 1, mine), width: style.rankW, height: style.rowH, hAlign: 'left',
       }));
-      row.addControl(mkLabel(textTruncate(e.nick, fs(15), nameW), {
-        fontSize: fs(15), noWrap: true,
-        color: mine ? '#90CAF9' : WHITE90, width: nameW, height: 22, hAlign: 'left',
+      row.addControl(mkLabel(textTruncate(e.nick, style.font, style.nameW), {
+        fontSize: style.font, noWrap: true,
+        color: mine ? '#90CAF9' : WHITE90,
+        width: style.nameW, height: style.rowH, hAlign: 'left',
       }));
       row.addControl(mkLabel(String(e.wins), {
-        fontSize: fs(15), noWrap: true,
-        color: mine ? '#90CAF9' : WHITE90, width: 42, height: 22, hAlign: 'right',
+        fontSize: style.font, noWrap: true,
+        color: mine ? '#90CAF9' : WHITE90,
+        width: style.scoreW, height: style.rowH, hAlign: 'right',
       }));
       grid.addControl(row);
     });
-    if (res.me) {
-      meLab.text = t('Ваше место: %d · побед %d · партий %d', res.me.rank, res.me.wins, res.me.games);
-    } else {
-      meLab.text = t('Сыграйте партию, чтобы попасть в топ');
-    }
+    me(meLab, res.me
+      ? t('Ваше место: %d · побед %d · партий %d', res.me.rank, res.me.wins, res.me.games)
+      : t('Сыграйте партию, чтобы попасть в топ'));
   }
 
   // =============================================================== события сети (из App)
