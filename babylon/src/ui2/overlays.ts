@@ -38,8 +38,8 @@ const RULE_OK = '#66BB6A';
 const RULE_WARN = '#FFB74D';
 const RULE_BAD = '#E53935';
 
-function ruleTile(item: RuleTile, h: number): Container {
-  const w = Math.max(22, Math.round(h * 0.74));
+function ruleTile(item: RuleTile, h: number, minW = 22): Container {
+  const w = Math.max(minW, Math.round(h * 0.74));
   const root = new Container('ruleTile');
   root.width = px(w);
   root.height = px(h);
@@ -47,17 +47,17 @@ function ruleTile(item: RuleTile, h: number): Container {
   bg.background = item.color;
   bg.color = 'rgba(255,255,255,0.35)';
   bg.thickness = 1;
-  bg.cornerRadius = Math.max(3, Math.round(w * 0.16));
+  bg.cornerRadius = Math.max(2, Math.round(w * 0.16));
   bg.width = '100%';
   bg.height = '100%';
   root.addControl(bg);
   const label = new TextBlock('ruleTileText', item.text);
   label.color = item.joker ? '#3E2A00' : '#ffffff';
-  label.fontSize = Math.max(10, Math.round(h * 0.56));
+  label.fontSize = Math.max(8, Math.round(h * 0.56));
   label.fontFamily = 'Arial, sans-serif';
   if (!item.joker) {
     label.outlineColor = 'rgba(0,0,0,0.5)';
-    label.outlineWidth = 2;
+    label.outlineWidth = h < 24 ? 1 : 2;
   }
   label.width = '100%';
   label.height = '100%';
@@ -65,29 +65,31 @@ function ruleTile(item: RuleTile, h: number): Container {
   return root;
 }
 
-function ruleTilesWidth(count: number, h: number): number {
-  const gap = Math.max(3, Math.round(h * 0.12));
-  const tileW = Math.max(22, Math.round(h * 0.74));
+function ruleTilesWidth(count: number, h: number, minW = 22): number {
+  const gap = Math.max(2, Math.round(h * 0.12));
+  const tileW = Math.max(minW, Math.round(h * 0.74));
   return count * tileW + Math.max(0, count - 1) * gap;
 }
 
-function ruleTiles(tiles: RuleTile[], h: number): StackPanel {
+function ruleTiles(tiles: RuleTile[], h: number, minW = 22): StackPanel {
   const line = new StackPanel('ruleRowTiles');
   line.isVertical = false;
-  line.spacing = Math.max(3, Math.round(h * 0.12));
-  line.width = px(ruleTilesWidth(tiles.length, h));
+  line.spacing = Math.max(2, Math.round(h * 0.12));
+  line.width = px(ruleTilesWidth(tiles.length, h, minW));
   line.height = px(h);
   line.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-  for (const tile of tiles) line.addControl(ruleTile(tile, h));
+  for (const tile of tiles) line.addControl(ruleTile(tile, h, minW));
   return line;
 }
 
 // Зелёное поле руки и тёмное поле стола — такие же, как в самой игре.
-function ruleField(tiles: RuleTile[], h: number, hand: boolean, border?: string): Container {
+function ruleField(
+  tiles: RuleTile[], h: number, hand: boolean, border?: string, minW = 22,
+): Container {
   const pad = Math.max(7, Math.round(h * 0.22));
   const root = new Container('ruleField');
   // Пустая рука всё равно сохраняет ширину поля, чтобы стрелка вела в него.
-  root.width = px(ruleTilesWidth(Math.max(tiles.length, 3), h) + pad * 2);
+  root.width = px(ruleTilesWidth(Math.max(tiles.length, 3), h, minW) + pad * 2);
   root.height = px(h + pad * 2);
   const bg = new Rectangle('ruleFieldBg');
   bg.background = hand ? SKIN.handBg : SKIN.board;
@@ -97,7 +99,7 @@ function ruleField(tiles: RuleTile[], h: number, hand: boolean, border?: string)
   bg.width = '100%';
   bg.height = '100%';
   root.addControl(bg);
-  const line = ruleTiles(tiles, h);
+  const line = ruleTiles(tiles, h, minW);
   line.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
   root.addControl(line);
   return root;
@@ -123,38 +125,6 @@ function ruleButton(label: string, h: number, font: number, theme: ButtonTheme):
   text.width = '100%';
   text.height = '100%';
   root.addControl(text);
-  return root;
-}
-
-// Несколько рядов на одном поле стола (как в настоящей партии).
-function ruleTable(rows: RuleTile[][], h: number, border?: string): Container {
-  const pad = Math.max(7, Math.round(h * 0.22));
-  const gap = Math.max(4, Math.round(h * 0.12));
-  const width = Math.max(0, ...rows.map((row) => ruleTilesWidth(row.length, h))) + pad * 2;
-  const height = rows.length * h + Math.max(0, rows.length - 1) * gap + pad * 2;
-  const root = new Container('ruleTable');
-  root.width = px(width);
-  root.height = px(height);
-  const bg = new Rectangle('ruleTableBg');
-  bg.background = SKIN.board;
-  bg.color = border ?? SKIN.rowBorder;
-  bg.thickness = border ? 2 : 1;
-  bg.cornerRadius = 10;
-  bg.width = '100%';
-  bg.height = '100%';
-  root.addControl(bg);
-  const stack = new StackPanel('ruleTableRows');
-  stack.isVertical = true;
-  stack.spacing = gap;
-  stack.width = px(width - pad * 2);
-  stack.height = px(height - pad * 2);
-  stack.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
-  for (const row of rows) {
-    const line = ruleTiles(row, h);
-    line.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-    stack.addControl(line);
-  }
-  root.addControl(stack);
   return root;
 }
 
@@ -232,6 +202,9 @@ function _openRules(host: import('@babylonjs/gui').Container): void {
   const noteFont = fs(14);
   const capFont = fs(12);
   const tileH = Math.max(30, Math.round(fs(15) * 2));
+  // Ряд из 13 карточек рисуем мельче, чтобы он помещался в ширину окна.
+  const longH = Math.max(14, Math.min(tileH,
+    Math.floor((contentW - 30 - 12 * 2) / (13 * 0.74))));
   const tile = (text: number | string, color: number, joker = false): RuleTile => ({
     text: String(text), color: joker ? colorHex(YELLOW) : colorHex(color), joker,
   });
@@ -272,15 +245,19 @@ function _openRules(host: import('@babylonjs/gui').Container): void {
   addDemo(ruleField([tile(1, RED), tile(2, RED), tile('★', YELLOW, true)], tileH, false, RULE_OK));
 
   addHead(t('Ряды'));
-  addCaption(t('Пример поля'));
+  addCaption(t('Серия из 13: от 1 до 13'));
+  addDemo(ruleField(
+    Array.from({ length: 13 }, (_, i) => tile(i + 1, RED)),
+    longH, false, RULE_OK, 10,
+  ));
+  addCaption(t('Серия из 3: 5, 6, 7'));
   addDemo(ruleField([tile(5, RED), tile(6, RED), tile(7, RED)], tileH, false, RULE_OK));
-  addDemo(ruleArrow('↓', noteFont));
-  addCaption(t('Те же фишки переставлены, добавлен джокер'));
+  addCaption(t('Набор из 4: четыре цвета'));
   addDemo(ruleField([
-    tile('★', YELLOW, true), tile(5, RED), tile(6, RED), tile(7, RED),
+    tile(1, RED), tile(1, BLUE), tile(1, BLACK), tile(1, ORANGE),
   ], tileH, false, RULE_OK));
-  addCaption(t('Набор: одно число, разные цвета'));
-  addDemo(ruleField([tile(7, RED), tile(7, BLUE), tile(7, BLACK)], tileH, false, RULE_OK));
+  addCaption(t('Набор из 3: три цвета'));
+  addDemo(ruleField([tile(1, RED), tile(1, BLUE), tile(1, BLACK)], tileH, false, RULE_OK));
 
   addHead(t('Ход'));
   addCaption(t('В руке — чёрная 7'));
@@ -304,19 +281,17 @@ function _openRules(host: import('@babylonjs/gui').Container): void {
   addDemo(ruleStage([ruleField([tile(7, BLACK)], tileH, true)], tileH));
   addDemo(ruleArrow('↓', noteFont));
   addCaption(t('На поле два ряда: 4-5-6-7 красные и синие'));
-  addDemo(ruleStage([ruleTable([
-    [tile(4, RED), tile(5, RED), tile(6, RED), tile(7, RED)],
-    [tile(4, BLUE), tile(5, BLUE), tile(6, BLUE), tile(7, BLUE)],
-  ], tileH, RULE_OK)], tileH));
+  addDemo(ruleStage([
+    ruleField([tile(4, RED), tile(5, RED), tile(6, RED), tile(7, RED)], tileH, false, RULE_OK),
+    ruleField([tile(4, BLUE), tile(5, BLUE), tile(6, BLUE), tile(7, BLUE)], tileH, false, RULE_OK),
+  ], tileH));
   addDemo(ruleArrow('↓', noteFont));
   addCaption(t('Взяли обе 7, сделали новый ряд — победили'));
   addDemo(ruleStage([
     ruleField([], tileH, true),
-    ruleTable([
-      [tile(4, RED), tile(5, RED), tile(6, RED)],
-      [tile(4, BLUE), tile(5, BLUE), tile(6, BLUE)],
-      [tile(7, RED), tile(7, BLUE), tile(7, BLACK)],
-    ], tileH, RULE_OK),
+    ruleField([tile(4, RED), tile(5, RED), tile(6, RED)], tileH, false, RULE_OK),
+    ruleField([tile(4, BLUE), tile(5, BLUE), tile(6, BLUE)], tileH, false, RULE_OK),
+    ruleField([tile(7, RED), tile(7, BLUE), tile(7, BLACK)], tileH, false, RULE_OK),
   ], tileH));
   addCaption(t('Или возьмите фишку из колоды — ход завершится'));
 
