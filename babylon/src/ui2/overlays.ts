@@ -6,6 +6,7 @@ import { TEXT_SCALE_NAMES, TILE_SIZE_NAMES } from '../core/settings';
 import { BLACK, BLUE, ORANGE, RED, YELLOW, colorHex } from '../core/tile';
 import {
   BUTTON_STYLE,
+  ButtonTheme,
   checkboxRow,
   DropdownCtx,
   dropdownRow,
@@ -63,29 +64,64 @@ function ruleTile(item: RuleTile, h: number): Container {
   return root;
 }
 
-function ruleRow(tiles: RuleTile[], h: number, border?: string): Container {
+function ruleTilesWidth(count: number, h: number): number {
   const gap = Math.max(3, Math.round(h * 0.12));
   const tileW = Math.max(22, Math.round(h * 0.74));
-  const rowW = tiles.length * tileW + Math.max(0, tiles.length - 1) * gap + 12;
-  const root = new Container('ruleRow');
-  root.width = px(rowW);
-  root.height = px(h + 10);
-  const frame = new Rectangle('ruleRowFrame');
-  frame.background = 'rgba(255,255,255,0.05)';
-  frame.color = border ?? SKIN.rowBorder;
-  frame.thickness = border ? 2 : 1;
-  frame.cornerRadius = 8;
-  frame.width = '100%';
-  frame.height = '100%';
-  root.addControl(frame);
+  return count * tileW + Math.max(0, count - 1) * gap;
+}
+
+function ruleTiles(tiles: RuleTile[], h: number): StackPanel {
   const line = new StackPanel('ruleRowTiles');
   line.isVertical = false;
-  line.spacing = gap;
-  line.width = px(rowW - 12);
+  line.spacing = Math.max(3, Math.round(h * 0.12));
+  line.width = px(ruleTilesWidth(tiles.length, h));
   line.height = px(h);
+  line.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+  for (const tile of tiles) line.addControl(ruleTile(tile, h));
+  return line;
+}
+
+// Зелёное поле руки и тёмное поле стола — такие же, как в самой игре.
+function ruleField(tiles: RuleTile[], h: number, hand: boolean, border?: string): Container {
+  const pad = Math.max(7, Math.round(h * 0.22));
+  const root = new Container('ruleField');
+  // Пустая рука всё равно сохраняет ширину поля, чтобы стрелка вела в него.
+  root.width = px(ruleTilesWidth(Math.max(tiles.length, 3), h) + pad * 2);
+  root.height = px(h + pad * 2);
+  const bg = new Rectangle('ruleFieldBg');
+  bg.background = hand ? SKIN.handBg : SKIN.board;
+  bg.color = hand ? 'rgba(255,255,255,0.22)' : (border ?? SKIN.rowBorder);
+  bg.thickness = border ? 2 : 1;
+  bg.cornerRadius = 10;
+  bg.width = '100%';
+  bg.height = '100%';
+  root.addControl(bg);
+  const line = ruleTiles(tiles, h);
   line.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
   root.addControl(line);
-  for (const tile of tiles) line.addControl(ruleTile(tile, h));
+  return root;
+}
+
+// Кнопки в правиле «Сохранить/Вернуть» выглядят как настоящие кнопки игры.
+function ruleButton(label: string, h: number, font: number, theme: ButtonTheme): Container {
+  const width = Math.max(110, Math.min(220, Math.round(label.length * font * 0.9 + 32)));
+  const root = new Container('ruleButton');
+  root.width = px(width);
+  root.height = px(h);
+  const bg = new Rectangle('ruleButtonBg');
+  bg.background = theme.bg;
+  bg.thickness = 0;
+  bg.cornerRadius = 10;
+  bg.width = '100%';
+  bg.height = '100%';
+  root.addControl(bg);
+  const text = new TextBlock('ruleButtonText', label);
+  text.color = '#ffffff';
+  text.fontSize = font;
+  text.fontFamily = 'Arial, sans-serif';
+  text.width = '100%';
+  text.height = '100%';
+  root.addControl(text);
   return root;
 }
 
@@ -179,45 +215,45 @@ function _openRules(host: import('@babylonjs/gui').Container): void {
   };
 
   addHead(t('Цель'));
-  addNote(t('Победа: рука пуста'));
-  addDemo(ruleRow([tile(3, RED), tile(5, BLUE), tile(9, ORANGE)], tileH));
+  addNote(t('Победа: выложите все фишки и завершите ход'));
+  addDemo(ruleField([tile(3, RED), tile(5, BLUE), tile(9, ORANGE)], tileH, true));
   addDemo(ruleArrow('↓', noteFont));
-  addCaption('0 ✓');
+  addDemo(ruleField([], tileH, true));
 
   addHead(t('Колода'));
-  addNote(t('Джокер заменяет любое число'));
-  addDemo(ruleRow([tile(1, RED), tile(7, BLUE), tile(13, BLACK), tile('★', YELLOW, true)], tileH));
+  addNote(t('Джокер заменяет любую фишку'));
+  addNote(t('В ряду минимум 3 фишки'));
+  addDemo(ruleField([tile(5, RED), tile('★', YELLOW, true), tile(7, RED)], tileH, false, RULE_OK));
 
   addHead(t('Ход'));
   addNote(t('Одно действие за ход'));
-  addNote(t('Выложи число или возьми из колоды'));
-  addDemo(ruleRow([tile(2, RED), tile(4, BLUE), tile(6, ORANGE)], tileH));
+  addNote(t('Выложите фишку или возьмите из колоды'));
+  addDemo(ruleField([tile(2, RED), tile(4, BLUE), tile(6, ORANGE)], tileH, true));
   addDemo(ruleArrow('↓', noteFont));
-  addDemo(ruleRow([tile(6, ORANGE)], tileH, RULE_OK));
+  addDemo(ruleField([tile(6, ORANGE)], tileH, false, RULE_OK));
 
   addHead(t('Ряды'));
-  addNote(t('Серия: по порядку, один цвет'));
-  addDemo(ruleRow([tile(5, RED), tile(6, RED), tile(7, RED)], tileH, RULE_OK));
-  addNote(t('Набор: одно число, разные цвета'));
-  addDemo(ruleRow([tile(7, RED), tile(7, BLUE), tile(7, BLACK)], tileH, RULE_OK));
+  addNote(t('Серия: по порядку, одного цвета'));
+  addDemo(ruleField([tile(5, RED), tile(6, RED), tile(7, RED)], tileH, false, RULE_OK));
+  addNote(t('Набор: одинаковое число, разные цвета'));
+  addDemo(ruleField([tile(7, RED), tile(7, BLUE), tile(7, BLACK)], tileH, false, RULE_OK));
   addNote(t('Можно перестраивать стол'));
 
   addHead(t('Первый ход'));
-  addNote(t('Первый ход: минимум 30 очков'));
-  addDemo(ruleRow([tile(10, RED), tile(10, BLUE), tile(10, BLACK)], tileH, RULE_OK));
-  addCaption('10 + 10 + 10 = 30');
+  addNote(t('Первый ход: от 30 очков, если правило включено'));
+  addDemo(ruleField([tile(10, RED), tile(10, BLUE), tile(10, BLACK)], tileH, false, RULE_OK));
+  addCaption('30');
 
   addHead(t('Сохранить и вернуть'));
   addNote(t('Сохранить — запомнить расклад стола'));
-  addNote(t('Вернуть — восстановить сохранённый расклад'));
-  addCaption(t('Сохранённый расклад'));
-  addDemo(ruleRow([tile(5, RED), tile(6, RED), tile(7, RED)], tileH, RULE_OK));
-  addDemo(ruleArrow('↓', noteFont));
+  addNote(t('Вернуть — восстановить его'));
+  const ruleBtnH = Math.max(36, Math.ceil(noteFont * 1.9));
+  addDemo(ruleButton(t('Сохранить'), ruleBtnH, noteFont, BUTTON_STYLE.green));
+  addDemo(ruleField([tile(5, RED), tile(6, RED), tile(7, RED)], tileH, false, RULE_OK));
   addCaption(t('После перестановки'));
-  addDemo(ruleRow([tile(5, RED), tile(6, RED), tile(7, RED), tile(8, RED)], tileH, RULE_WARN));
-  addDemo(ruleArrow('↓', noteFont));
-  addCaption(t('Вернуть'));
-  addDemo(ruleRow([tile(5, RED), tile(6, RED), tile(7, RED)], tileH, RULE_OK));
+  addDemo(ruleField([tile(5, RED), tile(6, RED), tile(7, RED), tile(8, RED)], tileH, false, RULE_WARN));
+  addDemo(ruleButton(t('Вернуть'), ruleBtnH, noteFont, BUTTON_STYLE.deck));
+  addDemo(ruleField([tile(5, RED), tile(6, RED), tile(7, RED)], tileH, false, RULE_OK));
 
   const btn = mkButton(t('Закрыть'), {
     fontSize: fs(17), height: buttonHeight, width: Math.min(200, panelWidth - 40), theme: BUTTON_STYLE.green,
