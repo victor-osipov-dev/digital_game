@@ -128,6 +128,46 @@ function ruleButton(label: string, h: number, font: number, theme: ButtonTheme):
   return root;
 }
 
+// Длинный ряд переносится на несколько строк, а не уменьшается до микроразмера.
+function ruleFieldWrapped(
+  tiles: RuleTile[], h: number, maxWidth: number, border?: string,
+): Container {
+  const pad = Math.max(7, Math.round(h * 0.22));
+  const gap = Math.max(2, Math.round(h * 0.12));
+  const tileW = Math.max(22, Math.round(h * 0.74));
+  const innerW = Math.max(tileW, maxWidth - pad * 2);
+  const perLine = Math.max(1, Math.floor((innerW + gap) / (tileW + gap)));
+  const lines: RuleTile[][] = [];
+  for (let i = 0; i < tiles.length; i += perLine) lines.push(tiles.slice(i, i + perLine));
+  const lineGap = Math.max(4, Math.round(h * 0.12));
+  const width = Math.min(maxWidth, Math.max(...lines.map((line) => ruleTilesWidth(line.length, h))) + pad * 2);
+  const height = lines.length * h + (lines.length - 1) * lineGap + pad * 2;
+  const root = new Container('ruleField');
+  root.width = px(width);
+  root.height = px(height);
+  const bg = new Rectangle('ruleFieldBg');
+  bg.background = SKIN.board;
+  bg.color = border ?? SKIN.rowBorder;
+  bg.thickness = border ? 2 : 1;
+  bg.cornerRadius = 10;
+  bg.width = '100%';
+  bg.height = '100%';
+  root.addControl(bg);
+  const stack = new StackPanel('ruleWrappedLines');
+  stack.isVertical = true;
+  stack.spacing = lineGap;
+  stack.width = px(width - pad * 2);
+  stack.height = px(height - pad * 2);
+  stack.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+  for (const line of lines) {
+    const row = ruleTiles(line, h);
+    row.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+    stack.addControl(row);
+  }
+  root.addControl(stack);
+  return root;
+}
+
 // Один этап примера: поле руки и/или поле стола идут вместе.
 function ruleStage(items: Control[], h: number): StackPanel {
   const stage = new StackPanel('ruleStage');
@@ -202,9 +242,6 @@ function _openRules(host: import('@babylonjs/gui').Container): void {
   const noteFont = fs(14);
   const capFont = fs(12);
   const tileH = Math.max(30, Math.round(fs(15) * 2));
-  // Ряд из 13 карточек рисуем мельче, чтобы он помещался в ширину окна.
-  const longH = Math.max(14, Math.min(tileH,
-    Math.floor((contentW - 30 - 12 * 2) / (13 * 0.74))));
   const tile = (text: number | string, color: number, joker = false): RuleTile => ({
     text: String(text), color: joker ? colorHex(YELLOW) : colorHex(color), joker,
   });
@@ -214,16 +251,31 @@ function _openRules(host: import('@babylonjs/gui').Container): void {
       height: Math.ceil(estimateWrappedTextHeight(text, contentW, headFont) + 6),
     }));
   };
+  const ruleCaption = (text: string): TextBlock => mkLabel(text, {
+    color: SKIN.textDim, fontSize: capFont, width: contentW, noWrap: false, vAlign: 'top',
+    align: 'left', hAlign: 'left',
+    height: Math.ceil(estimateWrappedTextHeight(text, contentW, capFont) + 4),
+  });
   const addCaption = (text: string): void => {
-    col.addControl(mkLabel(text, {
-      color: SKIN.textDim, fontSize: capFont, width: contentW, noWrap: false, vAlign: 'top',
-      align: 'left', hAlign: 'left',
-      height: Math.ceil(estimateWrappedTextHeight(text, contentW, capFont) + 4),
-    }));
+    col.addControl(ruleCaption(text));
   };
   const addDemo = (control: Control): void => {
     control.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
     col.addControl(control);
+  };
+  // Только в разделе «Ряды»: отступ перед подписью (общий spacing колонки),
+  // а подпись плотно прижата к своему ряду.
+  const addRowGroup = (text: string, demo: Control): void => {
+    const group = new StackPanel('ruleGroup');
+    group.isVertical = true;
+    group.spacing = Math.max(2, Math.round(capFont * 0.25));
+    group.width = '100%';
+    const lab = ruleCaption(text);
+    lab.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    group.addControl(lab);
+    demo.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    group.addControl(demo);
+    col.addControl(group);
   };
 
   addHead(t('Цель'));
@@ -245,19 +297,17 @@ function _openRules(host: import('@babylonjs/gui').Container): void {
   addDemo(ruleField([tile(1, RED), tile(2, RED), tile('★', YELLOW, true)], tileH, false, RULE_OK));
 
   addHead(t('Ряды'));
-  addCaption(t('Серия из 13: от 1 до 13'));
-  addDemo(ruleField(
+  addRowGroup(t('Серия из 13 фишек — от 1 до 13'), ruleFieldWrapped(
     Array.from({ length: 13 }, (_, i) => tile(i + 1, RED)),
-    longH, false, RULE_OK, 10,
+    tileH, contentW, RULE_OK,
   ));
-  addCaption(t('Серия из 3: 5, 6, 7'));
-  addDemo(ruleField([tile(5, RED), tile(6, RED), tile(7, RED)], tileH, false, RULE_OK));
-  addCaption(t('Набор из 4: четыре цвета'));
-  addDemo(ruleField([
+  addRowGroup(t('Серия из 3 фишек — 5, 6, 7'),
+    ruleField([tile(5, RED), tile(6, RED), tile(7, RED)], tileH, false, RULE_OK));
+  addRowGroup(t('Набор из 4 фишек — четыре цвета'), ruleField([
     tile(1, RED), tile(1, BLUE), tile(1, BLACK), tile(1, ORANGE),
   ], tileH, false, RULE_OK));
-  addCaption(t('Набор из 3: три цвета'));
-  addDemo(ruleField([tile(1, RED), tile(1, BLUE), tile(1, BLACK)], tileH, false, RULE_OK));
+  addRowGroup(t('Набор из 3 фишек — три цвета'),
+    ruleField([tile(1, RED), tile(1, BLUE), tile(1, BLACK)], tileH, false, RULE_OK));
 
   addHead(t('Ход'));
   addCaption(t('В руке — чёрная 7'));
