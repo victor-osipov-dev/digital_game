@@ -36,6 +36,7 @@ interface RuleTile {
 
 const RULE_OK = '#66BB6A';
 const RULE_WARN = '#FFB74D';
+const RULE_BAD = '#E53935';
 
 function ruleTile(item: RuleTile, h: number): Container {
   const w = Math.max(22, Math.round(h * 0.74));
@@ -123,6 +124,51 @@ function ruleButton(label: string, h: number, font: number, theme: ButtonTheme):
   text.height = '100%';
   root.addControl(text);
   return root;
+}
+
+// Несколько рядов на одном поле стола (как в настоящей партии).
+function ruleTable(rows: RuleTile[][], h: number, border?: string): Container {
+  const pad = Math.max(7, Math.round(h * 0.22));
+  const gap = Math.max(4, Math.round(h * 0.12));
+  const width = Math.max(0, ...rows.map((row) => ruleTilesWidth(row.length, h))) + pad * 2;
+  const height = rows.length * h + Math.max(0, rows.length - 1) * gap + pad * 2;
+  const root = new Container('ruleTable');
+  root.width = px(width);
+  root.height = px(height);
+  const bg = new Rectangle('ruleTableBg');
+  bg.background = SKIN.board;
+  bg.color = border ?? SKIN.rowBorder;
+  bg.thickness = border ? 2 : 1;
+  bg.cornerRadius = 10;
+  bg.width = '100%';
+  bg.height = '100%';
+  root.addControl(bg);
+  const stack = new StackPanel('ruleTableRows');
+  stack.isVertical = true;
+  stack.spacing = gap;
+  stack.width = px(width - pad * 2);
+  stack.height = px(height - pad * 2);
+  stack.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+  for (const row of rows) {
+    const line = ruleTiles(row, h);
+    line.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    stack.addControl(line);
+  }
+  root.addControl(stack);
+  return root;
+}
+
+// Один этап примера: поле руки и/или поле стола идут вместе.
+function ruleStage(items: Control[], h: number): StackPanel {
+  const stage = new StackPanel('ruleStage');
+  stage.isVertical = true;
+  stage.spacing = Math.max(6, Math.round(h * 0.15));
+  stage.width = '100%';
+  for (const item of items) {
+    item.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    stage.addControl(item);
+  }
+  return stage;
 }
 
 function ruleArrow(text: string, size: number): TextBlock {
@@ -216,44 +262,79 @@ function _openRules(host: import('@babylonjs/gui').Container): void {
   addDemo(ruleField([], tileH, true));
 
   addHead(t('Фишки'));
-  addCaption(t('Четыре цвета и джокер'));
-  addDemo(ruleField([tile(1, RED), tile(7, BLUE), tile(13, BLACK), tile('★', YELLOW, true)], tileH, false));
-  addCaption(t('Джокер заменяет любую фишку'));
-  addCaption(t('В ряду минимум 3 фишки'));
+  addCaption(t('Неправильно: меньше 3 фишек'));
+  addDemo(ruleField([tile(1, RED), tile(2, RED)], tileH, false, RULE_BAD));
+  addDemo(ruleArrow('↓', noteFont));
+  addCaption(t('Правильно: три подряд'));
+  addDemo(ruleField([tile(1, RED), tile(2, RED), tile(3, RED)], tileH, false, RULE_OK));
+  addDemo(ruleArrow('↓', noteFont));
+  addCaption(t('Или так: джокер заменяет фишку'));
+  addDemo(ruleField([tile(1, RED), tile(2, RED), tile('★', YELLOW, true)], tileH, false, RULE_OK));
 
   addHead(t('Ряды'));
-  addCaption(t('Серия: по порядку, одного цвета'));
+  addCaption(t('Пример поля'));
   addDemo(ruleField([tile(5, RED), tile(6, RED), tile(7, RED)], tileH, false, RULE_OK));
+  addDemo(ruleArrow('↓', noteFont));
+  addCaption(t('Те же фишки переставлены, добавлен джокер'));
+  addDemo(ruleField([
+    tile('★', YELLOW, true), tile(5, RED), tile(6, RED), tile(7, RED),
+  ], tileH, false, RULE_OK));
   addCaption(t('Набор: одно число, разные цвета'));
   addDemo(ruleField([tile(7, RED), tile(7, BLUE), tile(7, BLACK)], tileH, false, RULE_OK));
 
   addHead(t('Ход'));
-  addCaption(t('Ваши фишки в руке'));
-  addDemo(ruleField([tile(5, RED), tile(6, RED), tile(7, RED)], tileH, true));
+  addCaption(t('В руке — чёрная 7'));
+  addDemo(ruleStage([ruleField([tile(7, BLACK)], tileH, true)], tileH));
   addDemo(ruleArrow('↓', noteFont));
-  addCaption(t('Выложили их на стол'));
-  addDemo(ruleField([tile(5, RED), tile(6, RED), tile(7, RED)], tileH, false, RULE_OK));
+  addCaption(t('На поле — три семёрки разных цветов'));
+  addDemo(ruleStage([
+    ruleField([tile(7, RED), tile(7, BLUE), tile(7, ORANGE)], tileH, false, RULE_OK),
+  ], tileH));
   addDemo(ruleArrow('↓', noteFont));
-  addCaption(t('Можно переставлять и чужие фишки'));
-  addDemo(ruleField([tile(7, RED), tile(7, BLUE), tile(7, BLACK)], tileH, false, RULE_OK));
+  addCaption(t('Выложили её: рука пуста, в ряду четыре 7'));
+  addDemo(ruleStage([
+    ruleField([], tileH, true),
+    ruleField([
+      tile(7, RED), tile(7, BLUE), tile(7, ORANGE), tile(7, BLACK),
+    ], tileH, false, RULE_OK),
+  ], tileH));
+
   addDemo(ruleArrow('↓', noteFont));
-  addDemo(ruleField([tile(7, BLUE), tile(7, RED), tile(7, BLACK)], tileH, false, RULE_OK));
+  addCaption(t('Теперь сложнее: снова чёрная 7 в руке'));
+  addDemo(ruleStage([ruleField([tile(7, BLACK)], tileH, true)], tileH));
   addDemo(ruleArrow('↓', noteFont));
+  addCaption(t('На поле два ряда: 4-5-6-7 красные и синие'));
+  addDemo(ruleStage([ruleTable([
+    [tile(4, RED), tile(5, RED), tile(6, RED), tile(7, RED)],
+    [tile(4, BLUE), tile(5, BLUE), tile(6, BLUE), tile(7, BLUE)],
+  ], tileH, RULE_OK)], tileH));
+  addDemo(ruleArrow('↓', noteFont));
+  addCaption(t('Взяли обе 7, сделали новый ряд — победили'));
+  addDemo(ruleStage([
+    ruleField([], tileH, true),
+    ruleTable([
+      [tile(4, RED), tile(5, RED), tile(6, RED)],
+      [tile(4, BLUE), tile(5, BLUE), tile(6, BLUE)],
+      [tile(7, RED), tile(7, BLUE), tile(7, BLACK)],
+    ], tileH, RULE_OK),
+  ], tileH));
   addCaption(t('Или возьмите фишку из колоды — ход завершится'));
 
   addHead(t('Сохранить и вернуть'));
   const ruleBtnH = Math.max(36, Math.ceil(noteFont * 1.9));
-  addCaption(t('Нажмите «Сохранить» — запомнится расклад'));
-  addDemo(ruleButton(t('Сохранить'), ruleBtnH, noteFont, BUTTON_STYLE.green));
-  addDemo(ruleArrow('↓', noteFont));
+  addCaption(t('Ряд, который хотим сохранить'));
   addDemo(ruleField([tile(5, RED), tile(6, RED), tile(7, RED)], tileH, false, RULE_OK));
+  addDemo(ruleArrow('↓', noteFont));
+  addCaption(t('Нажмите «Сохранить»'));
+  addDemo(ruleButton(t('Сохранить'), ruleBtnH, noteFont, BUTTON_STYLE.green));
   addDemo(ruleArrow('↓', noteFont));
   addCaption(t('Переставили фишки'));
   addDemo(ruleField([tile(5, RED), tile(6, RED), tile(7, RED), tile(8, RED)], tileH, false, RULE_WARN));
   addDemo(ruleArrow('↓', noteFont));
-  addCaption(t('Нажмите «Вернуть» — расклад восстановится'));
+  addCaption(t('Нажмите «Вернуть»'));
   addDemo(ruleButton(t('Вернуть'), ruleBtnH, noteFont, BUTTON_STYLE.deck));
   addDemo(ruleArrow('↓', noteFont));
+  addCaption(t('Ряд восстановлен'));
   addDemo(ruleField([tile(5, RED), tile(6, RED), tile(7, RED)], tileH, false, RULE_OK));
 
   addHead(t('Первый ход'));
