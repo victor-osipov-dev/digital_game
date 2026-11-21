@@ -1,9 +1,9 @@
-import { ScrollViewer, StackPanel } from '@babylonjs/gui';
+import { Container, Control, Rectangle, ScrollViewer, StackPanel, TextBlock } from '@babylonjs/gui';
 import { t } from '../core/lang';
 import { fs, loadSettings, saveSettings } from '../core/settings';
 import { applySoundPreference } from '../core/sound';
-import { rulesText } from '../core/rules';
 import { TEXT_SCALE_NAMES, TILE_SIZE_NAMES } from '../core/settings';
+import { BLACK, BLUE, ORANGE, RED, YELLOW, colorHex } from '../core/tile';
 import {
   BUTTON_STYLE,
   checkboxRow,
@@ -24,6 +24,76 @@ import type { OnlineStats } from './ports';
 // Полноэкранные модалки, общие для меню и игры: правила и настройки.
 
 type Host = StackPanel | import('@babylonjs/gui').Container | import('@babylonjs/gui').Rectangle;
+
+// Мини-изображение фишки и ряда делается теми же прямоугольниками и цифрами,
+// что и настоящие карточки на столе — без картинок и внешних ассетов.
+interface RuleTile {
+  text: string;
+  color: string;
+  joker?: boolean;
+}
+
+const RULE_OK = '#66BB6A';
+const RULE_WARN = '#FFB74D';
+
+function ruleTile(item: RuleTile, h: number): Container {
+  const w = Math.max(22, Math.round(h * 0.74));
+  const root = new Container('ruleTile');
+  root.width = px(w);
+  root.height = px(h);
+  const bg = new Rectangle('ruleTileBg');
+  bg.background = item.color;
+  bg.color = 'rgba(255,255,255,0.35)';
+  bg.thickness = 1;
+  bg.cornerRadius = Math.max(3, Math.round(w * 0.16));
+  bg.width = '100%';
+  bg.height = '100%';
+  root.addControl(bg);
+  const label = new TextBlock('ruleTileText', item.text);
+  label.color = item.joker ? '#3E2A00' : '#ffffff';
+  label.fontSize = Math.max(10, Math.round(h * 0.56));
+  label.fontFamily = 'Arial, sans-serif';
+  if (!item.joker) {
+    label.outlineColor = 'rgba(0,0,0,0.5)';
+    label.outlineWidth = 2;
+  }
+  label.width = '100%';
+  label.height = '100%';
+  root.addControl(label);
+  return root;
+}
+
+function ruleRow(tiles: RuleTile[], h: number, border?: string): Container {
+  const gap = Math.max(3, Math.round(h * 0.12));
+  const tileW = Math.max(22, Math.round(h * 0.74));
+  const rowW = tiles.length * tileW + Math.max(0, tiles.length - 1) * gap + 12;
+  const root = new Container('ruleRow');
+  root.width = px(rowW);
+  root.height = px(h + 10);
+  const frame = new Rectangle('ruleRowFrame');
+  frame.background = 'rgba(255,255,255,0.05)';
+  frame.color = border ?? SKIN.rowBorder;
+  frame.thickness = border ? 2 : 1;
+  frame.cornerRadius = 8;
+  frame.width = '100%';
+  frame.height = '100%';
+  root.addControl(frame);
+  const line = new StackPanel('ruleRowTiles');
+  line.isVertical = false;
+  line.spacing = gap;
+  line.width = px(rowW - 12);
+  line.height = px(h);
+  line.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+  root.addControl(line);
+  for (const tile of tiles) line.addControl(ruleTile(tile, h));
+  return root;
+}
+
+function ruleArrow(text: string, size: number): TextBlock {
+  const lab = mkLabel(text, { color: SKIN.gold, fontSize: size, width: size * 2, height: size * 1.8 });
+  lab.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+  return lab;
+}
 
 export function openRulesOverlay(parent: Host, _onClose: () => void): void {
   _openRules(parent as import('@babylonjs/gui').Container);
@@ -54,37 +124,106 @@ function _openRules(host: import('@babylonjs/gui').Container): void {
   pcol.paddingTop = px(12);
   pcol.paddingBottom = px(12);
   panel.root.addControl(pcol);
-  const titleHeight = Math.ceil(fs(22) * 1.45);
+  const titleFont = fs(22);
+  const titleHeight = Math.ceil(titleFont * 1.5);
   const buttonHeight = Math.max(52, Math.ceil(fs(17) * 1.35) + 18);
-  pcol.addControl(mkLabel(t('Правила игры'), { color: SKIN.gold, fontSize: fs(22), height: titleHeight }));
+  pcol.addControl(mkLabel(t('Как играть'), {
+    color: SKIN.gold, fontSize: titleFont, width: '100%', height: titleHeight,
+  }));
   const scroll = new ScrollViewer('hscroll');
   scroll.thickness = 0;
   scroll.width = '100%';
   scroll.height = px(Math.max(90, panelHeight - titleHeight - buttonHeight - 54));
   pcol.addControl(scroll);
   enableSmoothScroll(scroll);
-  const rulesWidth = panelWidth - 68;
-  const plainRules = rulesPlain();
-  const rich = mkLabel(rulesPlain(), {
-    fontSize: fs(15), color: '#ffffffE0', vAlign: 'top', hAlign: 'left', align: 'left',
-    // ScrollViewer резервирует полосу прокрутки; оставляем ей место,
-    // чтобы длинные строки всегда переносились, а не уходили под неё.
-    width: rulesWidth,
-    height: estimateWrappedTextHeight(plainRules, rulesWidth, fs(15)),
+
+  // ScrollViewer оставляет место под полосу прокрутки.
+  const contentW = Math.max(160, panelWidth - 68);
+  const col = new StackPanel('rulesCol');
+  col.isVertical = true;
+  col.spacing = Math.max(8, Math.ceil(fs(12) * 0.7));
+  col.width = px(contentW);
+  col.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+  scroll.addControl(col);
+
+  const headFont = fs(17);
+  const noteFont = fs(14);
+  const capFont = fs(12);
+  const tileH = Math.max(30, Math.round(fs(15) * 2));
+  const tile = (text: number | string, color: number, joker = false): RuleTile => ({
+    text: String(text), color: joker ? colorHex(YELLOW) : colorHex(color), joker,
   });
-  scroll.addControl(rich);
-  window.requestAnimationFrame(() => {
-    // Babylon сам знает точную высоту после реального переноса глифов.
-    // Оценка выше нужна только для первого кадра до layout-прохода.
-    rich.height = px(Math.ceil(rich.computeExpectedHeight()));
+  const addHead = (text: string): void => {
+    col.addControl(mkLabel(text, {
+      color: SKIN.gold, fontSize: headFont, width: contentW, align: 'left', hAlign: 'left',
+      height: Math.ceil(estimateWrappedTextHeight(text, contentW, headFont) + 6),
+    }));
+  };
+  const addNote = (text: string): void => {
+    col.addControl(mkLabel(text, {
+      color: '#ffffffDD', fontSize: noteFont, width: contentW, noWrap: false, vAlign: 'top',
+      align: 'left', hAlign: 'left',
+      height: Math.ceil(estimateWrappedTextHeight(text, contentW, noteFont) + 6),
+    }));
+  };
+  const addCaption = (text: string): void => {
+    col.addControl(mkLabel(text, {
+      color: SKIN.textDim, fontSize: capFont, width: contentW, noWrap: false, vAlign: 'top',
+      align: 'left', hAlign: 'left',
+      height: Math.ceil(estimateWrappedTextHeight(text, contentW, capFont) + 4),
+    }));
+  };
+  const addDemo = (control: Control): void => {
+    control.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    col.addControl(control);
+  };
+
+  addHead(t('Цель'));
+  addNote(t('Победа: рука пуста'));
+  addDemo(ruleRow([tile(3, RED), tile(5, BLUE), tile(9, ORANGE)], tileH));
+  addDemo(ruleArrow('↓', noteFont));
+  addCaption('0 ✓');
+
+  addHead(t('Колода'));
+  addNote(t('Джокер заменяет любое число'));
+  addDemo(ruleRow([tile(1, RED), tile(7, BLUE), tile(13, BLACK), tile('★', YELLOW, true)], tileH));
+
+  addHead(t('Ход'));
+  addNote(t('Одно действие за ход'));
+  addNote(t('Выложи число или возьми из колоды'));
+  addDemo(ruleRow([tile(2, RED), tile(4, BLUE), tile(6, ORANGE)], tileH));
+  addDemo(ruleArrow('↓', noteFont));
+  addDemo(ruleRow([tile(6, ORANGE)], tileH, RULE_OK));
+
+  addHead(t('Ряды'));
+  addNote(t('Серия: по порядку, один цвет'));
+  addDemo(ruleRow([tile(5, RED), tile(6, RED), tile(7, RED)], tileH, RULE_OK));
+  addNote(t('Набор: одно число, разные цвета'));
+  addDemo(ruleRow([tile(7, RED), tile(7, BLUE), tile(7, BLACK)], tileH, RULE_OK));
+  addNote(t('Можно перестраивать стол'));
+
+  addHead(t('Первый ход'));
+  addNote(t('Первый ход: минимум 30 очков'));
+  addDemo(ruleRow([tile(10, RED), tile(10, BLUE), tile(10, BLACK)], tileH, RULE_OK));
+  addCaption('10 + 10 + 10 = 30');
+
+  addHead(t('Сохранить и вернуть'));
+  addNote(t('Сохранить — запомнить расклад стола'));
+  addNote(t('Вернуть — восстановить сохранённый расклад'));
+  addCaption(t('Сохранённый расклад'));
+  addDemo(ruleRow([tile(5, RED), tile(6, RED), tile(7, RED)], tileH, RULE_OK));
+  addDemo(ruleArrow('↓', noteFont));
+  addCaption(t('После перестановки'));
+  addDemo(ruleRow([tile(5, RED), tile(6, RED), tile(7, RED), tile(8, RED)], tileH, RULE_WARN));
+  addDemo(ruleArrow('↓', noteFont));
+  addCaption(t('Вернуть'));
+  addDemo(ruleRow([tile(5, RED), tile(6, RED), tile(7, RED)], tileH, RULE_OK));
+
+  const btn = mkButton(t('Закрыть'), {
+    fontSize: fs(17), height: buttonHeight, width: Math.min(200, panelWidth - 40), theme: BUTTON_STYLE.green,
   });
-  const btn = mkButton(t('Закрыть'), { fontSize: fs(17), height: buttonHeight, width: Math.min(200, panelWidth - 40), theme: BUTTON_STYLE.green });
   btn.onPointerUpObservable.add(close);
   pcol.addControl(btn);
-}
-
-function rulesPlain(): string {
-  return rulesText().replace(/\[\/?b\]/g, '');
 }
 
 export function openStatsOverlay(
