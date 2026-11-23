@@ -69,6 +69,7 @@ export class App implements MenuHost, OfflineHost {
         // Не блокируем меню: при открытии сетевого экрана лобби повторит
         // обычный перебор доступных серверов и покажет причину.
       }
+      this.syncPlatformPlayerName();
       if (this.currentName === 'menu') void this.refreshOnlineRooms();
     })();
     let tracked: Promise<void>;
@@ -94,6 +95,13 @@ export class App implements MenuHost, OfflineHost {
 
   hasOnlineRooms(): boolean {
     return platform.supportsOnline && this.onlineRoomsAvailable && !this.api.pendingRoom;
+  }
+
+  // GamePush-витрина лидерборда берёт имя из профиля SDK, а не из нашей
+  // сетевой игры — передаём туда ник, как только он известен.
+  private syncPlatformPlayerName(): void {
+    const nick = this.api.user?.nick?.trim();
+    if (nick) platform.setPlayerName?.(nick);
   }
 
   /** Опрос списка комнат для плашки в меню — только пока экран меню активен. */
@@ -322,6 +330,7 @@ export class App implements MenuHost, OfflineHost {
     if (name === 'menu') {
       this.menu.build(this.root);
       this.startMenuConnection();
+      this.syncPlatformPlayerName();
       void this.refreshOnlineRooms();
       return;
     }
@@ -332,6 +341,7 @@ export class App implements MenuHost, OfflineHost {
     }
     if (name === 'online') {
       this.online.build(this.root);
+      this.syncPlatformPlayerName();
       void this.online.enter();
       return;
     }

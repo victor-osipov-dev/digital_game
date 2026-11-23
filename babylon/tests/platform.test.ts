@@ -395,10 +395,12 @@ describe('GamePushPlatform', () => {
     });
     expect(await p.reportLeaderboardScore('wins', 12)).toBe(true);
     expect(publishCalls).toEqual([
-      { id: 101345, record: { wins: 12 }, override: true },
+      { id: 101345, variant: 'all', record: { wins: 12 }, override: true },
     ]);
-    expect(setCalls).toEqual([['wins', 12]]);
-    expect(synced).toBe(1);
+    // Scoped-таблица обновлена явно: лишняя синхронизация поля wins не нужна
+    // и в панели без глобального поля даёт «Field wins not exists».
+    expect(setCalls).toEqual([]);
+    expect(synced).toBe(0);
   });
 
   it('таблица GamePush: резерв по тегу и глобальному полю', async () => {
@@ -420,7 +422,7 @@ describe('GamePushPlatform', () => {
     expect(await p.getLeaderboardEntries('wins')).toMatchObject({
       entries: [{ name: 'Тег', score: 5, rank: 1 }],
     });
-    expect(scopedCalls[0]).toMatchObject({ id: 101345 });
+    expect(scopedCalls[0]).toMatchObject({ id: 101345, variant: 'all' });
     expect(scopedCalls[1]).toMatchObject({ tag: 'wins', variant: 'all' });
   });
 

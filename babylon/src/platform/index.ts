@@ -502,6 +502,14 @@ class PlatformFacade implements PlatformAPI {
       /* ignore */
     }
   }
+
+  setPlayerName(name: string): void {
+    try {
+      this.current.setPlayerName?.(name);
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
 export const platform: PlatformAPI = new PlatformFacade();

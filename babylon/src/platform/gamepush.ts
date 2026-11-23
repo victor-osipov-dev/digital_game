@@ -258,6 +258,7 @@ function rewardedFinished(p: Promise<unknown> | void, ms: number): Promise<boole
  */
 export class GamePushPlatform extends BasePlatform {
   readonly id = 'gamepush' as const;
+  private playerName = '';
   readonly supportsOnline = true;
   readonly supportsAudio = true;
   readonly supportsFullscreen = true;
@@ -503,14 +504,19 @@ export class GamePushPlatform extends BasePlatform {
   }
 
   private scopedRefs(): ScopedBoardRef[] {
+    // Scoped API требует variant даже вместе с id: без него GamePush
+    // возвращает 422 GRAPHQL_VALIDATION_FAILED (input.variant must be defined).
     const refs: ScopedBoardRef[] = [
-      { id: WINS_BOARD_ID },
+      { id: WINS_BOARD_ID, variant: WINS_BOARD_VARIANT },
       { tag: WINS_BOARD_TAG, variant: WINS_BOARD_VARIANT },
-      { tag: WINS_BOARD_TAG },
     ];
     if (this.boardRef && this.boardRef !== 'global') {
-      const key = JSON.stringify(this.boardRef);
-      return [this.boardRef, ...refs.filter((ref) => JSON.stringify(ref) !== key)];
+      const fixed: ScopedBoardRef = {
+        ...this.boardRef,
+        variant: this.boardRef.variant ?? WINS_BOARD_VARIANT,
+      };
+      const key = JSON.stringify(fixed);
+      return [fixed, ...refs.filter((ref) => JSON.stringify(ref) !== key)];
     }
     return refs;
   }
@@ -525,6 +531,7 @@ export class GamePushPlatform extends BasePlatform {
       const result = await withTimeout(
         leaderboard.fetchScoped({
           ...ref,
+          variant: ref.variant ?? WINS_BOARD_VARIANT,
           order: 'DESC',
           limit: 10,
           includeFields: ['rank'],
@@ -578,8 +585,11 @@ export class GamePushPlatform extends BasePlatform {
       seen.add(key);
       const score = Number(entry[field] ?? entry.score ?? 0);
       const rank = Number(entry.position ?? entry.rank ?? index + 1);
+      const rawName = String(entry.name ?? '').trim();
+      const myId = String(sdk()?.player?.id ?? '');
+      const isMe = !!myId && entry.id != null && String(entry.id) === myId;
       entries.push({
-        name: String(entry.name ?? '').trim() || '—',
+        name: rawName || (isMe && this.playerName ? this.playerName : '—'),
         score: Math.max(0, Math.floor(Number.isFinite(score) ? score : 0)),
         rank: Math.max(0, Math.floor(Number.isFinite(rank) ? rank : index + 1)),
       });
@@ -634,6 +644,7 @@ export class GamePushPlatform extends BasePlatform {
           await withTimeout(
             Promise.resolve(leaderboard.publishRecord({
               ...ref,
+              variant: ref.variant ?? WINS_BOARD_VARIANT,
               record: { [field]: wins },
               override: true,
             })),
@@ -649,9 +660,11 @@ export class GamePushPlatform extends BasePlatform {
       }
     }
 
-    // Поле wins всё равно синхронизируем: если в проекте есть глобальная
-    // таблица global@wins, она обновится автоматически.
-    if (player?.set && player.sync) {
+    // Глобальная таблица обновляется полем игрока ТОЛЬКО если она реально
+    // используется (boardRef === 'global'). Иначе player.set('wins') падает
+    // «Field wins not exists on player model» — в панели настроена scoped-
+    // таблица, и лишняя синхронизация только портит логи.
+    if (!ok && this.boardRef === 'global' && player?.set && player.sync) {
       try {
         player.set(field, wins);
         await withTimeout(
@@ -661,10 +674,32 @@ export class GamePushPlatform extends BasePlatform {
         );
         ok = true;
       } catch {
-        /* глобальная таблица не настроена — scoped-публикация уже могла пройти */
+        /* глобальная таблица недоступна */
       }
     }
     return ok;
+  }
+
+  /**
+   * Ник из нашей игры: GamePush на своём сайте не знает имени игрока, поэтому
+   * таблица показывала запись без имени. Передаём его в профиль GamePush —
+   * publishRecord подхватит имя при публикации рекорда.
+   */
+  setPlayerName(name: string): void {
+    const clean = String(name ?? '').trim().slice(0, 32);
+    if (clean) this.playerName = clean;
+    const player = sdk()?.player;
+    if (!player || !this.playerName) return;
+    try {
+      const current = String(player.name ?? player.get?.('name') ?? '').trim();
+      if (!current) {
+        player.set?.('name', this.playerName);
+        player.name = this.playerName;
+        void Promise.resolve(player.sync?.({ storage: 'preferred' })).catch(() => undefined);
+      }
+    } catch {
+      /* имя не критично для игры */
+    }
   }
 
   getInterfaceLang(): string | null {

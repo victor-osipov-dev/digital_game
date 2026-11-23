@@ -151,4 +151,6 @@ export interface PlatformAPI {
   onPause(cb: () => void): void;
   /** Подписка на платформенное возобновление игры. */
   onResume(cb: () => void): void;
+  /** Ник из игры для площадок, чья витрина лидерборда берёт имя из профиля. */
+  setPlayerName?(name: string): void;
 }
