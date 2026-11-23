@@ -645,7 +645,9 @@ export function t(key: string, ...args: Array<string | number>): string {
 }
 
 export function appName(): string {
-  return t('Антисклероз');
+  // Требование Playgama 3.5.1: название игры НЕ меняется от языка
+  // интерфейса — всегда английский тайтл, как в карточке игры на площадке.
+  return 'Anti-Sclerosis';
 }
 
 export function applyTitle(): void {

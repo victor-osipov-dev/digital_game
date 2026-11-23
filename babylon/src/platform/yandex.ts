@@ -1,10 +1,10 @@
 import type {
   DeviceKind,
-  PlatformAPI,
   PlatformLeaderboard,
   PlatformPlayer,
   PlatformProgress,
 } from './types';
+import { BasePlatform } from './base';
 import {
   browserExitFullscreen,
   browserIsFullscreen,
@@ -152,7 +152,7 @@ function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
  *   отдельная платформенная витрина.
  * - Облачные игровые сохранения не используем.
  */
-export class YandexPlatform implements PlatformAPI {
+export class YandexPlatform extends BasePlatform {
   readonly id = 'yandex' as const;
   readonly isEmbedded = true;
   readonly supportsRewarded = true;

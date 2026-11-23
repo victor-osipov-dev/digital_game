@@ -1,4 +1,5 @@
 import { loadSettings } from '../core/settings';
+import { persistGet, persistRemove, persistSet } from '../core/persist';
 import { setServerCatalog } from '../core/deck';
 import {
   AuthOkMsg, BoardListMsg, C2S, DraftMsg, GameEnvelope, GameErrorMsg, HelloMsg,
@@ -82,29 +83,29 @@ export class Api {
 
   private setPending(room: RoomLobbyView | null): void {
     this.pendingRoom = room;
-    if (room && this.ref) localStorage.setItem(PENDING_SERVER_KEY, this.ref.id);
-    else if (!room) localStorage.removeItem(PENDING_SERVER_KEY);
+    if (room && this.ref) persistSet(PENDING_SERVER_KEY, this.ref.id);
+    else if (!room) persistRemove(PENDING_SERVER_KEY);
     this.listeners.onPending?.(room);
   }
 
   get nick(): string {
-    return localStorage.getItem(NICK_KEY) ?? '';
+    return persistGet(NICK_KEY) ?? '';
   }
 
   get savedToken(): string {
-    return localStorage.getItem(TOKEN_KEY) ?? '';
+    return persistGet(TOKEN_KEY) ?? '';
   }
 
   get savedLogin(): string {
-    return localStorage.getItem(LOGIN_KEY) ?? '';
+    return persistGet(LOGIN_KEY) ?? '';
   }
 
   get savedPassword(): string {
-    return localStorage.getItem(PASS_KEY) ?? '';
+    return persistGet(PASS_KEY) ?? '';
   }
 
   get savedPendingServerId(): string {
-    return localStorage.getItem(PENDING_SERVER_KEY) ?? '';
+    return persistGet(PENDING_SERVER_KEY) ?? '';
   }
 
   get hasSavedCredentials(): boolean {
@@ -121,8 +122,8 @@ export class Api {
       } catch (e) {
         if (e instanceof AuthError) {
           // аккаунт удалён/пароль изменён — создаём свежий под новым логином
-          localStorage.removeItem(LOGIN_KEY);
-          localStorage.removeItem(PASS_KEY);
+          persistRemove(LOGIN_KEY);
+          persistRemove(PASS_KEY);
         } else {
           // сетевая ошибка: credentials не трогаем, пробуем заново
           throw e;
@@ -187,7 +188,7 @@ export class Api {
     if (pkt.t !== S2C.AUTH_OK) throw new AuthError(String(pkt.reason ?? 'Сессия недействительна'));
     const ok = pkt as unknown as AuthOkMsg;
     this.user = ok.user;
-    if (ok.token) localStorage.setItem(TOKEN_KEY, ok.token);
+    if (ok.token) persistSet(TOKEN_KEY, ok.token);
     // место в партии при живом сокете: сообщаем, но не тащим (net.gd:444-455)
     this.setPending(ok.room ?? null);
     return ok;
@@ -197,11 +198,11 @@ export class Api {
     const pkt = await this.session.request(C2S.LOGIN, { login, password }, [S2C.AUTH_OK, S2C.AUTH_ERR]);
     if (pkt.t !== S2C.AUTH_OK) throw new AuthError(String(pkt.reason ?? 'Ошибка входа'));
     const ok = pkt as unknown as AuthOkMsg;
-    if (ok.token) localStorage.setItem(TOKEN_KEY, ok.token);
+    if (ok.token) persistSet(TOKEN_KEY, ok.token);
     this.user = ok.user;
-    localStorage.setItem(NICK_KEY, ok.user.nick);
-    localStorage.setItem(LOGIN_KEY, login);
-    localStorage.setItem(PASS_KEY, password);
+    persistSet(NICK_KEY, ok.user.nick);
+    persistSet(LOGIN_KEY, login);
+    persistSet(PASS_KEY, password);
     this.setPending(ok.room ?? null);
     return ok;
   }
@@ -210,11 +211,11 @@ export class Api {
     const pkt = await this.session.request(C2S.REGISTER, { login, password, nick }, [S2C.AUTH_OK, S2C.AUTH_ERR]);
     if (pkt.t !== S2C.AUTH_OK) throw new AuthError(String(pkt.reason ?? 'Ошибка регистрации'));
     const ok = pkt as unknown as AuthOkMsg;
-    if (ok.token) localStorage.setItem(TOKEN_KEY, ok.token);
+    if (ok.token) persistSet(TOKEN_KEY, ok.token);
     this.user = ok.user;
-    localStorage.setItem(NICK_KEY, ok.user.nick);
-    localStorage.setItem(LOGIN_KEY, login);
-    localStorage.setItem(PASS_KEY, password);
+    persistSet(NICK_KEY, ok.user.nick);
+    persistSet(LOGIN_KEY, login);
+    persistSet(PASS_KEY, password);
     this.setPending(ok.room ?? null);
     return ok;
   }
@@ -232,13 +233,13 @@ export class Api {
     );
     if (pkt.t !== S2C.AUTH_OK) throw new AuthError(String(pkt.reason ?? 'Ошибка входа'));
     const ok = pkt as unknown as AuthOkMsg;
-    if (ok.token) localStorage.setItem(TOKEN_KEY, ok.token);
+    if (ok.token) persistSet(TOKEN_KEY, ok.token);
     this.user = ok.user;
-    localStorage.setItem(NICK_KEY, ok.user.nick);
+    persistSet(NICK_KEY, ok.user.nick);
     // Не позволяем последующему гостевому авто-входу незаметно вернуть
     // старый парольный аккаунт после входа через Яндекс ID.
-    localStorage.removeItem(LOGIN_KEY);
-    localStorage.removeItem(PASS_KEY);
+    persistRemove(LOGIN_KEY);
+    persistRemove(PASS_KEY);
     this.setPending(ok.room ?? null);
     return ok;
   }
@@ -249,7 +250,7 @@ export class Api {
     } catch {
       /* fire and forget */
     }
-    localStorage.removeItem(TOKEN_KEY);
+    persistRemove(TOKEN_KEY);
     this.user = null;
     this.setPending(null);
   }

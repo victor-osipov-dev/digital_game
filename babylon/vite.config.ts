@@ -1,3 +1,4 @@
+import playgamaBridge from '@playgama/bridge/vite';
 import { defineConfig } from 'vite';
 
 // GamePush: projectId и publicToken из панели проекта. Это публичные
@@ -47,13 +48,16 @@ const CRAZYGAMES_SDK = 'https://sdk.crazygames.com/crazygames-sdk-v3.js';
 const YOUTUBE_SDK = 'https://www.youtube.com/game_api/v1';
 
 // Варианты сборки (переключаются режимом Vite):
-//   vite build                  — auto: площадка определяется в рантайме.
-//                                 Это архив для Яндекс Игр (dist/).
-//   vite build --mode yandex    — принудительно Яндекс Игры (dist/).
-//   vite build --mode site      — только свой сайт, без Яндекса (dist-site/).
-//   vite build --mode gamepush  — GamePush SDK + своя панель (dist-gamepush/).
+//   vite build                   — auto: площадка определяется в рантайме.
+//                                  Это архив для Яндекс Игр (dist/).
+//   vite build --mode yandex     — принудительно Яндекс Игры (dist/).
+//   vite build --mode site       — только свой сайт, без Яндекса (dist-site/).
+//   vite build --mode gamepush   — GamePush SDK + своя панель (dist-gamepush/).
 //   vite build --mode crazygames — CrazyGames SDK v3 (dist-crazygames/).
-//   vite build --mode youtube   — YouTube Playables SDK (dist-youtube/).
+//   vite build --mode youtube    — YouTube Playables SDK (dist-youtube/).
+//   vite build --mode playgama   — Playgama с Bridge SDK (dist-playgama/):
+//                                  SDK копируется локально в бандл (mode: local,
+//                                  требование 1.2.5 — без CDN), target 'playgama'.
 export default defineConfig(({ mode }) => {
   const target = mode === 'site'
     ? 'standalone'
@@ -65,7 +69,9 @@ export default defineConfig(({ mode }) => {
           ? 'crazygames'
           : mode === 'youtube'
             ? 'youtube'
-            : 'auto';
+            : mode === 'playgama'
+              ? 'playgama'
+              : 'auto';
   const outDir = mode === 'site'
     ? 'dist-site'
     : mode === 'gamepush'
@@ -74,14 +80,18 @@ export default defineConfig(({ mode }) => {
         ? 'dist-crazygames'
         : mode === 'youtube'
           ? 'dist-youtube'
-          : 'dist';
-  const plugins = mode === 'gamepush'
-    ? [gamePushSnippetPlugin()]
-    : mode === 'crazygames'
-      ? [sdkScriptPlugin(CRAZYGAMES_SDK)]
-      : mode === 'youtube'
-        ? [sdkScriptPlugin(YOUTUBE_SDK)]
-        : [];
+          : mode === 'playgama'
+            ? 'dist-playgama'
+            : 'dist';
+  const plugins = mode === 'playgama'
+    ? [playgamaBridge({ mode: 'local' })]
+    : mode === 'gamepush'
+      ? [gamePushSnippetPlugin()]
+      : mode === 'crazygames'
+        ? [sdkScriptPlugin(CRAZYGAMES_SDK)]
+        : mode === 'youtube'
+          ? [sdkScriptPlugin(YOUTUBE_SDK)]
+          : [];
   return {
     base: './',
     server: { port: 5173, host: true },

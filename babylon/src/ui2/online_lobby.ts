@@ -8,6 +8,7 @@ import {
   StackPanel,
 } from '@babylonjs/gui';
 import { t } from '../core/lang';
+import { persistGet, persistSet } from '../core/persist';
 import { fs, loadSettings, MAX_NAME_LEN } from '../core/settings';
 import { AuthError, RoomWithServer } from '../net/api';
 import {
@@ -391,7 +392,7 @@ export class OnlineLobby {
     // серверный аккаунт не совпадает с тем, в который мы сами входили по
     // авторизованному Yandex ID. Гостевой lite-ID тоже носит логин «ya:»,
     // поэтому префикса недостаточно — помним uid своего яндексового входа.
-    const myYaUid = localStorage.getItem(YA_AUTH_UID_KEY) ?? '';
+    const myYaUid = persistGet(YA_AUTH_UID_KEY) ?? '';
     const login = String(this.app.api.user?.login ?? '');
     const matchesOwnYandexLogin = myYaUid !== '' && login === `ya:${myYaUid}`;
     this.yaUpsellBtn.isVisible = platform.id === 'yandex'
@@ -834,7 +835,7 @@ export class OnlineLobby {
     this.setBusy(t('Входим через Яндекс…'));
     try {
       await this.app.api.yandexLogin(profile.uid, profile.name || t('Гость'));
-      localStorage.setItem(YA_AUTH_UID_KEY, profile.uid);
+      persistSet(YA_AUTH_UID_KEY, profile.uid);
       this.setBusy('');
       this.updateStatus();
       if (fromAuthPage || this.page === 'auth') {
@@ -919,7 +920,7 @@ export class OnlineLobby {
     this.setBusy(t('Входим через Яндекс…'));
     try {
       await this.app.api.yandexLogin(profile.uid, profile.name || t('Гость'));
-      localStorage.setItem(YA_AUTH_UID_KEY, profile.uid);
+      persistSet(YA_AUTH_UID_KEY, profile.uid);
       this.setBusy('');
       await this.gotoRooms();
     } catch (e) {

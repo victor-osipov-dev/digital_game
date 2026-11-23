@@ -2,6 +2,9 @@ node_modules/
 dist/
 dist-site/
 dist-gamepush/
+dist-playgama/
+dist-youtube/
+dist-crazygames/
 *.log
 .env
 .env.local

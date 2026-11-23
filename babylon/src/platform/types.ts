@@ -1,5 +1,5 @@
 // Платформенный слой: единый интерфейс для всех браузерных площадок
-// (Яндекс Игры, CrazyGames, GameDistribution, свой сайт / standalone).
+// (Яндекс Игры, CrazyGames, GameDistribution, Playgama, свой сайт / standalone).
 //
 // Правила:
 // - игра вызывает только PlatformAPI и никогда не обращается к SDK
@@ -13,6 +13,7 @@ export type PlatformId =
   | 'crazygames'
   | 'youtube'
   | 'gamedistribution'
+  | 'playgama'
   | 'standalone';
 
 export type DeviceKind = 'desktop' | 'mobile' | 'tablet' | 'tv' | 'unknown';
@@ -64,6 +65,21 @@ export interface PlatformAPI {
   gameplayStart(): void;
   /** Игровой процесс приостановлен/завершён. */
   gameplayStop(): void;
+  /** Партия завершена: платформа получает level_completed/level_failed. */
+  levelCompleted(won: boolean): void;
+  /**
+   * Прочитать ключи сохранения одним вызовом (требование Playgama Bridge).
+   * Возвращает значения или null для отсутствующих ключей.
+   */
+  storageGet(keys: string[]): Promise<Record<string, string | null>>;
+  /** Записать изменённые ключи сохранения одним вызовом. */
+  storageSet(entries: Record<string, string>): Promise<void>;
+  /** Удалить ключи сохранения. */
+  storageDelete(keys: string[]): Promise<void>;
+  /** Платформа сейчас разрешает звук (Playgama platform.isAudioEnabled). */
+  isAudioEnabled(): boolean;
+  /** Подписка на изменения разрешения звука платформой. */
+  onAudioState(cb: (enabled: boolean) => void): void;
   /**
    * Полноэкранная реклама в логической паузе.
    * @returns true — реклама была показана, false — пропущена/ошибка.

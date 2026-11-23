@@ -1,8 +1,8 @@
 <!doctype html>
-<html lang="ru">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Антисклероз</title>
+  <title>Anti-Sclerosis</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
   <style>
     html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; overscroll-behavior: none; background: #101014; touch-action: none; -webkit-user-select: none; user-select: none; }
@@ -44,22 +44,12 @@
 <body>
   <canvas id="canvas"></canvas>
   <div id="boot-loader" role="status" aria-live="polite">
-    <div class="boot-title" id="boot-title">Антисклероз</div>
+    <!-- Требование Playgama 3.5.1: название игры не зависит от языка.
+         Подпись двуязычная, потому что язык интерфейса ещё неизвестен. -->
+    <div class="boot-title" id="boot-title">Anti-Sclerosis</div>
     <div class="boot-spinner"></div>
-    <div class="boot-text" id="boot-text">Загрузка…</div>
+    <div class="boot-text" id="boot-text">Загрузка / Loading…</div>
   </div>
-  <script>
-    // Язык лоадера совпадает с сохранённым языком игры (до запуска бандла).
-    (function () {
-      try {
-        var s = JSON.parse(localStorage.getItem('dg.settings') || '{}');
-        if (s && s.lang === 'en') {
-          document.getElementById('boot-title').textContent = 'Anti-Sclerosis';
-          document.getElementById('boot-text').textContent = 'Loading…';
-        }
-      } catch (e) { /* localStorage недоступен — оставляем русский */ }
-    })();
-  </script>
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

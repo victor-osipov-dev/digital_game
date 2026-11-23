@@ -21,6 +21,7 @@ import {
 } from './uiskin';
 import { viewHeight, viewWidth } from './viewport';
 import type { OnlineStats } from './ports';
+import { isSoundEnabled, setSoundEnabled } from '../core/audio';
 
 // Полноэкранные модалки, общие для меню и игры: правила и настройки.
 
@@ -578,11 +579,19 @@ export function openSettingsOverlay(
     saveSettings({ tile_step: i });
     onRebuild();
   });
-  const ddLang = addDropdown(t('Язык:'));
+  const ddLang = addDropdown('Язык / Language');
   ddLang.setOptions(['Русский', 'English'], S.lang === 'en' ? 1 : 0, (i) => {
     saveSettings({ lang: i === 1 ? 'en' : 'ru' });
     onRebuild();
   });
+  const soundChk = checkboxRow(t('Звук'), isSoundEnabled(), {
+    height: Math.max(fieldHeight, Math.ceil(fieldFont * 2.4)),
+    fontSize: fieldFont,
+    maxLabelWidth: contentWidth - Math.round(fieldHeight * 0.45) - 8,
+    onChange: (v: boolean) => setSoundEnabled(v),
+  });
+  soundChk.root.horizontalAlignment = 0;
+  fields.addControl(soundChk.root);
   const chk = checkboxRow(t('Анимация бота'), S.bot_anim, {
     height: Math.max(fieldHeight, Math.ceil(fieldFont * 2.4)),
     fontSize: fieldFont,

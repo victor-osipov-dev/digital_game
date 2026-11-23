@@ -1,0 +1,9 @@
+{
+  "platforms": {
+    "playgama": {},
+    "playgama_sandbox": {}
+  },
+  "game": {
+    "adaptToSafeArea": false
+  }
+}

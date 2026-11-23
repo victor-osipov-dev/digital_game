@@ -238,10 +238,13 @@ export class MenuScreen {
     // Отступ после «Анимация бота» перед блоком настроек.
     col.addControl(gapControl(8));
 
+    // Метка выбора языка не переводится (требование Playgama 3.4.x):
+    // двуязычная подпись, чтобы настройку нашёл игрок на любом языке.
+    const LANG_LABEL = 'Язык / Language';
     const optLblW = Math.max(
       measureTextWidth(t('Текст:'), fs(15)),
       measureTextWidth(t('Карточки:'), fs(15)),
-      measureTextWidth(t('Язык:'), fs(15)),
+      measureTextWidth(LANG_LABEL, fs(15)),
     ) + 6;
     this.optionRowStr(col, t('Текст:'), textScaleNamesLocalized(), S.text_scale, (i) => {
       saveSettings({ text_scale: i });
@@ -251,7 +254,7 @@ export class MenuScreen {
       saveSettings({ tile_step: i });
       this.host.rebuild();
     }, colW, optLblW);
-    this.optionRowStr(col, t('Язык:'), ['Русский', 'English'], S.lang === 'en' ? 1 : 0, (i) => {
+    this.optionRowStr(col, LANG_LABEL, ['Русский', 'English'], S.lang === 'en' ? 1 : 0, (i) => {
       saveSettings({ lang: i === 1 ? 'en' : 'ru' });
       this.host.rebuild();
     }, colW, optLblW);

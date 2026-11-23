@@ -10,11 +10,27 @@
 
 type SoundKind = 'click' | 'place' | 'draw' | 'turn' | 'win' | 'lose';
 
+// Ассеты Playgama: фоновая музыка и эффекты из public/audio/*.mp3.
+// Если файлов нет (другие сборки), эффекты играют синтезированными тонами.
+const MP3_FILES: Partial<Record<SoundKind, string>> = {
+  click: 'audio/click.mp3',
+  place: 'audio/place.mp3',
+  win: 'audio/win.mp3',
+  lose: 'audio/lose.mp3',
+};
+const MUSIC_FILE = 'audio/music.mp3';
+const MUSIC_VOLUME = 0.32;
+
 let userEnabled = true;
 let sdkEnabled = true;
 let adMuted = false;
 let ctx: AudioContext | null = null;
 let master: GainNode | null = null;
+let musicGain: GainNode | null = null;
+let musicSource: AudioBufferSourceNode | null = null;
+let musicBuffer: AudioBuffer | null = null;
+const sfxBuffers = new Map<SoundKind, AudioBuffer>();
+let assetsLoading = false;
 
 function audioContextCtor(): typeof AudioContext | null {
   try {
@@ -38,11 +54,75 @@ function ensureContext(): AudioContext | null {
     master = ctx.createGain();
     master.gain.value = 0.18;
     master.connect(ctx.destination);
+    musicGain = ctx.createGain();
+    musicGain.gain.value = 0;
+    musicGain.connect(master);
   } catch {
     ctx = null;
     master = null;
   }
   return ctx;
+}
+
+async function loadBuffer(url: string): Promise<AudioBuffer | null> {
+  const c = ensureContext();
+  if (!c) return null;
+  try {
+    const res = await fetch(new URL(url, document.baseURI));
+    if (!res.ok) return null;
+    return await c.decodeAudioData(await res.arrayBuffer());
+  } catch {
+    return null;
+  }
+}
+
+/** Ленивая загрузка mp3: только после первого жеста игрока. */
+async function loadAssets(): Promise<void> {
+  if (assetsLoading || !ensureContext()) return;
+  assetsLoading = true;
+  const kinds = Object.keys(MP3_FILES) as SoundKind[];
+  const buffers = await Promise.all([
+    loadBuffer(MUSIC_FILE),
+    ...kinds.map((kind) => loadBuffer(MP3_FILES[kind]!)),
+  ]);
+  musicBuffer = buffers[0];
+  kinds.forEach((kind, i) => {
+    const buffer = buffers[i + 1];
+    if (buffer) sfxBuffers.set(kind, buffer);
+  });
+  assetsLoading = false;
+  applyMusic();
+}
+
+/** Фоновая музыка играет только при audible() и когда ассеты загружены. */
+function applyMusic(): void {
+  const c = ctx;
+  if (!c || !musicGain || !musicBuffer) return;
+  try {
+    if (!audible()) {
+      if (musicSource) {
+        musicSource.loop = false;
+        try { musicSource.stop(); } catch { /* уже остановлен */ }
+        musicSource = null;
+      }
+      musicGain.gain.setTargetAtTime(0, c.currentTime, 0.08);
+      return;
+    }
+    if (!musicSource) {
+      const src = c.createBufferSource();
+      src.buffer = musicBuffer;
+      src.loop = true;
+      src.connect(musicGain);
+      src.onended = () => {
+        if (musicSource === src) musicSource = null;
+      };
+      src.start();
+      musicSource = src;
+    }
+    musicGain.gain.setTargetAtTime(MUSIC_VOLUME, c.currentTime, 0.4);
+  } catch {
+    /* музыка не критична */
+  }
 }
 
 function audible(): boolean {
@@ -55,6 +135,7 @@ export function setSoundEnabled(enabled: boolean): void {
   // AudioContext НЕ создаём здесь: его можно создать только из жеста.
   // Разбудит его play()/unlockAudio() при первом нажатии.
   if (!enabled) stopAll();
+  applyMusic();
 }
 
 export function isSoundEnabled(): boolean {
@@ -65,12 +146,14 @@ export function isSoundEnabled(): boolean {
 export function setSdkAudioEnabled(enabled: boolean): void {
   sdkEnabled = enabled;
   if (!enabled) stopAll();
+  applyMusic();
 }
 
 /** Глушение на время показа рекламы. */
 export function setAdMuted(muted: boolean): void {
   adMuted = muted;
   if (muted) stopAll();
+  applyMusic();
 }
 
 /** Итоговое состояние — учитывает и настройку игрока, и SDK, и рекламу. */
@@ -98,6 +181,19 @@ function stopAll(): void {
       master = ctx.createGain();
       master.gain.value = 0.18;
       master.connect(ctx.destination);
+    }
+    if (ctx && musicSource) {
+      musicSource.loop = false;
+      try { musicSource.stop(); } catch { /* уже остановлен */ }
+      musicSource = null;
+    }
+    if (ctx && musicGain) {
+      musicGain.gain.cancelScheduledValues(ctx.currentTime);
+      musicGain.gain.setValueAtTime(0, ctx.currentTime);
+      musicGain.disconnect();
+      musicGain = ctx.createGain();
+      musicGain.gain.value = 0;
+      if (master) musicGain.connect(master);
     }
   } catch {
     /* ignore */
@@ -138,6 +234,19 @@ export function play(kind: SoundKind): void {
   const c = ensureContext();
   if (!c) return;
   if (c.state === 'suspended') void resumeContext();
+  // Сначала mp3-ассет, если он уже загружен; синтез — фолбэк.
+  const buffer = sfxBuffers.get(kind);
+  if (buffer && master) {
+    try {
+      const src = c.createBufferSource();
+      src.buffer = buffer;
+      src.connect(master);
+      src.start();
+      return;
+    } catch {
+      /* пробуем синтезированный эффект */
+    }
+  }
   switch (kind) {
     case 'click':
       tone(720, 0, 0.05, 'triangle', 0.5);
@@ -169,6 +278,11 @@ export function play(kind: SoundKind): void {
 
 /** Разбудить AudioContext из пользовательского жеста (первый тап). */
 export function unlockAudio(): void {
-  if (!audible()) return;
   void resumeContext();
+  void loadAssets();
+}
+
+/** Алиас для кода, использовавшего сfx() до объединения аудио-модулей. */
+export function sfx(name: SoundKind): void {
+  play(name);
 }

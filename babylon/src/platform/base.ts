@@ -14,6 +14,38 @@ import {
   browserWriteClipboard,
 } from './browser';
 
+function ls(): Storage | null {
+  try {
+    return typeof localStorage !== 'undefined' ? localStorage : null;
+  } catch {
+    return null;
+  }
+}
+
+function readLocal(key: string): string | null {
+  try {
+    return ls()?.getItem(key) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function writeLocal(key: string, value: string): void {
+  try {
+    ls()?.setItem(key, value);
+  } catch {
+    /* квота/приватный режим — молча пропускаем */
+  }
+}
+
+function removeLocal(key: string): void {
+  try {
+    ls()?.removeItem(key);
+  } catch {
+    /* ignore */
+  }
+}
+
 /**
  * Базовая площадка «своего сайта» и фундамент для остальных провайдеров:
  * браузерный fullscreen и буфер обмена, отсутствие рекламы, оценок и
@@ -41,6 +73,28 @@ export abstract class BasePlatform implements PlatformAPI {
   }
 
   gameplayStop(): void {
+    // no-op
+  }
+
+  levelCompleted(_won: boolean): void {
+    // no-op
+  }
+
+  async storageGet(keys: string[]): Promise<Record<string, string | null>> {
+    const out: Record<string, string | null> = {};
+    for (const key of keys) out[key] = readLocal(key);
+    return out;
+  }
+
+  async storageSet(entries: Record<string, string>): Promise<void> {
+    for (const [key, value] of Object.entries(entries)) writeLocal(key, value);
+  }
+
+  async storageDelete(keys: string[]): Promise<void> {
+    for (const key of keys) removeLocal(key);
+  }
+
+  onAudioState(_cb: (enabled: boolean) => void): void {
     // no-op
   }
 

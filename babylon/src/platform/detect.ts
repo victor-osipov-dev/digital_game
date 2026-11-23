@@ -11,6 +11,8 @@ export interface DetectInput {
   hasCrazyGames?: boolean;
   hasGDSdk?: boolean;
   hasYtGame?: boolean;
+  /** Загружен Playgama Bridge (window.bridge). */
+  hasBridge?: boolean;
 }
 
 function queryPlatform(query: string | undefined): PlatformId | null {
@@ -23,6 +25,7 @@ function queryPlatform(query: string | undefined): PlatformId | null {
   if (v === 'crazygames' || v === 'crazy' || v === 'cg') return 'crazygames';
   if (v === 'youtube' || v === 'yt' || v === 'playables') return 'youtube';
   if (v === 'gamedistribution' || v === 'gd' || v === 'gamedist') return 'gamedistribution';
+  if (v === 'playgama' || v === 'pg') return 'playgama';
   if (v === 'standalone' || v === 'local' || v === 'none') return 'standalone';
   return null;
 }
@@ -43,9 +46,11 @@ export function detectPlatformId(input: DetectInput = {}): PlatformId {
   if (input.hasCrazyGames) return 'crazygames';
   if (input.hasYtGame) return 'youtube';
   if (input.hasGDSdk) return 'gamedistribution';
+  if (input.hasBridge) return 'playgama';
   const host = (input.hostname ?? '').toLowerCase();
   if (host.includes('yandex')) return 'yandex';
   if (host.includes('crazygames')) return 'crazygames';
   if (host.includes('gamedistribution') || host.includes('gamedist')) return 'gamedistribution';
+  if (host.includes('playgama')) return 'playgama';
   return 'standalone';
 }

@@ -41,3 +41,4 @@ addons/MarketHelper/plugin/build/
 
 # локальная БД игрового сервера (создаётся при запуске)
 server/data/
+antiskleroz-playgama.zip

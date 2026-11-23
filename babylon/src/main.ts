@@ -1,7 +1,8 @@
 import { ArcRotateCamera, Engine, Scene, Vector3 } from '@babylonjs/core';
+import { setAdMuted } from './core/audio';
+import { preloadPersist } from './core/persist';
 import { loadSettings } from './core/settings';
 import { loadProgress, flushProgress } from './core/progress';
-import { setAdMuted } from './core/audio';
 import { initSound } from './core/sound';
 import { initPlatform, platform } from './platform';
 import { App } from './ui/app';
@@ -9,15 +10,14 @@ import { App } from './ui/app';
 async function main(): Promise<void> {
   const canvas = document.getElementById('canvas') as HTMLCanvasElement | null;
   if (!canvas) return;
+  // Платформа (и bridge.initialize(), запускаемый её провайдером) — строго
+  // ДО создания Engine/Scene: требование Playgama 1.2 «SDK до загрузки
+  // движка». Таймаут внутри, игра стартует даже без сети/SDK.
+  await initPlatform({ timeoutMs: 1500 });
   const engine = new Engine(canvas, true, { stencil: false, preserveDrawingBuffer: false });
   const scene = new Scene(engine);
   const camera = new ArcRotateCamera('bootCam', -Math.PI / 2, 1.1, 20, Vector3.Zero(), scene);
   camera.detachControl();
-  // Платформа инициализируется ДО настроек: автоопределение языка
-  // площадки используется как дефолт для первого запуска. Таймаут внутри,
-  // игра стартует даже без сети/SDK. Затем подтягиваем облачный прогресс
-  // (если он свежее локального) и только после этого читаем настройки.
-  await initPlatform({ timeoutMs: 1500 });
   // GamePush-сниппет иногда подгружает SDK позже стартового таймаута.
   // Язык из gp.language нужен ДО чтения настроек, иначе перезагрузка
   // сохранит прежний язык из localStorage и смена в панели не применится.
@@ -28,6 +28,10 @@ async function main(): Promise<void> {
       await new Promise<void>((resolve) => window.setTimeout(resolve, 50));
     }
   }
+  // Сохранения читаются одним батчем через платформенный storage
+  // (Playgama Bridge storage, требование 3.2.1) ДО любого синхронного чтения.
+  await preloadPersist();
+  // Облачный прогресс площадки (если он свежее локального).
   await loadProgress();
   const settings = loadSettings();
   initSound(settings.sound);
@@ -73,7 +77,8 @@ async function main(): Promise<void> {
 
   // Прячем стартовый лоадер после первого отрисованного кадра: движок и
   // весь UI к этому моменту уже построены, пустого экрана не видно.
-  // Здесь же сообщаем площадке, что игра готова (Yandex Game Ready и аналоги).
+  // game_ready отправляется здесь для всех площадок; для Playgama провайдер
+  // сам откладывает сигнал до завершения handshake Bridge (требование 1.4).
   scene.onAfterRenderObservable.addOnce(() => {
     const loader = document.getElementById('boot-loader');
     if (loader) {
@@ -81,7 +86,8 @@ async function main(): Promise<void> {
       window.setTimeout(() => loader.remove(), 400);
     }
     // gameReady вызываем всегда, даже если стартовый лоадер уже удалён:
-    // площадки (Яндекс/GamePush/CrazyGames/YouTube) ждут этот сигнал.
+    // площадки (Яндекс/GamePush/CrazyGames/YouTube/Playgama) ждут сигнал.
+    // PlaygamaPlatform.gameReady() сам ждёт завершения handshake Bridge.
     platform.gameReady();
   });
 

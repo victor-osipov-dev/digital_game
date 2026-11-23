@@ -2256,6 +2256,8 @@ export class OfflineGame {
     }
     this.running = false;
     this.stopTimers();
+    // Звуковой итог партии: победа живого игрока или поражение.
+    play(this.state && this.state.winner === this.localStatsHumanSeat ? 'win' : 'lose');
     const { overlay } = modalOverlay(this.popups, 'win', { alpha: 0.9, zIndex: 850 });
     const winW = Math.max(160, Math.floor(viewWidth() * 0.86));
     const winScrollH = Math.max(120, viewHeight() - 24);
@@ -3253,7 +3255,10 @@ export class OfflineGame {
     if (this.onlineMode || !this.localStatsEligible || this.localStatsResultDone) return;
     if (!this.state) return;
     this.localStatsResultDone = true;
-    recordLocalGameResult(this.state.winner === this.localStatsHumanSeat);
+    const won = this.state.winner === this.localStatsHumanSeat;
+    recordLocalGameResult(won);
+    // Playgama 2.x: сообщение о завершении партии (level_completed/failed).
+    platform.levelCompleted(won);
   }
 
   private doSkip(): void {
@@ -3831,6 +3836,8 @@ export class OfflineGame {
           return;
         }
         lastPlacedTile = Number(op.tile ?? -1);
+        // Звук выложенной фишки (анимация бота — как ход игрока).
+        play('place');
         this.refresh();
         // Первое изменение поля подхватываем сразу, дальше — по троттлу,
         // чтобы анимация выкладки не перезапускалась на каждом шаге.

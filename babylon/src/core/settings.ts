@@ -1,6 +1,7 @@
 import { getLang, LangCode, resolveLang, setLang, t } from './lang';
-import { getPlatformInterfaceLang } from '../platform';
+import { getPlatformInterfaceLang, platform } from '../platform';
 import { scheduleProgressSave } from './progress';
+import { persistGet, persistSet } from './persist';
 
 const KEY = 'dg.settings';
 // Версия схемы настроек. v2: локальный дефолт — один человек против ботов,
@@ -47,7 +48,6 @@ function clampi(v: number, lo: number, hi: number): number {
 }
 
 function defaults(): Settings {
-  // Godot: дефолт жёстко «ru» (авто-язык был только из SDK Яндекс Игр).
   return {
     lang: 'ru' as LangCode,
     lang_platform: null,
@@ -76,21 +76,25 @@ export function loadSettings(): Settings {
   if (cache) return cache;
   let parsed: any = {};
   try {
-    parsed = JSON.parse(localStorage.getItem(KEY) ?? '{}') as any;
+    parsed = JSON.parse(persistGet(KEY) ?? '{}') as any;
   } catch {
     parsed = {};
   }
   // Язык применяем ДО defaults(): имена игроков по умолчанию создаются
-  // через t() и должны быть на выбранном языке, а не на стартовом русском.
-  // Для первого запуска (сохранений ещё нет) дефолт берём из языка
-  // интерфейса площадки (требование Яндекс Игр 2.14); ручная настройка
-  // всегда приоритетнее.
+  // через t() и должны быть на выбранном языке. Для первого запуска
+  // (сохранений ещё нет) дефолт — язык интерфейса площадки, иначе en
+  // (требование Playgama 3.4.1); ручная настройка всегда приоритетнее.
   const storedLang = parsed.lang === 'en' || parsed.lang === 'ru' ? parsed.lang : null;
   const sdkLang = getPlatformInterfaceLang();
   const recordedPlatform = typeof parsed.lang_platform === 'string' ? parsed.lang_platform : null;
   // Если в панели площадки сменили язык, он выигрывает у сохранённого.
   // Иначе сохраняем ручной выбор игрока между перезагрузками.
-  const lang = resolveLang(storedLang, sdkLang, recordedPlatform);
+  // Требование Playgama 3.4.1: дефолт en, 'ru' — только если площадка русская.
+  const lang = resolveLang(
+    storedLang,
+    sdkLang ?? (platform.id === 'playgama' ? 'en' : null),
+    recordedPlatform,
+  );
   setLang(lang);
   const d = defaults();
   const playerCount = clampi(Number(parsed.player_count ?? d.player_count), MIN_PLAYERS, MAX_PLAYERS);
@@ -147,6 +151,9 @@ export function saveSettings(patch: Partial<Settings>): Settings {
     /* приватный режим/квота — игра продолжает работать в памяти */
   }
   scheduleProgressSave({ version: 1, saved_at, settings: payload });
+  // Один батч-записи в Bridge storage (требование Playgama 3.2.1).
+  // Обычный localStorage выше остаётся мгновенным локальным источником.
+  persistSet(KEY, JSON.stringify(s));
   applyLang(s.lang);
   return s;
 }

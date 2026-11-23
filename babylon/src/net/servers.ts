@@ -1,4 +1,5 @@
 import { ServerMsg } from './protocol';
+import { persistGet, persistRemove, persistSet } from '../core/persist';
 
 export interface BuiltinServer {
   id: string;
@@ -41,7 +42,7 @@ export function parseDevHostParam(): { host: string; port: string; proto: 'ws' |
 }
 
 export function savedDevHost(): { host: string; port: string; proto: 'ws' | 'wss' } | null {
-  const raw = localStorage.getItem(DEV_HOST_KEY);
+  const raw = persistGet(DEV_HOST_KEY);
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as { host: string; port: string; proto: 'ws' | 'wss' };
@@ -52,8 +53,8 @@ export function savedDevHost(): { host: string; port: string; proto: 'ws' | 'wss
 }
 
 export function saveDevHost(ref: { host: string; port: string; proto: 'ws' | 'wss' } | null): void {
-  if (ref) localStorage.setItem(DEV_HOST_KEY, JSON.stringify(ref));
-  else localStorage.removeItem(DEV_HOST_KEY);
+  if (ref) persistSet(DEV_HOST_KEY, JSON.stringify(ref));
+  else persistRemove(DEV_HOST_KEY);
 }
 
 function wsUrlFor(ref: { host: string; port: string | number; proto: string }): string {

@@ -14,6 +14,7 @@ import { CrazyGamesPlatform } from './crazygames';
 import { YouTubePlatform } from './youtube';
 import { GameDistributionPlatform } from './gamedistribution';
 import { setAdMuted } from '../core/audio';
+import { PlaygamaPlatform } from './playgama';
 import {
   installFullscreenBridge,
   reportedFullscreenState,
@@ -69,6 +70,7 @@ function readGlobals(): {
   hasCrazyGames: boolean;
   hasGDSdk: boolean;
   hasYtGame: boolean;
+  hasBridge: boolean;
 } {
   try {
     return {
@@ -81,6 +83,7 @@ function readGlobals(): {
       hasCrazyGames: typeof window.CrazyGames?.SDK !== 'undefined',
       hasGDSdk: typeof window.gdsdk !== 'undefined',
       hasYtGame: typeof window.ytgame !== 'undefined',
+      hasBridge: typeof window.bridge !== 'undefined',
     };
   } catch {
     return {
@@ -89,6 +92,7 @@ function readGlobals(): {
       hasCrazyGames: false,
       hasGDSdk: false,
       hasYtGame: false,
+      hasBridge: false,
     };
   }
 }
@@ -112,7 +116,8 @@ function buildPlatformTarget(): PlatformId | null {
   try {
     const v = __DG_PLATFORM_TARGET__;
     if (v === 'yandex' || v === 'gamepush' || v === 'crazygames'
-      || v === 'youtube' || v === 'gamedistribution' || v === 'standalone') {
+      || v === 'youtube' || v === 'gamedistribution' || v === 'playgama' || v === 'standalone') {
+
       return v;
     }
   } catch {
@@ -139,6 +144,8 @@ function createProvider(id: PlatformId): PlatformAPI {
       return new YouTubePlatform();
     case 'gamedistribution':
       return new GameDistributionPlatform();
+    case 'playgama':
+      return new PlaygamaPlatform();
     default:
       return new StandalonePlatform();
   }
@@ -243,6 +250,56 @@ class PlatformFacade implements PlatformAPI {
     }
   }
 
+  levelCompleted(won: boolean): void {
+    try {
+      this.current.levelCompleted(won);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async storageGet(keys: string[]): Promise<Record<string, string | null>> {
+    try {
+      return await this.current.storageGet(keys);
+    } catch {
+      const out: Record<string, string | null> = {};
+      for (const key of keys) out[key] = null;
+      return out;
+    }
+  }
+
+  async storageSet(entries: Record<string, string>): Promise<void> {
+    try {
+      await this.current.storageSet(entries);
+    } catch {
+      /* сохранение не должно ронять игру */
+    }
+  }
+
+  async storageDelete(keys: string[]): Promise<void> {
+    try {
+      await this.current.storageDelete(keys);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  isAudioEnabled(): boolean {
+    try {
+      return this.current.isAudioEnabled();
+    } catch {
+      return true;
+    }
+  }
+
+  onAudioState(cb: (enabled: boolean) => void): void {
+    try {
+      this.current.onAudioState(cb);
+    } catch {
+      /* ignore */
+    }
+  }
+
   async showInterstitial(): Promise<boolean> {
     // Звук на время рекламы выключаем всегда, даже если SDK не сообщает
     // о паузе (требование площадок). Восстанавливаем в finally.
@@ -328,14 +385,6 @@ class PlatformFacade implements PlatformAPI {
       return await this.current.saveProgress(data);
     } catch {
       return false;
-    }
-  }
-
-  isAudioEnabled(): boolean {
-    try {
-      return this.current.isAudioEnabled();
-    } catch {
-      return true;
     }
   }
 
