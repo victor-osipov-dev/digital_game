@@ -193,17 +193,24 @@ export class MenuScreen {
     // Плашка «кто-то играет по сети»: появляется, когда в списке комнат
     // есть хотя бы одна живая комната. Обновляется при смене доступности
     // через App.setOnlineRooms() → rebuild().
-    if (this.host.hasOnlineRooms()) {
+    // Показан ровно один баннер: pending_room важнее «кто-то играет по сети».
+    if (!pending && this.host.hasOnlineRooms()) {
       const onlineText = t('Кто-то играет по сети');
       const onlineFont = fs(15);
-      const onlinePanel = softPanel({ bg: '#7CFFB214', border: '#7CFFB2', thickness: 2, corner: 10 });
-      onlinePanel.root.width = colW;
-      onlinePanel.root.height = Math.max(38, Math.ceil(onlineFont * 2.2));
+      const pad = 10;
+      const labelH = Math.max(34, Math.ceil(onlineFont * 1.8));
+      // Та же конструкция, что у баннера «вы всё ещё в комнате»: размеры
+      // фиксированные, полупрозрачность через bgAlpha (не 8-значный hex),
+      // иначе заливка растягивается на всю колонку меню.
+      const onlinePanel = softPanel({
+        bg: '#7CFFB2', bgAlpha: 0.08, border: '#7CFFB2',
+        thickness: 2, corner: 10, width: colW, height: pad * 2 + labelH,
+      });
       onlinePanel.root.addControl(mkLabel(onlineText, {
         color: '#A8FFC8',
         fontSize: onlineFont,
-        width: '100%',
-        height: '100%',
+        width: colW - pad * 2,
+        height: labelH,
         align: 'center',
         hAlign: 'center',
         vAlign: 'center',
