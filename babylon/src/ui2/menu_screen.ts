@@ -190,6 +190,27 @@ export class MenuScreen {
       col.addControl(box.root);
     }
 
+    // Плашка «кто-то играет по сети»: появляется, когда в списке комнат
+    // есть хотя бы одна живая комната. Обновляется при смене доступности
+    // через App.setOnlineRooms() → rebuild().
+    if (this.host.hasOnlineRooms()) {
+      const onlineText = t('Кто-то играет по сети');
+      const onlineFont = fs(15);
+      const onlinePanel = softPanel({ bg: '#7CFFB214', border: '#7CFFB2', thickness: 2, corner: 10 });
+      onlinePanel.root.width = colW;
+      onlinePanel.root.height = Math.max(38, Math.ceil(onlineFont * 2.2));
+      onlinePanel.root.addControl(mkLabel(onlineText, {
+        color: '#A8FFC8',
+        fontSize: onlineFont,
+        width: '100%',
+        height: '100%',
+        align: 'center',
+        hAlign: 'center',
+        vAlign: 'center',
+      }));
+      col.addControl(onlinePanel.root);
+    }
+
     col.addControl(gapControl(8));
 
     this.addCountRow(col, S.player_count, colW);

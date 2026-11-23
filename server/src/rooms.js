@@ -433,6 +433,8 @@ class Rooms {
   listRooms() {
     const out = [];
     for (const room of this.rooms.values()) {
+      // Оконченная партия больше не является местом, куда можно войти.
+      if (room.game && room.game.finished) continue;
       if (room.state === 'lobby') {
         if (room.isFull()) continue;
       } else if (room.state !== 'playing'

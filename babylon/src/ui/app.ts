@@ -21,6 +21,12 @@ export class App implements MenuHost, OfflineHost {
   private root = new Container('root');
   private currentName: ScreenName | null = null;
   private menuConnectionTask: Promise<void> | null = null;
+  // Завершённые комнаты скрываем из списка до конца сессии: сервер удаляет
+  // их при drop, но лист лобби мог быть получен до удаления (гонка запросов).
+  private finishedRooms = new Set<string>();
+  private onlineRoomsAvailable = false;
+  private roomsPollTimer: number | null = null;
+  private roomsPollInFlight = false;
   // Пересборка, отложенная на время ввода: открытие мобильной клавиатуры
   // меняет размер canvas, но пересоздавать экран нельзя — вместе с полем
   // пропадут фокус и каретка.
@@ -43,6 +49,7 @@ export class App implements MenuHost, OfflineHost {
     onInputSessionEnd(() => this.schedulePendingRelayout());
     this.show('menu');
     this.startMenuConnection();
+    this.startRoomsPolling();
   }
 
   // Восстанавливаем авторизованную сессию, пока игрок ещё в главном меню:
@@ -62,6 +69,7 @@ export class App implements MenuHost, OfflineHost {
         // Не блокируем меню: при открытии сетевого экрана лобби повторит
         // обычный перебор доступных серверов и покажет причину.
       }
+      if (this.currentName === 'menu') void this.refreshOnlineRooms();
     })();
     let tracked: Promise<void>;
     tracked = task.finally(() => {
@@ -72,6 +80,54 @@ export class App implements MenuHost, OfflineHost {
 
   async waitForMenuConnection(): Promise<void> {
     await this.menuConnectionTask?.catch(() => undefined);
+  }
+
+  // Комната, из которой только что вышли после финиша, больше не должна
+  // появляться в списке — ни в лобби, ни в плашке на главном экране.
+  rememberFinishedRoom(code: string): void {
+    if (code) this.finishedRooms.add(code);
+  }
+
+  isFinishedRoom(code: string): boolean {
+    return this.finishedRooms.has(code);
+  }
+
+  hasOnlineRooms(): boolean {
+    return platform.supportsOnline && this.onlineRoomsAvailable && !this.api.pendingRoom;
+  }
+
+  /** Опрос списка комнат для плашки в меню — только пока экран меню активен. */
+  private startRoomsPolling(): void {
+    if (this.roomsPollTimer !== null) return;
+    this.roomsPollTimer = window.setInterval(() => {
+      void this.refreshOnlineRooms();
+    }, 30_000);
+  }
+
+  private setOnlineRooms(available: boolean): void {
+    if (this.onlineRoomsAvailable === available) return;
+    this.onlineRoomsAvailable = available;
+    // Меню строится один раз; чтобы плашка появилась/исчезла, обновляем его.
+    if (this.currentName === 'menu') this.rebuild();
+  }
+
+  private async refreshOnlineRooms(): Promise<void> {
+    if (!platform.supportsOnline || this.currentName !== 'menu') return;
+    if (!this.api.user || this.api.pendingRoom) {
+      this.setOnlineRooms(false);
+      return;
+    }
+    if (this.roomsPollInFlight) return;
+    this.roomsPollInFlight = true;
+    try {
+      const res = await this.api.roomsAll();
+      const anyLive = res.rooms.some((room) => !this.isFinishedRoom(room.code));
+      this.setOnlineRooms(anyLive);
+    } catch {
+      this.setOnlineRooms(false);
+    } finally {
+      this.roomsPollInFlight = false;
+    }
   }
 
   // MenuHost: меню и оверлеи пересобираются при смене языка/масштабов.
@@ -229,6 +285,8 @@ export class App implements MenuHost, OfflineHost {
     this.lastLobby = room;
     // партия кончилась/вернулись в лобби — экран игры останавливаем
     if (this.offline && this.offline.onlineMode) {
+      const finishedCode = this.offline.finishedRoomCode();
+      if (finishedCode) this.rememberFinishedRoom(finishedCode);
       this.offline.running = false;
       this.offline.stopTimers();
     }
@@ -252,6 +310,9 @@ export class App implements MenuHost, OfflineHost {
     }
     // Уход с экрана партии — остановка геймплея для площадки.
     if (this.currentName === 'offline') platform.gameplayStop();
+    // Плашка «играют по сети» нужна только в меню; не даём ей зависнуть
+    // при возврате из лобби/партии до очередного опроса.
+    if (name !== 'menu') this.onlineRoomsAvailable = false;
     this.currentName = name;
     // Sticky-баннер площадки: в меню/лобби показываем, во время партии
     // скрываем — реклама не должна мешать активной игре (п. 4.4).
@@ -261,6 +322,7 @@ export class App implements MenuHost, OfflineHost {
     if (name === 'menu') {
       this.menu.build(this.root);
       this.startMenuConnection();
+      void this.refreshOnlineRooms();
       return;
     }
     if (name === 'offline') {
@@ -343,6 +405,10 @@ export class App implements MenuHost, OfflineHost {
   toMenu(): void {
     platform.gameplayStop();
     if (this.offline?.onlineMode) {
+      // После финиша комната удаляется сервером, но список лобби мог быть
+      // получен раньше — запоминаем код и скрываем её местными средствами.
+      const finishedCode = this.offline.finishedRoomCode();
+      if (finishedCode) this.rememberFinishedRoom(finishedCode);
       this.online.resetAfterGameExit();
       this.lastLobby = null;
     }

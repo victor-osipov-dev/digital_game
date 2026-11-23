@@ -985,12 +985,10 @@ export class OnlineLobby {
 
   private async gotoRooms(): Promise<void> {
     this.setPage('rooms');
-    if (this.rooms.length === 0) {
-      await this.loadRooms(false);
-    } else {
-      this.renderRooms();
-      this.updateButtons();
-    }
+    // Список мог остаться от прошлого входа (в том числе от только что
+    // завершённой партии) — всегда переспрашиваем сервер. quiet, если кэш
+    // уже есть: не дёргаем игрока лишним «Собираем список комнат…».
+    await this.loadRooms(this.rooms.length > 0);
   }
 
   // _load_rooms-порт: список комнат сервер отдаёт только вошедшим.
@@ -1010,7 +1008,8 @@ export class OnlineLobby {
     if (!quiet) this.setBusy(t('Собираем список комнат…'));
     try {
       const res = await api.roomsAll();
-      this.rooms = res.rooms;
+      // Комнаты, из которых вышли после финиша, больше не показываем.
+      this.rooms = res.rooms.filter((room) => !this.app.isFinishedRoom(room.code));
       this.roomsPage = 0;
       // Технические сведения о серверах кластера игроку не нужны — оставляем
       // только число найденных комнат.

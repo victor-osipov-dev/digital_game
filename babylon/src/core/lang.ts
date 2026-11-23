@@ -39,6 +39,7 @@ const EN: Record<string, string> = {
   'Сервер': 'Server',
   'Настройки': 'Settings',
   'Язык': 'Language',
+  'Кто-то играет по сети': 'Someone is playing online',
   'Обновить': 'Refresh',
   'Комнаты': 'Rooms',
   'Топ игроков': 'Leaderboard',

@@ -12,6 +12,8 @@ export interface MenuHost {
   onOnline(): void;
   // pending_room: место в комнате сохранилось (баннер в главном меню)
   pendingRoom(): import('../net/protocol').RoomLobbyView | null;
+  // Есть ли хотя бы одна живая комната (плашка «Кто-то играет по сети»).
+  hasOnlineRooms(): boolean;
   onReturnToRoom(): void;
   onDropRoom(): void;
   // null — нет связи/входа или сервер не вернул данные

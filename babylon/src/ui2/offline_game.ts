@@ -3141,17 +3141,25 @@ export class OfflineGame {
   // Сетевая партия: временный выход ведёт в главное меню и сохраняет
   // место (game.gd _on_leave_to_menu: finished → room.drop, иначе room.leave).
   // Выход — логическая пауза: сначала interstitial площадки, затем меню.
+  /** Код сетевой комнаты, из которой только что вышли после финиша. */
+  finishedRoomCode(): string | null {
+    return this.onlineMode && this.state?.finished && this.roomCode ? this.roomCode : null;
+  }
+
   private leaveToMenu(): void {
     this.running = false;
     this.stopTimers();
     const api = this.host.gameApi();
+    const finish = (): void => withInterstitial(() => this.host.toMenu());
     try {
-      if (this.state && this.state.finished) void api.dropRoom();
-      else void api.leaveRoom();
+      // Дожидаемся удаления комнаты на сервере ДО показа списка: иначе он
+      // успеет обновиться со старыми данными и снова покажет эту комнату.
+      const exit = this.state && this.state.finished ? api.dropRoom() : api.leaveRoom();
+      void exit.catch(() => undefined).then(finish);
     } catch {
       /* комната может уже не существовать */
+      finish();
     }
-    withInterstitial(() => this.host.toMenu());
   }
 
   private showSettingsOverlay(): void {
