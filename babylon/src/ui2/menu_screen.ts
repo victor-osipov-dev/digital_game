@@ -238,9 +238,10 @@ export class MenuScreen {
     // Отступ после «Анимация бота» перед блоком настроек.
     col.addControl(gapControl(8));
 
-    // Метка выбора языка не переводится (требование Playgama 3.4.x):
-    // двуязычная подпись, чтобы настройку нашёл игрок на любом языке.
-    const LANG_LABEL = 'Язык / Language';
+    // Название настройки переводится: «Язык» / «Language». Языки в списке
+    // указаны на самих языках — требование Playgama 3.4.4 и Яндекс 8.2.3
+    // (двуязычные подписи вида «Язык / Language» недопустимы).
+    const LANG_LABEL = t('Язык');
     const optLblW = Math.max(
       measureTextWidth(t('Текст:'), fs(15)),
       measureTextWidth(t('Карточки:'), fs(15)),

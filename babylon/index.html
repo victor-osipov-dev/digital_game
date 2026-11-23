@@ -50,6 +50,24 @@
     <div class="boot-spinner"></div>
     <div class="boot-text" id="boot-text">Загрузка / Loading…</div>
   </div>
+  <script>
+    // Playgama (п. 3.5.1): название фиксированное, как в заявке. На остальных
+    // площадках (Яндекс Игры, GamePush) заголовок и подпись лоадера должны
+    // соответствовать языку: п. 5.1.3 Яндекса и п. 8.2.3 (без двойного
+    // перевода). Точный язык из SDK применит applyTitle() после инициализации.
+    (function () {
+      try {
+        if (typeof window.bridge !== 'undefined'
+          || /(?:^|[?&])platform=(?:playgama|pg)(?:[&#]|$)/i.test(location.search)) return;
+        var saved = JSON.parse(localStorage.getItem('dg.settings') || '{}');
+        var en = saved && saved.lang === 'en';
+        var title = en ? 'Anti-Sclerosis' : 'Антисклероз';
+        document.title = title;
+        document.getElementById('boot-title').textContent = title;
+        document.getElementById('boot-text').textContent = en ? 'Loading…' : 'Загрузка…';
+      } catch (e) { /* локальные настройки недоступны — оставляем как есть */ }
+    })();
+  </script>
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

@@ -579,7 +579,7 @@ export function openSettingsOverlay(
     saveSettings({ tile_step: i });
     onRebuild();
   });
-  const ddLang = addDropdown('Язык / Language');
+  const ddLang = addDropdown(t('Язык'));
   ddLang.setOptions(['Русский', 'English'], S.lang === 'en' ? 1 : 0, (i) => {
     saveSettings({ lang: i === 1 ? 'en' : 'ru' });
     onRebuild();

@@ -1,3 +1,5 @@
+import { platform } from '../platform';
+
 export type LangCode = 'ru' | 'en';
 
 const EN: Record<string, string> = {
@@ -645,9 +647,12 @@ export function t(key: string, ...args: Array<string | number>): string {
 }
 
 export function appName(): string {
-  // Требование Playgama 3.5.1: название игры НЕ меняется от языка
-  // интерфейса — всегда английский тайтл, как в карточке игры на площадке.
-  return 'Anti-Sclerosis';
+  // Playgama 3.5.1: название в игре обязано совпадать с названием в заявке
+  // (у нас Anti-Sclerosis) и не меняется при переключении языка.
+  // Остальные площадки (Яндекс Игры, GamePush) допускают — а Яндекс 5.1.3
+  // требует — чтобы название соответствовало языку черновика.
+  if (platform.id === 'playgama') return 'Anti-Sclerosis';
+  return t('Антисклероз');
 }
 
 export function applyTitle(): void {
