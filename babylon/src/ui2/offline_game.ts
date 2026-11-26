@@ -23,6 +23,7 @@ import { validateRow } from '../core/rules';
 import { tileById } from '../core/deck';
 import { flowGap, layoutFlow, FlowItem } from './flow';
 import { TileFigure, TileMarks } from './tile_figure';
+import { planFlights } from './flight_plan';
 import {
   abortTouchGestures,
   BUTTON_STYLE,
@@ -121,6 +122,10 @@ export class OfflineGame {
   private lastDraftPayload = '';
   private draftNewIds = new Set<number>();
   private draftFrom = -1;
+  // Черновик, пришедший во время чужой анимации: применяем его только после
+  // того, как очередь презентаций доиграет (refresh посреди полёта ломает
+  // призраков и дублирует фишки).
+  private pendingDraft: DraftMsg | null = null;
   private draftExpireTimer = 0;
   private draftResendTimer = 0;
   // ===== очередь презентаций сетевых ходов (game.gd _present_queue) =====
@@ -248,6 +253,10 @@ export class OfflineGame {
   private confirmUi: { overlay: Container; close: () => void } | null = null;
   private confirmAction: (() => void) | null = null;
   private flightOrigins = new Map<number, TileSnapshot>();
+  // Уникальный z-index для летящих призраков: при одинаковом 680 и
+  // наложении Babylon выбирает порядок рисования нестабильно, и одна
+  // карточка могла мигать/исчезать за другой.
+  private flightZ = 680;
   private layoutAnimationId = 0;
 
   constructor(private host: OfflineHost) {}
@@ -512,6 +521,8 @@ export class OfflineGame {
     this.draftNewIds.clear();
     this.draftFrom = -1;
     this.lastDraftPayload = '';
+    // Ход сменился — отложенный черновик уже неактуален.
+    this.pendingDraft = null;
     this.presentQueue = this.presentQueue.filter((segment) => segment.kind !== 'draft');
     this.cancelTableScroll();
   }
@@ -1106,25 +1117,28 @@ export class OfflineGame {
           continue;
         } else {
           this.flightActive = true;
-          // В сети бот обычно присылает один финальный GAME_STATE за ход, а
-          // не промежуточные обновления как локальный бот. Поэтому без этого
-          // пути committed-фишки анимировались, но стол к ним не прокручивался.
-          if (this.onlineMode && this.state?.players[seg.seat]?.is_bot) {
-            await this.playQueuedRemoteMove(
-              seg.before, seg.ids, seg.seat, seg.rowId, seg.scrollTop, gen,
-            );
-            if (!this.finishPresentedSegment(gen)) return;
-            continue;
-          }
+          // Один и тот же путь для ботов и людей: перестановки уже лежащих
+          // фишек + новые по одной из чипа + прокрутка стола к ряду. Раньше
+          // для людей вызывался playQueuedSteps, где все новые фишки летели
+          // из одной точки с перекрытием по времени и ряд мог быть вне экрана.
+          const isBot = !!this.state?.players[seg.seat]?.is_bot;
+          await this.playQueuedRemoteMove(
+            seg.before, seg.ids, seg.seat, seg.rowId, seg.scrollTop, gen, isBot,
+          );
+          if (!this.finishPresentedSegment(gen)) return;
+          continue;
         }
-        await this.playQueuedSteps(seg.ids, gen, seg.seat);
-        if (!this.finishPresentedSegment(gen)) return;
       }
     }
     if (gen === this.presentGen) {
       this.presentQueue = [];
       this.presentBusy = false;
       this.showSeat(-1);
+      // Черновик, отложенный на время анимации, показываем только сейчас:
+      // стол уже доиграл чужой ход и его можно безопасно пересобрать.
+      const draft = this.pendingDraft;
+      this.pendingDraft = null;
+      if (draft && this.running) this.applyDraft(draft);
     }
   }
 
@@ -1326,12 +1340,23 @@ export class OfflineGame {
     // Только что пересобранный ряд ещё не получил ширины: Babylon считает
     // раскладку на кадре рендера, и цель полёта сейчас — (0,0). Ждём до
     // трёх кадров, как _views_laid_out в оригинале (game.gd:3423-3433).
+    const restore = (): void => {
+      // Не оставляем фишки alpha=0, если показ прерван: иначе они остаются
+      // невидимыми до следующей полной пересборки экрана.
+      for (const f of figs) f.root.alpha = f.rgbaAlpha;
+    };
     for (let i = 0; i < 3; i += 1) {
       if (figs.every((f) => rectOf(f.root).w > 0)) break;
       await new Promise<void>((r) => window.requestAnimationFrame(() => r()));
-      if (gen !== this.presentGen || !this.running) return;
+      if (gen !== this.presentGen || !this.running) {
+        restore();
+        return;
+      }
     }
-    if (gen !== this.presentGen || !this.running) return;
+    if (gen !== this.presentGen || !this.running) {
+      restore();
+      return;
+    }
     const ts = tileSize();
     const targets: { fig: TileFigure; to: { x: number; y: number; w: number; h: number } }[] = [];
     for (const fig of figs) {
@@ -1340,33 +1365,56 @@ export class OfflineGame {
       targets.push({ fig, to });
     }
     if (targets.length === 0) {
-      for (const f of figs) f.root.alpha = f.rgbaAlpha;
+      restore();
       return;
     }
+    // Сверху вниз и слева направо: карточки «раздаются» по порядку.
+    targets.sort((a, b) => a.to.y - b.to.y || a.to.x - b.to.x);
     const sourceChip = this.chipsRow.children[seat];
     if (sourceChip) this.ensureSeatChipVisible(sourceChip);
     await new Promise<void>((r) => window.requestAnimationFrame(() => window.requestAnimationFrame(() => r())));
-    if (gen !== this.presentGen || !this.running) return;
+    if (gen !== this.presentGen || !this.running) {
+      restore();
+      return;
+    }
     const spawn = this.chipSpawnRect(seat, ts);
-    let maxEnd = 0;
-    targets.forEach(({ fig, to }, i) => {
-      const delay = Math.min(i * 180, 1200);
-      const duration = 340;
-      maxEnd = Math.max(maxEnd, delay + duration);
-      const start = { face: fig.face, rect: { x: spawn.x, y: spawn.y, w: to.w, h: to.h } };
-      const run = (): void => {
-        if (gen !== this.presentGen || !this.running) return;
-        this.playTileFlight(start, fig, to, { duration, fromScale: 0.45, fromAlpha: 0 });
+    // Конвейер: каждый следующий вылетает раньше, чем предыдущий
+    // приземлился, но планировщик не даёт призракам наложиться.
+    const timings = planFlights(
+      targets.map(({ to }) => ({
+        from: { x: spawn.x, y: spawn.y, w: to.w, h: to.h },
+        to,
+      })),
+      { duration: 340, gap: 150, maxBend: Math.max(ts.y * 1.6, 70) },
+    );
+    await Promise.all(targets.map(({ fig, to }, index) => new Promise<void>((resolve) => {
+      const timing = timings[index];
+      const launch = (): void => {
+        if (gen !== this.presentGen || !this.running) {
+          fig.root.alpha = fig.rgbaAlpha;
+          resolve();
+          return;
+        }
+        const from: TileSnapshot = {
+          face: fig.face,
+          rect: { x: spawn.x, y: spawn.y, w: to.w, h: to.h },
+        };
+        this.playTileFlight(from, fig, to, {
+          duration: timing.duration,
+          bend: timing.bend,
+          fromScale: 0.45,
+          fromAlpha: 0,
+        }, undefined, resolve);
       };
-      if (delay === 0) run();
-      else window.setTimeout(run, delay);
-    });
-    await new Promise<void>((r) => window.setTimeout(r, maxEnd + 360));
+      if (timing.delay > 0) window.setTimeout(launch, timing.delay);
+      else launch();
+    })));
   }
 
   // Удалённый ход приходит целиком одним состоянием. До первого кадра
   // скрываем целевые копии и оставляем призраки на реальных исходных местах.
-  // Перестановки стартуют вместе, а новые фишки летят по очереди.
+  // Показ этапный: ряд прокручивается к цели, уже лежащие фишки переезжают
+  // на новые места, затем новые фишки вылетают из чипа конвейером.
   private async playQueuedRemoteMove(
     before: Map<number, TileSnapshot>,
     freshIds: number[],
@@ -1419,137 +1467,179 @@ export class OfflineGame {
       return;
     }
 
-    // showSeat/rebuildChips пересоздаёт чипы. Даём Babylon пару кадров на
-    // замер и только затем берём настоящую позицию источника новой фишки.
-    await new Promise<void>((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve())));
-    if (gen !== this.presentGen || !this.running) {
-      for (const move of moves) {
-        move.ghost?.disposeBadge();
-        if (move.ghost?.root.parent) move.ghost.root.parent.removeControl(move.ghost.root);
-        move.target.root.alpha = move.target.rgbaAlpha;
-        move.target.revealBadge();
-      }
-      return;
-    }
-    if (sourceChip) {
-      this.ensureSeatChipVisible(sourceChip);
-      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
-    }
-    const spawn = this.chipSpawnRect(seat, tileSize());
-
-    // Старые фишки остаются видны призраками на своих прежних местах, пока
-    // стол плавно прокручивается к цели. Следим за scroll offset, чтобы эти
-    // источники двигались вместе со старым содержимым ScrollViewer.
-    let trackingScroll = true;
-    let scrollTrackRaf = 0;
-    const trackSources = (): void => {
-      scrollTrackRaf = 0;
-      if (!trackingScroll) return;
-      const delta = this.tableScrollOffsetPx() - scrollTop;
-      for (const move of moves) {
-        if (!move.isNew && move.ghost && move.source) {
-          move.ghost.root.top = px(Math.round(move.source.rect.y - delta));
-        }
-      }
-      scrollTrackRaf = window.requestAnimationFrame(trackSources);
+    const abortAll = (): void => {
+      for (const move of moves) this.settleFlight(move);
     };
-    scrollTrackRaf = window.requestAnimationFrame(trackSources);
-    await this.queueBotTableScroll(rowId, gen);
-    trackingScroll = false;
-    if (scrollTrackRaf) window.cancelAnimationFrame(scrollTrackRaf);
-    const scrollDelta = this.tableScrollOffsetPx() - scrollTop;
-    for (const move of moves) {
-      if (!move.isNew && move.source) move.source.rect.y -= scrollDelta;
-    }
-    await new Promise<void>((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve())));
 
-    const fly = (move: typeof moves[number], duration: number): Promise<void> => {
-      // Создаём призрак новой фишки только в момент её полёта: следующие
-      // фишки не должны копиться видимыми возле имени игрока.
+    try {
+      // showSeat/rebuildChips пересоздаёт чипы: даём Babylon пару кадров на
+      // раскладку и только затем читаем позиции.
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve())));
+      if (gen !== this.presentGen || !this.running) return;
+      if (sourceChip) {
+        this.ensureSeatChipVisible(sourceChip);
+        await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+      }
+      // Позицию чипа читаем ТОЛЬКО после раскладки: до кадра рендера
+      // Babylon ещё не измерил пересозданные чипы, и спавн уехал бы в
+      // резервную точку за экраном.
+      const spawn = this.chipSpawnRect(seat, tileSize());
+
+      // Старые фишки остаются видны призраками на своих прежних местах, пока
+      // стол плавно прокручивается к цели. Следим за scroll offset, чтобы эти
+      // источники двигались вместе со старым содержимым ScrollViewer.
+      let trackingScroll = true;
+      let scrollTrackRaf = 0;
+      const trackSources = (): void => {
+        scrollTrackRaf = 0;
+        if (!trackingScroll) return;
+        const delta = this.tableScrollOffsetPx() - scrollTop;
+        for (const move of moves) {
+          if (!move.isNew && move.ghost && move.source) {
+            move.ghost.root.top = px(Math.round(move.source.rect.y - delta));
+          }
+        }
+        scrollTrackRaf = window.requestAnimationFrame(trackSources);
+      };
+      scrollTrackRaf = window.requestAnimationFrame(trackSources);
+      await this.queueBotTableScroll(rowId, gen);
+      trackingScroll = false;
+      if (scrollTrackRaf) window.cancelAnimationFrame(scrollTrackRaf);
+      const scrollDelta = this.tableScrollOffsetPx() - scrollTop;
+      for (const move of moves) {
+        if (!move.isNew && move.source) move.source.rect.y -= scrollDelta;
+      }
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve())));
+      if (gen !== this.presentGen || !this.running) return;
+
+      // Обрабатываем затронутые ряды по очереди. Так глаз успевает за
+      // перестановкой, и фишки разных рядов не пересекаются. Внутри ряда
+      // два этапа: 1) уже лежащие фишки переезжают на новые места (все
+      // сразу, конфликтующие траектории разводит планировщик); 2) новые
+      // фишки вылетают из чипа конвейером — по одной, но с перекрытием.
+      const byRow = new Map<number, typeof moves>();
+      for (const move of moves) {
+        const group = byRow.get(move.rowId) ?? [];
+        group.push(move);
+        byRow.set(move.rowId, group);
+      }
+      const rowOrder = this.rowFigs.filter((row) => !row.hintZone).map((row) => row.rowId);
+      // Порядок рядов зависит от общего направления перелётов: если фишки
+      // смещаются вниз (или в основном по горизонтали), нижние ряды играем
+      // первыми, освобождая траектории; при движении вверх — сверху вниз.
+      let verticalTravel = 0;
+      for (const move of moves) {
+        if (!move.source) continue;
+        const to = rectOf(move.target.root);
+        if (to.w > 0 && to.h > 0) verticalTravel += to.y - move.source.rect.y;
+      }
+      const animationRowOrder = verticalTravel >= 0 ? rowOrder.slice().reverse() : rowOrder;
+      const newDuration = slowNew ? 380 : 340;
+      for (const rowId of animationRowOrder) {
+        const group = byRow.get(rowId);
+        if (!group) continue;
+        if (gen !== this.presentGen || !this.running) return;
+        await this.flyMoveStage(
+          group.filter((move) => !move.isNew),
+          { duration: 300, gap: 0 },
+          gen,
+          spawn,
+        );
+        if (gen !== this.presentGen || !this.running) return;
+        await this.flyMoveStage(
+          group.filter((move) => move.isNew),
+          { duration: newDuration, gap: 150 },
+          gen,
+          spawn,
+        );
+      }
+    } finally {
+      // Страховка на любой выход (включая исключение): не оставляем
+      // призраков и фишек с alpha=0 — иначе карточки «исчезают» до
+      // следующей полной пересборки экрана. На нормальном финише это no-op:
+      // все полёты уже завершены и цели видимы.
+      abortAll();
+    }
+  }
+
+  // Один этап анимации: готовит призраков, планирует траектории и
+  // дожидается приземления всех фишек этапа.
+  private async flyMoveStage(
+    moves: Array<{
+      source: TileSnapshot | null;
+      target: TileFigure;
+      isNew: boolean;
+      ghost: TileFigure | null;
+    }>,
+    opts: { duration: number; gap: number },
+    gen: number,
+    spawn: { x: number; y: number },
+  ): Promise<void> {
+    if (moves.length === 0) return;
+    const ts = tileSize();
+    const ready: Array<{
+      move: (typeof moves)[number];
+      from: TileSnapshot;
+      to: { x: number; y: number; w: number; h: number };
+    }> = [];
+    for (const move of moves) {
+      // Источник новой фишки — чип автора хода. Призрака создаём только в
+      // момент старта: иначе все новые фишки висят в одной точке у чипа,
+      // пока ждут своей очереди в конвейере.
       if (move.isNew && !move.source) {
         move.source = {
           face: move.target.face,
           faceDown: false,
-          rect: { x: spawn.x, y: spawn.y, w: tileSize().x, h: tileSize().y },
+          rect: { x: spawn.x, y: spawn.y, w: ts.x, h: ts.y },
         };
-        move.ghost = this.createFlightGhost(move.source, move.target);
       }
       const to = rectOf(move.target.root);
-      if (to.w <= 0 || to.h <= 0 || !move.source || !move.ghost) {
-        move.ghost?.disposeBadge();
-        if (move.ghost?.root.parent) move.ghost.root.parent.removeControl(move.ghost.root);
-        move.target.root.alpha = move.target.rgbaAlpha;
-        move.target.revealBadge();
-        return Promise.resolve();
+      if (to.w <= 0 || to.h <= 0 || !move.source || (!move.isNew && !move.ghost)
+        || Math.hypot(to.x - move.source.rect.x, to.y - move.source.rect.y) < 3) {
+        this.settleFlight(move);
+        continue;
       }
-      if (Math.hypot(to.x - move.source.rect.x, to.y - move.source.rect.y) < 3) {
-        move.ghost.disposeBadge();
-        if (move.ghost.root.parent) move.ghost.root.parent.removeControl(move.ghost.root);
-        move.target.root.alpha = move.target.rgbaAlpha;
-        move.target.revealBadge();
-        return Promise.resolve();
-      }
-      return new Promise<void>((resolve) => {
-        this.playTileFlight(move.source!, move.target, to, {
-          duration,
+      ready.push({ move, from: move.source, to });
+    }
+    if (ready.length === 0) return;
+    // Планировщик разводит конфликтующие траектории: встречные фишки
+    // расходятся дугой, а если дуги мало — вторая стартует после первой.
+    const timings = planFlights(
+      ready.map(({ from, to }) => ({ from: from.rect, to })),
+      { duration: opts.duration, gap: opts.gap, maxBend: Math.max(ts.y * 1.6, 70) },
+    );
+    await Promise.all(ready.map(({ move, from, to }, index) => new Promise<void>((resolve) => {
+      const timing = timings[index];
+      const launch = (): void => {
+        if (gen !== this.presentGen || !this.running) {
+          this.settleFlight(move);
+          resolve();
+          return;
+        }
+        // Призрак новой фишки появляется ровно в момент её вылета.
+        if (move.isNew && !move.ghost) {
+          move.ghost = this.createFlightGhost(from, move.target);
+        }
+        this.playTileFlight(from, move.target, to, {
+          duration: timing.duration,
+          bend: timing.bend,
           fromScale: move.isNew ? 0.62 : 0.94,
           fromAlpha: move.isNew ? 0.35 : move.target.rgbaAlpha,
-        }, move.ghost!, resolve);
-      });
-    };
-
-    if (gen !== this.presentGen || !this.running) {
-      for (const move of moves) {
-        move.ghost?.disposeBadge();
-        if (move.ghost?.root.parent) move.ghost.root.parent.removeControl(move.ghost.root);
-        move.target.root.alpha = move.target.rgbaAlpha;
-        move.target.revealBadge();
-      }
-      return;
-    }
-
-    // Обрабатываем затронутые ряды по очереди. Внутри одного ряда уже
-    // лежащие фишки сдвигаются одновременно, а новая летит медленно поверх
-    // этой перестройки. Так нет ни столкновения, ни одновременного движения
-    // нескольких рядов; будущие новые фишки пока остаются скрытыми.
-    const byRow = new Map<number, typeof moves>();
-    for (const move of moves) {
-      const group = byRow.get(move.rowId) ?? [];
-      group.push(move);
-      byRow.set(move.rowId, group);
-    }
-    const rowOrder = this.rowFigs.filter((row) => !row.hintZone).map((row) => row.rowId);
-    // Порядок рядов зависит от общего направления перелётов: если фишки
-    // смещаются вниз (или в основном по горизонтали), нижние ряды играем
-    // первыми, освобождая траектории; при движении вверх — сверху вниз.
-    let verticalTravel = 0;
-    for (const move of moves) {
-      if (!move.source) continue;
-      const to = rectOf(move.target.root);
-      if (to.w > 0 && to.h > 0) verticalTravel += to.y - move.source.rect.y;
-    }
-    const animationRowOrder = verticalTravel >= 0 ? rowOrder.slice().reverse() : rowOrder;
-    const newDuration = slowNew ? 520 : 340;
-    for (const rowId of animationRowOrder) {
-      const group = byRow.get(rowId);
-      if (!group) continue;
-      if (gen !== this.presentGen || !this.running) {
-        for (const move of moves) {
-          move.ghost?.disposeBadge();
-          if (move.ghost?.root.parent) move.ghost.root.parent.removeControl(move.ghost.root);
-          move.target.root.alpha = move.target.rgbaAlpha;
-          move.target.revealBadge();
-        }
-        return;
-      }
-      const existing = group.filter((move) => !move.isNew);
-      const placements = group.filter((move) => move.isNew);
-      const rearrangeTogether = Promise.all(existing.map((move) => fly(move, 280)));
-      const placeInOrder = async (): Promise<void> => {
-        for (const move of placements) await fly(move, newDuration);
+        }, move.ghost ?? undefined, resolve);
       };
-      await Promise.all([rearrangeTogether, placeInOrder()]);
-    }
+      if (timing.delay > 0) window.setTimeout(launch, timing.delay);
+      else launch();
+    })));
+  }
+
+  private settleFlight(move: {
+    ghost: TileFigure | null;
+    target: TileFigure;
+  }): void {
+    move.ghost?.disposeBadge();
+    if (move.ghost?.root.parent) move.ghost.root.parent.removeControl(move.ghost.root);
+    move.target.root.alpha = move.target.rgbaAlpha;
+    move.target.revealBadge();
   }
 
   private chipSpawnRect(seat: number, ts: { x: number; y: number }): { x: number; y: number } {
@@ -1664,20 +1754,35 @@ export class OfflineGame {
     if (!this.onlineMode || !this.state || this.state.finished) return;
     if (msg.from === this.state.local_seat) return;
     if (msg.from !== this.state.current) return;
+    // Пока проигрывается чужой ход или очередь презентаций, стол
+    // пересобирать нельзя: refresh() пересоздаёт ряды, призраки летят к уже
+    // несуществующим целям, и фишки дублируются/накладываются. Откладываем
+    // самый свежий черновик до конца показа.
+    if (this.flightActive || this.presentBusy || this.presentQueue.length > 0) {
+      this.pendingDraft = msg;
+      return;
+    }
+    this.pendingDraft = null;
     this.draftFrom = msg.from;
     // Срок жизни черновика обновляем ВСЕГДА, даже если стол тот же:
     // автор повторяет висящий черновик каждые 3 с, и этот повтор и есть
     // «я ещё здесь» (game.gd:2851). Иначе повторный пакет дедуплицировался
     // и черновик протухал через 15 с прямо посреди хода соперника.
     if (this.draftExpireTimer) window.clearTimeout(this.draftExpireTimer);
-    this.draftExpireTimer = window.setTimeout(() => {
+    const expire = (): void => {
       this.draftExpireTimer = 0;
       // автор замолчал: вернуть последний подтверждённый стол
       if (!this.state || this.state.finished || this.state.myTurn()) return;
+      // не рвём чужой полёт пересборкой стола — проверим через секунду
+      if (this.flightActive || this.presentBusy) {
+        this.draftExpireTimer = window.setTimeout(expire, 1000);
+        return;
+      }
       this.applyServerRows(this.lastConfirmedTable);
       this.clearDraftPresentation();
       this.refresh();
-    }, 15000);
+    };
+    this.draftExpireTimer = window.setTimeout(expire, 15000);
     const payload = JSON.stringify(msg.rows);
     if (payload === this.lastDraftPayload) return;
     this.lastDraftPayload = payload;
@@ -2402,6 +2507,10 @@ export class OfflineGame {
     const snapshots = new Map<number, TileSnapshot>();
     const slots = this.tileSlotKeys();
     const collect = (f: TileFigure, rowId?: number): void => {
+      // Скрытые на время полёта фишки не годятся как «исходное» положение:
+      // их rect уже стоит на конечном месте, и новый призрак стартовал бы
+      // поверх уже стоящей карточки.
+      if (f.root.alpha <= 0.05) return;
       const rect = rectOf(f.root);
       if (rect.w > 0 && rect.h > 0) {
         snapshots.set(f.face.id, {
@@ -2518,34 +2627,61 @@ export class OfflineGame {
         window.requestAnimationFrame(launch);
         return;
       }
+      const flights: Array<{
+        p: (typeof pending)[number];
+        to: { x: number; y: number; w: number; h: number };
+        duration: number;
+      }> = [];
       for (const p of pending) {
         if (requestId !== this.layoutAnimationId || !this.running) {
           finish();
           return;
         }
         const to = rectOf(p.target.root);
-        if (to.w <= 0 || to.h <= 0) {
+        const dist = to.w > 0 && to.h > 0
+          ? Math.hypot(to.x - p.source.rect.x, to.y - p.source.rect.y)
+          : 0;
+        if (to.w <= 0 || to.h <= 0 || dist < 2) {
           p.ghost.disposeBadge();
           if (p.ghost.root.parent) p.ghost.root.parent.removeControl(p.ghost.root);
           p.target.root.alpha = p.target.rgbaAlpha;
           p.target.revealBadge();
           continue;
         }
-        const dist = Math.hypot(to.x - p.source.rect.x, to.y - p.source.rect.y);
-        if (dist < 2) {
-          p.ghost.disposeBadge();
-          if (p.ghost.root.parent) p.ghost.root.parent.removeControl(p.ghost.root);
-          p.target.root.alpha = p.target.rgbaAlpha;
-          p.target.revealBadge();
-          continue;
-        }
-        const duration = Math.round(Math.max(240, Math.min(460, dist / 0.9)));
-        this.playTileFlight(p.source, p.target, to, {
-          duration,
-          fromScale: 1,
-          fromAlpha: p.fade ? 0 : p.target.rgbaAlpha,
-        }, p.ghost);
+        flights.push({
+          p,
+          to,
+          duration: Math.round(Math.max(240, Math.min(460, dist / 0.9))),
+        });
       }
+      if (flights.length === 0) return;
+      const ts = tileSize();
+      // Та же защита, что и у сетевой анимации: одновременные перелёты
+      // разводим дугами/задержками, чтобы карточки не вставали друг в друга.
+      const timings = planFlights(
+        flights.map(({ p, to, duration }) => ({ from: p.source.rect, to, duration })),
+        { duration: 300, gap: 0, maxBend: Math.max(ts.y * 1.6, 70) },
+      );
+      flights.forEach(({ p, to }, index) => {
+        const timing = timings[index];
+        const run = (): void => {
+          if (requestId !== this.layoutAnimationId || !this.running) {
+            p.ghost.disposeBadge();
+            if (p.ghost.root.parent) p.ghost.root.parent.removeControl(p.ghost.root);
+            p.target.root.alpha = p.target.rgbaAlpha;
+            p.target.revealBadge();
+            return;
+          }
+          this.playTileFlight(p.source, p.target, to, {
+            duration: timing.duration,
+            bend: timing.bend,
+            fromScale: 1,
+            fromAlpha: p.fade ? 0 : p.target.rgbaAlpha,
+          }, p.ghost);
+        };
+        if (timing.delay > 0) window.setTimeout(run, timing.delay);
+        else run();
+      });
     };
     window.requestAnimationFrame(launch);
   }
@@ -2554,7 +2690,7 @@ export class OfflineGame {
     source: TileSnapshot,
     target: TileFigure,
     to: { x: number; y: number; w: number; h: number },
-    opts: { duration?: number; fromScale?: number; fromAlpha?: number } = {},
+    opts: { duration?: number; fromScale?: number; fromAlpha?: number; bend?: number } = {},
     existingGhost?: TileFigure,
     onComplete?: () => void,
   ): void {
@@ -2566,16 +2702,29 @@ export class OfflineGame {
     const duration = opts.duration ?? 240;
     const fromScale = opts.fromScale ?? 1;
     const fromAlpha = opts.fromAlpha ?? 1;
+    const bend = opts.bend ?? 0;
     const endAlpha = target.rgbaAlpha;
     root.scaleX = fromScale;
     root.scaleY = fromScale;
     root.alpha = fromAlpha;
+    // Дуга: горизонтальные перелёты уводим вверх/вниз, вертикальные — вбок.
+    // Встречные призраки расходятся и не закрывают друг друга.
+    const fromX = source.rect.x;
+    const fromY = source.rect.y;
+    const dx = to.x - fromX;
+    const dy = to.y - fromY;
+    const horizontal = Math.abs(dx) >= Math.abs(dy);
+    const nx = horizontal ? 0 : 1;
+    const ny = horizontal ? 1 : 0;
     const start = performance.now();
     const step = (now: number): void => {
       const progress = Math.min(1, (now - start) / duration);
       const eased = 1 - (1 - progress) ** 3;
-      root.left = px(Math.round(source.rect.x + (to.x - source.rect.x) * eased));
-      root.top = px(Math.round(source.rect.y + (to.y - source.rect.y) * eased));
+      // Синусоида: в начале/конце ровно в слотах, в середине — максимальный
+      // боковой отступ. Так дуга быстро уводит карточку с чужой траектории.
+      const wave = bend === 0 ? 0 : Math.sin(Math.PI * eased) * bend;
+      root.left = px(Math.round(fromX + dx * eased + nx * wave));
+      root.top = px(Math.round(fromY + dy * eased + ny * wave));
       const scale = fromScale + (1 - fromScale) * eased;
       root.scaleX = scale;
       root.scaleY = scale;
@@ -2614,7 +2763,8 @@ export class OfflineGame {
     root.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
     root.left = px(Math.round(source.rect.x));
     root.top = px(Math.round(source.rect.y));
-    root.zIndex = 680;
+    this.flightZ = this.flightZ >= 2000 ? 680 : this.flightZ + 1;
+    root.zIndex = this.flightZ;
     root.isPointerBlocker = false;
     root.alpha = target.rgbaAlpha;
     this.flightLayer.addControl(root);
