@@ -34,6 +34,7 @@ import {
   tableMatTexture,
   TableTheme,
   themeById,
+  woodTexture,
 } from './skin_art';
 import {
   abortTouchGestures,
@@ -239,6 +240,7 @@ export class OfflineGame {
   private tableMat!: GuiImage;
   private handPanel!: Container;
   private handHost!: Container;
+  private handWood!: GuiImage;
   private handToolbar!: Container;
   private sortColorBtn!: Button;
   private sortValueBtn!: Button;
@@ -930,7 +932,17 @@ export class OfflineGame {
     this.handPanel.clipChildren = false;
     this.handPanel.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
     col.addControl(this.handPanel);
-    // Рука без подложки: фишки лежат прямо на фоне, как на краю стола.
+    // Деревянный лоток без тёмно-зелёной выемки: фишки стоят прямо на доске.
+    this.handWood = new GuiImage(
+      'handWood',
+      woodTexture(tableTheme(), Math.max(180, viewWidth() - SIDE_PAD * 2), ts.y + 26),
+    );
+    this.handWood.width = '100%';
+    this.handWood.height = '100%';
+    this.handWood.stretch = GuiImage.STRETCH_FILL;
+    this.handWood.isHitTestVisible = false;
+    this.handWood.isPointerBlocker = false;
+    this.handPanel.addControl(this.handWood);
     // Рука без скролла: фишки переносятся на следующие ряды (layoutFlow),
     // высота панели растёт под фактическое число рядов.
     this.handHost = new Container('handHost');
@@ -939,6 +951,15 @@ export class OfflineGame {
     this.handHost.clipChildren = false;
     this.handHost.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
     this.handPanel.addControl(this.handHost);
+  }
+
+  // Доска руки меняет размер вместе с числом рядов/шириной экрана.
+  private updateHandRack(): void {
+    if (!this.handWood) return;
+    const w = this.handPanel.widthInPixels;
+    const h = this.handPanel.heightInPixels;
+    if (w <= 0 || h <= 0) return;
+    this.handWood.source = woodTexture(tableTheme(), w, h);
   }
 
   private bottomButtonWidth(): number {
@@ -3090,6 +3111,7 @@ export class OfflineGame {
       this.rowsScroll.width = px(Math.max(160, tableW - TABLE_INSET * 2));
       this.rowsScroll.height = px(Math.max(48, matH - TABLE_INSET * 2));
       this.handPanel.width = px(Math.max(180, viewWidth() - SIDE_PAD * 2));
+      this.updateHandRack();
       if (this.handToolbar) this.handToolbar.width = px(Math.max(180, viewWidth() - SIDE_PAD * 2));
       const bw = this.bottomButtonWidth();
       this.undoBtn.width = px(bw);
@@ -3453,6 +3475,7 @@ export class OfflineGame {
     this.handHost.height = px(Math.max(ts.y, laid.totalHeight));
     const handH = laid.totalHeight + 26;
     this.handPanel.height = px(handH);
+    this.updateHandRack();
     // Стол забирает весь остаток под фактическую высоту руки: рука всегда
     // видна целиком, а стол скроллится.
     if (this.rowsScroll && this.tableBox) {
