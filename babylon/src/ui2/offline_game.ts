@@ -3215,25 +3215,43 @@ export class OfflineGame {
     }
     const gapX = 10;
     const gapY = 10;
-    let x = PAD_X;
-    let y = 8;
-    let lineH = 0;
+    // Сначала раскладываем ряды по линиям, затем центрируем каждую линию
+    // по сукну: короткая линия стоит по центру, а не прижимается влево.
+    const lines: { figs: RowFig[]; w: number }[] = [];
+    let cur: RowFig[] = [];
+    let curW = 0;
     for (const fig of rows) {
-      if (x > PAD_X && x + fig.w > PAD_X + maxW) {
-        x = PAD_X;
-        y += lineH + gapY;
-        lineH = 0;
+      const add = cur.length > 0 ? gapX + fig.w : fig.w;
+      if (cur.length > 0 && curW + add > maxW) {
+        lines.push({ figs: cur, w: curW });
+        cur = [fig];
+        curW = fig.w;
+      } else {
+        cur.push(fig);
+        curW += add;
       }
-      fig.root.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-      fig.root.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
-      fig.root.left = px(x);
-      fig.root.top = px(y);
-      this.rowsInner.addControl(fig.root);
-      this.rowFigs.push(fig);
-      x += fig.w + gapX;
-      lineH = Math.max(lineH, fig.h);
     }
-    this.rowsInner.height = px(y + lineH + 10);
+    if (cur.length > 0) lines.push({ figs: cur, w: curW });
+
+    let y = 8;
+    let bottom = 8;
+    for (const line of lines) {
+      let x = PAD_X + Math.max(0, Math.round((maxW - line.w) / 2));
+      let lineH = 0;
+      for (const fig of line.figs) {
+        fig.root.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+        fig.root.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+        fig.root.left = px(x);
+        fig.root.top = px(y);
+        this.rowsInner.addControl(fig.root);
+        this.rowFigs.push(fig);
+        x += fig.w + gapX;
+        lineH = Math.max(lineH, fig.h);
+      }
+      bottom = y + lineH;
+      y += lineH + gapY;
+    }
+    this.rowsInner.height = px(bottom + 10);
   }
 
   private makeRowBlock(
