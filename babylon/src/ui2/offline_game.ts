@@ -34,7 +34,6 @@ import {
   tableMatTexture,
   TableTheme,
   themeById,
-  woodTexture,
 } from './skin_art';
 import {
   abortTouchGestures,
@@ -240,14 +239,16 @@ export class OfflineGame {
   private tableMat!: GuiImage;
   private handPanel!: Container;
   private handHost!: Container;
-  private handWood!: GuiImage;
-  private handGroove!: Rectangle;
   private handToolbar!: Container;
   private sortColorBtn!: Button;
   private sortValueBtn!: Button;
   private newRowBtn!: Button;
   // ряд, созданный кнопкой «+ Новый ряд» и ещё не получивший фишку
   private openRowId = -1;
+  // Каретка места вставки: живёт поверх перетаскиваемой фишки.
+  private dropCaret: Rectangle | null = null;
+  private dropCaretGlow: Rectangle | null = null;
+  private dropArrow: TextBlock | null = null;
   private bottomBtn!: Button;
   private undoBtn!: Button;
   private restoreBtn!: Button;
@@ -372,6 +373,52 @@ export class OfflineGame {
     this.badgeLayer.isPointerBlocker = false;
     this.badgeLayer.clipChildren = false;
     root.addControl(this.badgeLayer);
+
+    // Каретка вставки — прямой ребёнок корня с высоким zIndex: она должна
+    // быть видна поверх призрака перетаскиваемой фишки (zIndex 600).
+    this.dropCaretGlow = new Rectangle('dropCaretGlow');
+    this.dropCaretGlow.width = px(14);
+    this.dropCaretGlow.height = px(60);
+    this.dropCaretGlow.background = 'rgba(255,213,79,0.32)';
+    this.dropCaretGlow.thickness = 0;
+    this.dropCaretGlow.cornerRadius = 4;
+    this.dropCaretGlow.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    this.dropCaretGlow.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    this.dropCaretGlow.isHitTestVisible = false;
+    this.dropCaretGlow.isPointerBlocker = false;
+    this.dropCaretGlow.zIndex = 758;
+    this.dropCaretGlow.isVisible = false;
+    root.addControl(this.dropCaretGlow);
+
+    this.dropCaret = new Rectangle('dropCaretGlobal');
+    this.dropCaret.width = px(4);
+    this.dropCaret.height = px(60);
+    this.dropCaret.background = '#FFD54F';
+    this.dropCaret.color = 'rgba(0,0,0,0.55)';
+    this.dropCaret.thickness = 1;
+    this.dropCaret.cornerRadius = 2;
+    this.dropCaret.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    this.dropCaret.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    this.dropCaret.isHitTestVisible = false;
+    this.dropCaret.isPointerBlocker = false;
+    this.dropCaret.zIndex = 760;
+    this.dropCaret.isVisible = false;
+    root.addControl(this.dropCaret);
+
+    // Стрелка над рядом: видна даже когда призрак фишки закрывает каретку.
+    this.dropArrow = mkLabel('▼', {
+      fontSize: fs(20), color: '#FFD54F', width: 22, height: 22,
+      align: 'center', hAlign: 'center', vAlign: 'center',
+    });
+    this.dropArrow.outlineColor = 'rgba(0,0,0,0.7)';
+    this.dropArrow.outlineWidth = 3;
+    this.dropArrow.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    this.dropArrow.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    this.dropArrow.isHitTestVisible = false;
+    this.dropArrow.isPointerBlocker = false;
+    this.dropArrow.zIndex = 770;
+    this.dropArrow.isVisible = false;
+    root.addControl(this.dropArrow);
 
     // popups → последним ребёнком root: порядок рисования в ADT — по
     // детям контейнера, модалки обязаны лежать над столом/рукой.
@@ -670,6 +717,10 @@ export class OfflineGame {
     scroll.paddingRight = px(SIDE_PAD);
     // Тонкая полоска прокрутки (4px) вместо стандартной 20px.
     scroll.barSize = 4;
+    // Горизонтальная полоса чипов рисовала бы белую линию на всю ширину
+    // над столом; свайп работает и без неё.
+    (scroll as unknown as { _horizontalBar: Control })._horizontalBar.isVisible = false;
+    (scroll as unknown as { _forceHorizontalBar: boolean })._forceHorizontalBar = false;
     col.addControl(scroll);
     enableSmoothScroll(scroll, 'horizontal');
     this.timerOverflowRow = new Container('timerOverflowRow');
@@ -879,24 +930,7 @@ export class OfflineGame {
     this.handPanel.clipChildren = false;
     this.handPanel.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
     col.addControl(this.handPanel);
-    // Деревянный лоток: доска с тёмной выемкой, на которой стоят фишки.
-    this.handWood = new GuiImage('handWood', woodTexture(tableTheme(), Math.max(180, viewWidth() - SIDE_PAD * 2), ts.y + 26));
-    this.handWood.width = '100%';
-    this.handWood.height = '100%';
-    this.handWood.stretch = GuiImage.STRETCH_FILL;
-    this.handWood.isHitTestVisible = false;
-    this.handWood.isPointerBlocker = false;
-    this.handPanel.addControl(this.handWood);
-    this.handGroove = new Rectangle('handGroove');
-    this.handGroove.cornerRadius = 10;
-    this.handGroove.thickness = 1;
-    this.handGroove.color = '#00000066';
-    this.handGroove.background = '#0B2417B8';
-    this.handGroove.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
-    this.handGroove.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
-    this.handGroove.isHitTestVisible = false;
-    this.handGroove.isPointerBlocker = false;
-    this.handPanel.addControl(this.handGroove);
+    // Рука без подложки: фишки лежат прямо на фоне, как на краю стола.
     // Рука без скролла: фишки переносятся на следующие ряды (layoutFlow),
     // высота панели растёт под фактическое число рядов.
     this.handHost = new Container('handHost');
@@ -905,17 +939,6 @@ export class OfflineGame {
     this.handHost.clipChildren = false;
     this.handHost.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
     this.handPanel.addControl(this.handHost);
-    this.updateHandRack();
-  }
-
-  private updateHandRack(): void {
-    if (!this.handWood || !this.handGroove) return;
-    const w = this.handPanel.widthInPixels;
-    const h = this.handPanel.heightInPixels;
-    if (w <= 0 || h <= 0) return;
-    this.handWood.source = woodTexture(tableTheme(), w, h);
-    this.handGroove.width = px(Math.max(40, w - 14));
-    this.handGroove.height = px(Math.max(24, h - 12));
   }
 
   private bottomButtonWidth(): number {
@@ -3067,7 +3090,6 @@ export class OfflineGame {
       this.rowsScroll.width = px(Math.max(160, tableW - TABLE_INSET * 2));
       this.rowsScroll.height = px(Math.max(48, matH - TABLE_INSET * 2));
       this.handPanel.width = px(Math.max(180, viewWidth() - SIDE_PAD * 2));
-      this.updateHandRack();
       if (this.handToolbar) this.handToolbar.width = px(Math.max(180, viewWidth() - SIDE_PAD * 2));
       const bw = this.bottomButtonWidth();
       this.undoBtn.width = px(bw);
@@ -3431,7 +3453,6 @@ export class OfflineGame {
     this.handHost.height = px(Math.max(ts.y, laid.totalHeight));
     const handH = laid.totalHeight + 26;
     this.handPanel.height = px(handH);
-    this.updateHandRack();
     // Стол забирает весь остаток под фактическую высоту руки: рука всегда
     // видна целиком, а стол скроллится.
     if (this.rowsScroll && this.tableBox) {
@@ -4231,18 +4252,21 @@ export class OfflineGame {
   }
 
   // Экранная X-координата места вставки (середина зазора между фишками).
-  private insertionX(fig: RowFig, index: number): number {
-    if (fig.figures.length === 0) {
+  // Считаем по фишкам БЕЗ перетаскиваемой: именно в эту позицию она встанет
+  // после изъятия из исходного ряда. Иначе для средней фишки каретка
+  // показывала один зазор, а moveTile вставлял её в другой.
+  private insertionX(fig: RowFig, restFigs: TileFigure[], index: number): number {
+    if (restFigs.length === 0) {
       const h = rectOf(fig.host);
       return h.x + h.w / 2;
     }
     const gap = flowGap(tileSize());
-    const first = rectOf(fig.figures[0].root);
-    const last = rectOf(fig.figures[fig.figures.length - 1].root);
+    const first = rectOf(restFigs[0].root);
+    const last = rectOf(restFigs[restFigs.length - 1].root);
     if (index <= 0) return first.x - gap / 2;
-    if (index >= fig.figures.length) return last.x + last.w + gap / 2;
-    const a = rectOf(fig.figures[index - 1].root);
-    const b = rectOf(fig.figures[index].root);
+    if (index >= restFigs.length) return last.x + last.w + gap / 2;
+    const a = rectOf(restFigs[index - 1].root);
+    const b = rectOf(restFigs[index].root);
     return (a.x + a.w + b.x) / 2;
   }
 
@@ -4265,7 +4289,7 @@ export class OfflineGame {
       const row = this.state.rowById(fig.rowId);
       if (!row) continue;
       if (fig.empty) {
-        const gapX = this.insertionX(fig, 0);
+        const gapX = this.insertionX(fig, [], 0);
         const dy = Math.max(0, r.y - pyy, pyy - (r.y + r.h));
         // Пустой ряд — запасной вариант: существующий подходящий важнее.
         const cost = Math.abs(pxx - gapX) + dy * 2.5 + 160;
@@ -4275,12 +4299,13 @@ export class OfflineGame {
         }
         continue;
       }
+      const restFigs = fig.figures.filter((f) => f.face.id !== face.id);
       const rest = row.tiles.filter((tile) => tile.id !== face.id);
       const oldIdx = row.tiles.findIndex((tile) => tile.id === face.id);
       const n = rest.length;
       for (let i = 0; i <= n; i += 1) {
         if (!this.canInsertIntoRow(row.tiles, face, i)) continue;
-        const gapX = this.insertionX(fig, i);
+        const gapX = this.insertionX(fig, restFigs, i);
         const dy = Math.max(0, r.y - pyy, pyy - (r.y + r.h));
         const cost = Math.abs(pxx - gapX) + dy * 2.5;
         if (cost >= bestCost) continue;
@@ -4300,16 +4325,37 @@ export class OfflineGame {
         fig.fill.color = '#FFD54F';
         fig.fill.thickness = 3;
         fig.fill.background = 'rgba(255,213,79,0.16)';
-        const h = rectOf(fig.host);
-        fig.caret.left = px(Math.round(Math.max(0, Math.min(h.w - 4, target!.caretX - h.x - 2))));
-        fig.caret.top = px(0);
-        fig.caret.isVisible = true;
+        fig.caret.isVisible = false;
       } else {
         fig.fill.color = fig.baseBorder;
         fig.fill.thickness = fig.baseThickness;
         fig.fill.background = fig.baseBg;
         fig.caret.isVisible = false;
       }
+    }
+    if (!this.dropCaret) return;
+    if (target === null) {
+      this.dropCaret.isVisible = false;
+      if (this.dropCaretGlow) this.dropCaretGlow.isVisible = false;
+      if (this.dropArrow) this.dropArrow.isVisible = false;
+      return;
+    }
+    const top = Math.round(target.rect.y) + 6;
+    const height = Math.max(24, Math.round(target.rect.h) - 12);
+    this.dropCaret.left = px(Math.round(target.caretX) - 2);
+    this.dropCaret.top = px(top);
+    this.dropCaret.height = px(height);
+    this.dropCaret.isVisible = true;
+    if (this.dropCaretGlow) {
+      this.dropCaretGlow.left = px(Math.round(target.caretX) - 7);
+      this.dropCaretGlow.top = px(top);
+      this.dropCaretGlow.height = px(height);
+      this.dropCaretGlow.isVisible = true;
+    }
+    if (this.dropArrow) {
+      this.dropArrow.left = px(Math.round(target.caretX) - 11);
+      this.dropArrow.top = px(Math.round(target.rect.y) - 18);
+      this.dropArrow.isVisible = true;
     }
   }
 
