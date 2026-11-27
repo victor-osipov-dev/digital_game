@@ -189,6 +189,11 @@ export function tableMatTexture(theme: TableTheme, w: number, h: number, inset =
   const hit = cache.get(key);
   if (hit) return hit;
   const { c, ctx } = mk(W, H);
+  // Скруглённые углы всего стола: вне радиуса остаётся прозрачный фон.
+  const outerR = Math.max(10, Math.min(24, Math.round(Math.min(W, H) * 0.035)));
+  ctx.clearRect(0, 0, W, H);
+  roundRect(ctx, 0, 0, W, H, outerR);
+  ctx.clip();
 
   // Дерево по всему периметру.
   const wood = ctx.createLinearGradient(0, 0, 0, H);
@@ -249,19 +254,35 @@ export function tableMatTexture(theme: TableTheme, w: number, h: number, inset =
   ctx.lineWidth = 1;
   ctx.stroke();
 
+  // Фаска по внешнему скруглённому краю деревянной рамы.
+  roundRect(ctx, 1.5, 1.5, W - 3, H - 3, Math.max(1, outerR - 2));
+  ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  roundRect(ctx, 3, 3, W - 6, H - 6, Math.max(1, outerR - 3));
+  ctx.strokeStyle = 'rgba(255,236,205,0.12)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
   const url = c.toDataURL('image/png');
   cache.set(key, url);
   return url;
 }
 
 // ===== дерево =====
-export function woodTexture(theme: TableTheme, w: number, h: number, vertical = false): string {
+export function woodTexture(theme: TableTheme, w: number, h: number, vertical = false, corner = 0): string {
   const W = Math.max(32, Math.min(1200, Math.round(w / 16) * 16));
   const H = Math.max(32, Math.min(1200, Math.round(h / 16) * 16));
-  const key = `wood:${theme.id}:${W}x${H}:${vertical ? 'v' : 'h'}`;
+  const rad = Math.max(0, Math.min(Math.round(corner), Math.floor(Math.min(W, H) / 2)));
+  const key = `wood:${theme.id}:${W}x${H}:${vertical ? 'v' : 'h'}:${rad}`;
   const hit = cache.get(key);
   if (hit) return hit;
   const { c, ctx } = mk(W, H);
+  if (rad > 0) {
+    // Скруглённая доска: всё, что вне радиуса, остаётся прозрачным.
+    roundRect(ctx, 0, 0, W, H, rad);
+    ctx.clip();
+  }
   const len = vertical ? H : W;
   const thick = vertical ? W : H;
   const g = vertical
@@ -304,6 +325,18 @@ export function woodTexture(theme: TableTheme, w: number, h: number, vertical = 
   edge.addColorStop(1, 'rgba(255,236,205,0)');
   ctx.fillStyle = edge;
   ctx.fillRect(0, 0, W, H);
+
+  if (rad > 0) {
+    // Мягкая фаска по скруглённому краю доски.
+    roundRect(ctx, 1.5, 1.5, W - 3, H - 3, Math.max(1, rad - 2));
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    roundRect(ctx, 3, 3, W - 6, H - 6, Math.max(1, rad - 3));
+    ctx.strokeStyle = 'rgba(255,236,205,0.14)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
 
   const url = c.toDataURL('image/png');
   cache.set(key, url);

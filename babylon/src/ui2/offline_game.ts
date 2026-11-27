@@ -719,12 +719,9 @@ export class OfflineGame {
     scroll.height = px(50);
     scroll.paddingLeft = px(SIDE_PAD);
     scroll.paddingRight = px(SIDE_PAD);
-    // Тонкая полоска прокрутки (4px) вместо стандартной 20px.
-    scroll.barSize = 4;
-    // Горизонтальная полоса чипов рисовала бы белую линию на всю ширину
-    // над столом; свайп работает и без неё.
-    (scroll as unknown as { _horizontalBar: Control })._horizontalBar.isVisible = false;
-    (scroll as unknown as { _forceHorizontalBar: boolean })._forceHorizontalBar = false;
+    // Полоса прокрутки чипов не нужна: на телефоне она рисовала светлую
+    // линию на всю ширину над столом. Свайп работает и без неё.
+    scroll.barSize = 0;
     col.addControl(scroll);
     enableSmoothScroll(scroll, 'horizontal');
     this.timerOverflowRow = new Container('timerOverflowRow');
@@ -751,7 +748,7 @@ export class OfflineGame {
   // Фиксированная вертикаль: верхний отступ колонки, верхняя панель,
   // ряд игроков и нижние кнопки.
   private fixedVSpace(): number {
-    return TOP_PAD + 46 + 50 + 36 + this.timerOverflowHeight + 58;
+    return TOP_PAD + 46 + 50 + 50 + this.timerOverflowHeight + 58;
   }
 
   // Минимальная высота стола: на очень низких окнах стол ужимается,
@@ -890,7 +887,7 @@ export class OfflineGame {
     const barW = Math.max(180, viewWidth() - SIDE_PAD * 2);
     this.handToolbar = new Container('handToolbar');
     this.handToolbar.width = px(barW);
-    this.handToolbar.height = px(36);
+    this.handToolbar.height = px(50);
     this.handToolbar.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
     col.addControl(this.handToolbar);
 
@@ -937,7 +934,7 @@ export class OfflineGame {
     // Деревянный лоток без тёмно-зелёной выемки: фишки стоят прямо на доске.
     this.handWood = new GuiImage(
       'handWood',
-      woodTexture(tableTheme(), Math.max(180, viewWidth() - SIDE_PAD * 2), ts.y + 26),
+      woodTexture(tableTheme(), Math.max(180, viewWidth() - SIDE_PAD * 2), ts.y + 26, false, 14),
     );
     this.handWood.width = '100%';
     this.handWood.height = '100%';
@@ -961,7 +958,7 @@ export class OfflineGame {
     const w = this.handPanel.widthInPixels;
     const h = this.handPanel.heightInPixels;
     if (w <= 0 || h <= 0) return;
-    this.handWood.source = woodTexture(tableTheme(), w, h);
+    this.handWood.source = woodTexture(tableTheme(), w, h, false, 14);
   }
 
   private bottomButtonWidth(): number {
