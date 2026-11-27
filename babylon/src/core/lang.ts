@@ -34,6 +34,7 @@ const EN: Record<string, string> = {
   'Положите сюда число': 'Drop a tile here',
   'Нажмите «+ Новый ряд», чтобы выложить числа': 'Tap “+ Row” to lay down tiles',
   'Нет подходящего ряда — нажмите «+ Новый ряд»': 'No suitable row — tap “+ Row”',
+  'Ряд неверный: %s': 'Row is invalid: %s',
   'Время %d:%s': 'Time %d:%s',
   'До %d очков': 'First to %d points',
   'Ежедневная партия': 'Daily game',

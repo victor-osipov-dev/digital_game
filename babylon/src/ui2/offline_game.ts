@@ -4260,8 +4260,9 @@ export class OfflineGame {
   }
 
   // Может ли фишка встать в ряд на позицию index (по индексу в «остатке»
-  // ряда, без самой перетаскиваемой фишки). Неполный ряд (1–2 фишки)
-  // считается допустимым — он ещё собирается.
+  // ряда, без самой перетаскиваемой фишки). Неполный или уже неверный ряд
+  // можно продолжать собирать: игрок вправе выложить 8 к 5-7, а затем
+  // добавить 6 и получить 5-6-7-8. Готовый (валидный) ряд ломать нельзя.
   private canInsertIntoRow(tiles: TileFace[], face: TileFace, index: number): boolean {
     if (tiles.length >= 13) return false;
     const rest = tiles.filter((tile) => tile.id !== face.id);
@@ -4271,7 +4272,9 @@ export class OfflineGame {
     // Набор не может быть длиннее 4, серия — 13.
     if (next.length > 13) return false;
     if (next.length < 3) return true;
-    return validateRow(next).ok;
+    if (validateRow(next).ok) return true;
+    const currentlyValid = tiles.length >= 3 && validateRow(tiles).ok;
+    return !currentlyValid;
   }
 
   // Экранная X-координата места вставки (середина зазора между фишками).
@@ -4330,7 +4333,12 @@ export class OfflineGame {
         if (!this.canInsertIntoRow(row.tiles, face, i)) continue;
         const gapX = this.insertionX(fig, restFigs, i);
         const dy = Math.max(0, r.y - pyy, pyy - (r.y + r.h));
-        const cost = Math.abs(pxx - gapX) + dy * 2.5;
+        // Готовый (валидный) результат приоритетнее промежуточного:
+        // при равном расстоянии фишка пойдёт в ряд, который сразу станет верным.
+        const next = [...rest];
+        next.splice(Math.min(Math.max(i, 0), next.length), 0, face);
+        const nextValid = next.length >= 3 && validateRow(next).ok;
+        const cost = Math.abs(pxx - gapX) + dy * 2.5 + (nextValid ? 0 : 50);
         if (cost >= bestCost) continue;
         // Индекс для moveTile считается по исходному ряду (до изъятия).
         const origIndex = oldIdx >= 0 && oldIdx <= i ? i + 1 : i;
@@ -4406,11 +4414,18 @@ export class OfflineGame {
       this.openRowId = -1;
     }
     if (ok) play('place');
+    if (ok) {
+      // Промежуточный неверный ряд разрешён (например, 5-7-8, пока не
+      // добавлена 6): подсказываем, чего не хватает, вместо молчания.
+      const row = this.state.rowById(dd.targetRow);
+      if (row && row.tiles.length >= 3) {
+        const v = validateRow(row.tiles);
+        if (!v.ok) this.toast(t('Ряд неверный: %s', v.reason));
+      }
+    }
     if (ok && previewRect.w > 0 && previewRect.h > 0) {
       this.flightOrigins.set(dd.face.id, { face: dd.face, rect: previewRect });
     }
-    // Без тоста: промежуточное состояние стола видно по красной обводке
-    // невалидных рядов; объяснение — по кнопке «Продолжить»/«Взять».
     this.refresh();
     // в сети каждое перемещение — черновик остальным + повтор каждые 3 с
     if (this.onlineMode && ok && this.state && this.state.myTurn()) this.sendMyDraft();
