@@ -90,6 +90,8 @@ interface DropTarget {
   index: number;
   caretX: number;
   rect: { x: number; y: number; w: number; h: number };
+  /** Ряд станет валидным сразу после вставки (иначе подсветка красная). */
+  valid: boolean;
 }
 
 interface TileSrc {
@@ -3431,7 +3433,7 @@ export class OfflineGame {
     if (!fig) return;
     const r = rectOf(fig.root);
     const cx = r.x + r.w / 2;
-    this.highlightDropTarget({ rowId: fig.rowId, index: 0, caretX: cx, rect: r });
+    this.highlightDropTarget({ rowId: fig.rowId, index: 0, caretX: cx, rect: r, valid: true });
     window.setTimeout(() => this.clearDropHighlight(), 650);
   }
 
@@ -4321,7 +4323,7 @@ export class OfflineGame {
         const cost = Math.abs(pxx - gapX) + dy * 2.5 + 160;
         if (cost < bestCost) {
           bestCost = cost;
-          best = { rowId: fig.rowId, index: 0, caretX: gapX, rect: r };
+          best = { rowId: fig.rowId, index: 0, caretX: gapX, rect: r, valid: true };
         }
         continue;
       }
@@ -4343,19 +4345,22 @@ export class OfflineGame {
         // Индекс для moveTile считается по исходному ряду (до изъятия).
         const origIndex = oldIdx >= 0 && oldIdx <= i ? i + 1 : i;
         bestCost = cost;
-        best = { rowId: fig.rowId, index: origIndex, caretX: gapX, rect: r };
+        best = { rowId: fig.rowId, index: origIndex, caretX: gapX, rect: r, valid: nextValid };
       }
     }
     return best;
   }
 
   private highlightDropTarget(target: DropTarget | null): void {
+    const bad = target !== null && !target.valid;
+    const hot = bad ? '#FF5252' : '#FFD54F';
+    const hotBg = bad ? 'rgba(229,57,53,0.18)' : 'rgba(255,213,79,0.16)';
     for (const fig of this.rowFigs) {
       const active = target !== null && fig.rowId === target.rowId;
       if (active) {
-        fig.fill.color = '#FFD54F';
+        fig.fill.color = hot;
         fig.fill.thickness = 3;
-        fig.fill.background = 'rgba(255,213,79,0.16)';
+        fig.fill.background = hotBg;
         fig.caret.isVisible = false;
       } else {
         fig.fill.color = fig.baseBorder;
@@ -4373,17 +4378,20 @@ export class OfflineGame {
     }
     const top = Math.round(target.rect.y) + 6;
     const height = Math.max(24, Math.round(target.rect.h) - 12);
+    this.dropCaret.background = hot;
     this.dropCaret.left = px(Math.round(target.caretX) - 2);
     this.dropCaret.top = px(top);
     this.dropCaret.height = px(height);
     this.dropCaret.isVisible = true;
     if (this.dropCaretGlow) {
+      this.dropCaretGlow.background = bad ? 'rgba(229,57,53,0.32)' : 'rgba(255,213,79,0.32)';
       this.dropCaretGlow.left = px(Math.round(target.caretX) - 7);
       this.dropCaretGlow.top = px(top);
       this.dropCaretGlow.height = px(height);
       this.dropCaretGlow.isVisible = true;
     }
     if (this.dropArrow) {
+      this.dropArrow.color = hot;
       this.dropArrow.left = px(Math.round(target.caretX) - 11);
       this.dropArrow.top = px(Math.round(target.rect.y) - 18);
       this.dropArrow.isVisible = true;
