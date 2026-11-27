@@ -7,7 +7,8 @@ import { OfflineGame } from '../ui2/offline_game';
 import { OnlineLobby } from '../ui2/online_lobby';
 import { loadSettings } from '../core/settings';
 import { GameState } from '../core/game_state';
-import type { MenuHost, OfflineHost, OnlineStats, ScreenName } from '../ui2/ports';
+import { dailySeed, botCharacterFor } from '../core/meta';
+import type { MenuHost, OfflineHost, OnlineStats, ScreenName, StartMode } from '../ui2/ports';
 import { GameEnvelope, RoomLobbyView } from '../net/protocol';
 import { endInputSession, installGlobalTouchGuard, isInputSessionActive, onInputSessionEnd } from '../ui2/uiskin';
 import { platform } from '../platform';
@@ -58,7 +59,7 @@ export class App implements MenuHost, OfflineHost {
   private startMenuConnection(): void {
     // Площадка без БЭК/онлайна (YouTube Playables, GameDistribution):
     // не подключаемся к серверу и не показываем баннеры комнат.
-    if (!platform.supportsOnline) return;
+    if (!platform.supportsOnline || !platform.menuAutoConnect) return;
     if (this.api.isOpen || this.menuConnectionTask) return;
     const task = (async () => {
       try {
@@ -107,6 +108,7 @@ export class App implements MenuHost, OfflineHost {
   /** Опрос списка комнат для плашки в меню — только пока экран меню активен. */
   private startRoomsPolling(): void {
     if (this.roomsPollTimer !== null) return;
+    if (!platform.menuAutoConnect) return;
     this.roomsPollTimer = window.setInterval(() => {
       void this.refreshOnlineRooms();
     }, 30_000);
@@ -347,9 +349,9 @@ export class App implements MenuHost, OfflineHost {
     }
   }
 
-  onStart(): void {
+  onStart(mode: StartMode = 'classic'): void {
     this.show('offline');
-    this.replay();
+    this.replay(mode);
   }
 
   onOnline(): void {
@@ -440,18 +442,28 @@ export class App implements MenuHost, OfflineHost {
     this.show('online');
   }
 
-  replay(): void {
+  replay(mode: StartMode = 'classic'): void {
     const S = loadSettings();
+    // Ежедневная партия — всегда один человек против бота: одинаковый
+    // расклад по сиду дня у всех игроков.
+    const count = mode === 'daily' ? 2 : S.player_count;
     const names: string[] = [];
-    for (let i = 0; i < S.player_count; i += 1) names.push(S.player_names[i] ?? '');
-    const st = GameState.create(S.player_count, names, S.require_30);
+    for (let i = 0; i < count; i += 1) names.push(S.player_names[i] ?? '');
+    const st = GameState.create(count, names, S.require_30, mode === 'daily' ? dailySeed() : undefined);
     st.local_seat = -1;
-    for (let i = 0; i < S.player_count; i += 1) {
-      st.players[i].is_bot = S.player_is_bot[i] ?? false;
+    st.mode = mode === 'daily' ? 'daily' : mode;
+    st.target = 50;
+    for (let i = 0; i < count; i += 1) {
+      const isBot = mode === 'daily' ? i > 0 : (S.player_is_bot[i] ?? false);
+      st.players[i].is_bot = isBot;
+      // Безымянного бота называем персонажем: у соперника есть характер.
+      if (isBot && (!names[i] || names[i] === t('Игрок %d', i + 1))) {
+        st.players[i].name = botCharacterFor(i, S.bot_level).name;
+      }
     }
     this.offline = new OfflineGame(this);
     this.offline.build(this.root);
-    this.offline.startGame(st);
+    this.offline.startGame(st, { daily: mode === 'daily' });
   }
 
   getScene(): Scene {

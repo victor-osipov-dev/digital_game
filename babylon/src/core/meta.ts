@@ -1,0 +1,306 @@
+// Мета-прогресс: звания за победы, монеты, достижения, ежедневная серия,
+// недельный счётчик побед и магазин тем. Всё хранится в настройках, поэтому
+// автоматически попадает в облачное сохранение площадки.
+
+import { loadSettings, saveSettings } from './settings';
+import { platform } from '../platform';
+import { t } from './lang';
+
+export interface RankInfo {
+  index: number;
+  name: string;
+  wins: number;
+  nextAt: number;
+  prevAt: number;
+  progress: number;
+  isMax: boolean;
+}
+
+const RANKS: { at: number; name: string }[] = [
+  { at: 0, name: 'Новичок' },
+  { at: 3, name: 'Любитель' },
+  { at: 10, name: 'Игрок' },
+  { at: 25, name: 'Опытный' },
+  { at: 50, name: 'Мастер' },
+  { at: 100, name: 'Гроссмейстер' },
+  { at: 250, name: 'Легенда' },
+];
+
+export function rankFor(wins: number): RankInfo {
+  let index = 0;
+  for (let i = 0; i < RANKS.length; i += 1) {
+    if (wins >= RANKS[i].at) index = i;
+  }
+  const prevAt = RANKS[index].at;
+  const isMax = index >= RANKS.length - 1;
+  const nextAt = isMax ? prevAt : RANKS[index + 1].at;
+  const span = Math.max(1, nextAt - prevAt);
+  const progress = isMax ? 1 : Math.max(0, Math.min(1, (wins - prevAt) / span));
+  return { index, name: t(RANKS[index].name), wins, nextAt, prevAt, progress, isMax };
+}
+
+// Персонажи ботов: имя и аватар зависят от сложности и места за столом.
+export const BOT_CHARACTERS = [
+  { id: 'timofey', name: 'Тимофей' },
+  { id: 'klara', name: 'Клара' },
+  { id: 'arkady', name: 'Аркадий' },
+  { id: 'max', name: 'Макс' },
+  { id: 'lena', name: 'Лена' },
+];
+
+export function botCharacterFor(seat: number, level: number): { id: string; name: string } {
+  return BOT_CHARACTERS[(Math.max(0, seat) + Math.max(0, level)) % BOT_CHARACTERS.length];
+}
+
+export interface AchievementDef {  id: string;
+  title: string;
+  desc: string;
+  reward: number;
+  /** Символ-иконка (рисуется текстом, без внешних ассетов). */
+  icon: string;
+}
+
+export const ACHIEVEMENTS: AchievementDef[] = [
+  { id: 'first_win', title: 'Первая победа', desc: 'Выиграйте первую партию', reward: 30, icon: '★' },
+  { id: 'wins_5', title: 'Пять побед', desc: 'Выиграйте 5 партий', reward: 60, icon: '✦' },
+  { id: 'wins_20', title: 'Двадцать побед', desc: 'Выиграйте 20 партий', reward: 150, icon: '✧' },
+  { id: 'games_10', title: 'За столом', desc: 'Сыграйте 10 партий', reward: 40, icon: '◉' },
+  { id: 'joker_use', title: 'Джокер в деле', desc: 'Выложите джокер в готовую комбинацию', reward: 25, icon: '✱' },
+  { id: 'combo_5', title: 'Комбо', desc: 'Выложите 5 фишек за один ход', reward: 40, icon: '≡' },
+  { id: 'fast_win', title: 'Скоростной', desc: 'Победите быстрее чем за 5 минут', reward: 70, icon: '➤' },
+  { id: 'four_players', title: 'Большая компания', desc: 'Сыграйте вчетвером или больше', reward: 30, icon: '❖' },
+  { id: 'daily_play', title: 'Ежедневный вызов', desc: 'Сыграйте ежедневную партию', reward: 30, icon: '☀' },
+  { id: 'no_hint_win', title: 'Своим умом', desc: 'Победите, не используя подсказки', reward: 80, icon: '✎' },
+  { id: 'quick_win', title: 'Быстрая победа', desc: 'Выиграйте партию до 50 очков', reward: 60, icon: '⚡' },
+  { id: 'collector', title: 'Коллекционер', desc: 'Откройте четыре оформления', reward: 100, icon: '◈' },
+  { id: 'rich_1000', title: 'Богач', desc: 'Накопите 1000 монет', reward: 100, icon: '●' },
+];
+
+export function achievementById(id: string): AchievementDef | null {
+  return ACHIEVEMENTS.find((a) => a.id === id) ?? null;
+}
+
+export function isUnlocked(id: string): boolean {
+  return loadSettings().achievements.includes(id);
+}
+
+/** Открыть достижение; возвращает описание, если оно новое. */
+export function unlockAchievement(id: string): AchievementDef | null {
+  const def = achievementById(id);
+  if (!def) return null;
+  const s = loadSettings();
+  if (s.achievements.includes(id)) return null;
+  s.achievements = [...s.achievements, id];
+  s.coins += def.reward;
+  saveSettings({});
+  try {
+    platform.unlockAchievement?.(id);
+  } catch {
+    /* площадка без достижений */
+  }
+  return def;
+}
+
+// ===== ежедневная серия и неделя =====
+function pad2(n: number): string {
+  return n < 10 ? `0${n}` : String(n);
+}
+
+export function dayKey(d = new Date()): string {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+export function yesterdayKey(): string {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  return dayKey(d);
+}
+
+/** ISO-неделя: счётчик побед обнуляется при смене недели. */
+export function weekKey(): string {
+  const d = new Date();
+  const day = d.getDay() || 7;
+  d.setDate(d.getDate() - day + 1);
+  return dayKey(d);
+}
+
+export function refreshWeek(): number {
+  const s = loadSettings();
+  const key = weekKey();
+  if (s.week_key !== key) {
+    s.week_key = key;
+    s.week_wins = 0;
+    saveSettings({});
+  }
+  return s.week_wins;
+}
+
+export function weekWins(): number {
+  return refreshWeek();
+}
+
+export function dailyStreak(): number {
+  return loadSettings().daily_streak;
+}
+
+export function dailyRewardedToday(): boolean {
+  return loadSettings().daily_last === dayKey();
+}
+
+/** Награда за завершённую ежедневную партию — один раз в день. */
+export function claimDailyReward(): number {
+  const s = loadSettings();
+  const today = dayKey();
+  if (s.daily_last === today) return 0;
+  const streak = s.daily_last === yesterdayKey() ? s.daily_streak + 1 : 1;
+  const bonus = 60 + Math.min(5, streak - 1) * 20;
+  s.daily_last = today;
+  s.daily_streak = streak;
+  s.coins += bonus;
+  saveSettings({});
+  return bonus;
+}
+
+/** Сид ежедневного расклада: одинаковый у всех игроков в этот день. */
+export function dailySeed(): number {
+  const key = dayKey();
+  let h = 2166136261;
+  for (let i = 0; i < key.length; i += 1) {
+    h ^= key.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+// ===== монеты и покупки =====
+export function coins(): number {
+  return loadSettings().coins;
+}
+
+export function addCoins(n: number): number {
+  const s = loadSettings();
+  s.coins = Math.max(0, s.coins + Math.round(n));
+  saveSettings({});
+  if (s.coins >= 1000) unlockAchievement('rich_1000');
+  return s.coins;
+}
+
+export function spendCoins(n: number): boolean {
+  const s = loadSettings();
+  if (s.coins < n) return false;
+  s.coins -= n;
+  saveSettings({});
+  return true;
+}
+
+export interface ShopItem {
+  id: string;
+  kind: 'theme' | 'palette' | 'remove_ads' | 'bundle';
+  title: string;
+  desc: string;
+  price: number;
+  iapProduct?: string;
+}
+
+export const BUNDLE_ITEMS = ['royal', 'burgundy', 'amber', 'marble'];
+
+export const SHOP_ITEMS: ShopItem[] = [
+  { id: 'royal', kind: 'theme', title: 'Синий лорд', desc: 'Королевский синий', price: 300 },
+  { id: 'burgundy', kind: 'theme', title: 'Бордо', desc: 'Винное сукно', price: 300 },
+  { id: 'amber', kind: 'palette', title: 'Янтарь', desc: 'Медовые фишки', price: 250 },
+  { id: 'marble', kind: 'palette', title: 'Мрамор', desc: 'Светлый камень', price: 250 },
+  {
+    id: 'theme_pack', kind: 'bundle', title: 'Набор оформлений',
+    desc: 'Все темы стола и фишек', price: 0, iapProduct: 'theme_pack',
+  },
+  { id: 'remove_ads', kind: 'remove_ads', title: 'Без рекламы', desc: 'Межстраничная реклама', price: 0, iapProduct: 'remove_ads' },
+];
+
+export function ownsItem(id: string): boolean {
+  return loadSettings().owned_items.includes(id);
+}
+
+export function addOwned(id: string): void {
+  const s = loadSettings();
+  if (!s.owned_items.includes(id)) {
+    s.owned_items = [...s.owned_items, id];
+    saveSettings({});
+  }
+  if (s.owned_items.length >= 4) unlockAchievement('collector');
+}
+
+export function applyItem(id: string): void {
+  if (id === 'emerald' || id === 'royal' || id === 'burgundy') {
+    saveSettings({ table_theme: id });
+  } else if (id === 'ivory' || id === 'amber' || id === 'marble') {
+    saveSettings({ tile_palette: id });
+  } else if (id === 'remove_ads') {
+    saveSettings({ ads_removed: true });
+  }
+}
+
+/** Восстановить постоянные покупки после перезапуска/смены устройства. */
+export async function restorePurchases(): Promise<void> {
+  try {
+    const ids = await platform.getPurchases();
+    for (const id of ids) {
+      if (id === 'theme_pack') {
+        for (const themeId of ['royal', 'burgundy', 'amber', 'marble']) {
+          addOwned(themeId);
+        }
+        continue;
+      }
+      if (!SHOP_ITEMS.some((item) => item.id === id)) continue;
+      addOwned(id);
+      applyItem(id);
+    }
+  } catch {
+    /* площадка без платежей */
+  }
+}
+
+// ===== итоги партии =====
+export interface GameEndInfo {
+  won: boolean;
+  players: number;
+  seconds: number;
+  mode: 'classic' | 'quick' | 'timed' | 'daily';
+  usedHint: boolean;
+  usedJoker: boolean;
+  maxTurnTiles: number;
+}
+
+export interface GameEndReward {
+  coins: number;
+  unlocked: AchievementDef[];
+}
+
+/** Начислить монеты и достижения за завершённую партию. */
+export function onGameEnd(info: GameEndInfo): GameEndReward {
+  const s = loadSettings();
+  refreshWeek();
+  const base = info.won ? 60 : 20;
+  const modeBonus = info.mode === 'classic' ? 0 : 20;
+  const unlocked: AchievementDef[] = [];
+  const grant = (id: string): void => {
+    const def = unlockAchievement(id);
+    if (def) unlocked.push(def);
+  };
+  s.coins += base + modeBonus;
+  if (info.won) s.week_wins += 1;
+  saveSettings({});
+
+  if (s.stat_wins >= 1) grant('first_win');
+  if (s.stat_wins >= 5) grant('wins_5');
+  if (s.stat_wins >= 20) grant('wins_20');
+  if (s.stat_games >= 10) grant('games_10');
+  if (info.players >= 4) grant('four_players');
+  if (info.usedJoker) grant('joker_use');
+  if (info.maxTurnTiles >= 5) grant('combo_5');
+  if (info.won && info.seconds > 0 && info.seconds < 300) grant('fast_win');
+  if (info.won && !info.usedHint) grant('no_hint_win');
+  if (info.won && (info.mode === 'quick' || info.mode === 'timed')) grant('quick_win');
+  if (info.mode === 'daily') grant('daily_play');
+  if (s.coins >= 1000) grant('rich_1000');
+  return { coins: base + modeBonus, unlocked };
+}

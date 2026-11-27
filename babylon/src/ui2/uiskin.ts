@@ -530,6 +530,10 @@ function textWidthPx(text: string, size: number): number {
 // остаётся «зажатой» — фон не возвращается. Глобальный слушатель сбрасывает
 // фон таких кнопок.
 const pressThemes = new WeakMap<Button, { base: string; press: string }>();
+// Тема каждой кнопки хранится отдельно: состояние «выбрано» (сортировка,
+// вкладки) перекрашивает кнопку, и hover/press обязаны использовать
+// новую тему, а не ту, что была при создании.
+const buttonThemes = new WeakMap<Button, ButtonTheme>();
 const pressedButtons = new Set<Button>();
 let buttonResetInstalled = false;
 function installButtonReset(): void {
@@ -561,6 +565,7 @@ function installButtonReset(): void {
 export function mkButton(label: string, opts: ButtonOpts = {}): Button {
   const th = opts.theme ?? BUTTON_STYLE.deck;
   const b = Button.CreateSimpleButton('b', label);
+  buttonThemes.set(b, th);
   // Button.color рисует рамку, а не подпись. Не смешиваем его с цветом
   // текста: полупрозрачная рамка иначе делала активные подписи блеклыми.
   b.color = th.border ?? '#00000000';
@@ -598,20 +603,22 @@ export function mkButton(label: string, opts: ButtonOpts = {}): Button {
   b.pointerUpAnimation = () => undefined;
   b.onPointerEnterObservable.add(() => {
     if (!b.isEnabled) return;
+    const cur = buttonThemes.get(b) ?? th;
     b.alpha = 1;
-    b.background = th.hover;
+    b.background = cur.hover;
     b.textBlock!.color = '#ffffff';
   });
-  b.onPointerOutObservable.add(() => { b.background = th.bg; });
+  b.onPointerOutObservable.add(() => { b.background = (buttonThemes.get(b) ?? th).bg; });
   b.onPointerDownObservable.add(() => {
-    b.background = th.press;
+    const cur = buttonThemes.get(b) ?? th;
+    b.background = cur.press;
     pressedButtons.add(b);
     unlockGameAudio();
   });
   if (opts.onClick !== undefined) b.onPointerUpObservable.add(opts.onClick);
   b.onPointerUpObservable.add(() => {
     pressedButtons.delete(b);
-    b.background = th.hover;
+    b.background = (buttonThemes.get(b) ?? th).hover;
     play('click');
   });
   pressThemes.set(b, { base: th.bg, press: th.press });
@@ -619,8 +626,17 @@ export function mkButton(label: string, opts: ButtonOpts = {}): Button {
   return b;
 }
 
-export function setButtonLabel(b: Button, s: string): void {
-  const tb = b.children.find((c) => c instanceof TextBlock) as TextBlock | undefined;
+// Перекраска кнопки без пересоздания: active/hover/press берут новую тему.
+export function rethemeButton(b: Button, th: ButtonTheme): void {
+  buttonThemes.set(b, th);
+  pressThemes.set(b, { base: th.bg, press: th.press });
+  if (!b.isEnabled) return;
+  b.background = th.bg;
+  b.color = th.border ?? '#00000000';
+  b.thickness = th.border !== undefined ? 1 : 0;
+}
+
+export function setButtonLabel(b: Button, s: string): void {  const tb = b.children.find((c) => c instanceof TextBlock) as TextBlock | undefined;
   if (!tb) return;
   tb.text = s;
   // Кнопки с фиксированной шириной: шрифт подбираем под НОВЫЙ текст,

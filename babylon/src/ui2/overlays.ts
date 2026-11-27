@@ -12,6 +12,7 @@ import {
   dropdownRow,
   enableSmoothScroll,
   estimateWrappedTextHeight,
+  hrow,
   mkButton,
   mkLabel,
   modalOverlay,
@@ -22,6 +23,19 @@ import {
 import { viewHeight, viewWidth } from './viewport';
 import type { OnlineStats } from './ports';
 import { isSoundEnabled, setSoundEnabled } from '../core/audio';
+import {
+  ACHIEVEMENTS,
+  SHOP_ITEMS,
+  addOwned,
+  applyItem,
+  coins,
+  isUnlocked,
+  ownsItem,
+  rankFor,
+  refreshWeek,
+  spendCoins,
+} from '../core/meta';
+import { platform } from '../platform';
 
 // Полноэкранные модалки, общие для меню и игры: правила и настройки.
 
@@ -461,6 +475,10 @@ export function openStatsOverlay(
   const gamesLab = addLine(t('Сыграно партий: %d', S.stat_games));
   const winsLab = addLine(t('Побед: %d', S.stat_wins));
   const lossesLab = addLine(t('Поражений: %d', S.stat_losses));
+  const rankInfo = rankFor(S.stat_wins);
+  addLine(t('Звание: %s', rankInfo.name), '#FFE9B0');
+  addLine(t('Побед за неделю: %d', refreshWeek()));
+  addLine(t('Монеты: %d', coins()), '#FFE9B0');
   const unfinished = Math.max(0, S.stat_games - S.stat_wins - S.stat_losses);
   if (unfinished > 0) addLine(t('Незавершённых: %d', unfinished), '#ffffff8c', fs(15));
   const noteLab = addLine(t('Загружаем статистику сети…'), '#ffffff8c', fs(14));
@@ -619,4 +637,251 @@ export function openSettingsOverlay(
     onDone();
   });
   pcol.addControl(close);
+}
+
+// ===== магазин =====
+export function openShopOverlay(parent: Host, onChanged: () => void): void {
+  const vw = viewWidth();
+  const vh = viewHeight();
+  const panelWidth = Math.min(vw - 24, 460);
+  const panelHeight = Math.min(vh - 24, 640);
+  const contentWidth = Math.max(140, panelWidth - 56);
+  const host = parent as import('@babylonjs/gui').Container;
+  const { overlay, close } = modalOverlay(host, 'shopOverlay', { zIndex: 820 });
+  const panel = softPanel({
+    bg: SKIN.panelDark, border: '#ffffff40', thickness: 2, corner: 14,
+    width: panelWidth, height: panelHeight,
+  });
+  overlay.addControl(panel.root);
+  const pcol = new StackPanel('shopCol');
+  pcol.isVertical = true;
+  pcol.spacing = 8;
+  pcol.width = '100%';
+  pcol.height = '100%';
+  pcol.paddingLeft = px(14);
+  pcol.paddingRight = px(14);
+  pcol.paddingTop = px(10);
+  pcol.paddingBottom = px(10);
+  panel.root.addControl(pcol);
+
+  const head = hrow(8);
+  head.width = '100%';
+  head.height = px(34);
+  head.addControl(mkLabel(t('Магазин'), { color: SKIN.gold, fontSize: fs(21), width: Math.max(80, contentWidth - 120), align: 'left', hAlign: 'left' }));
+  head.addControl(mkLabel(`● ${coins()}`, { color: '#FFE9B0', fontSize: fs(17), width: 110, align: 'right', hAlign: 'right' }));
+  pcol.addControl(head);
+
+  const closeH = Math.max(46, Math.ceil(fs(16) * 1.35) + 14);
+  const scroll = new ScrollViewer('shopScroll');
+  scroll.thickness = 0;
+  scroll.barSize = 4;
+  scroll.width = '100%';
+  scroll.height = px(Math.max(120, panelHeight - 34 - closeH - 40));
+  pcol.addControl(scroll);
+  enableSmoothScroll(scroll);
+  const list = new StackPanel('shopList');
+  list.isVertical = true;
+  list.spacing = 8;
+  list.width = '100%';
+  scroll.addControl(list);
+
+  const rebuild = (): void => {
+    list.clearControls();
+    const S = loadSettings();
+    for (const item of SHOP_ITEMS) {
+      const bundleIds = ['royal', 'burgundy', 'amber', 'marble'];
+      const owned = item.kind === 'remove_ads'
+        ? S.ads_removed
+        : item.kind === 'bundle'
+          ? bundleIds.every((id) => ownsItem(id))
+          : ownsItem(item.id);
+      const current = (item.kind === 'theme' && S.table_theme === item.id)
+        || (item.kind === 'palette' && S.tile_palette === item.id);
+      const row = softPanel({ bg: '#FFFFFF0D', border: current ? '#FFD54F88' : '#ffffff1A', thickness: 1, corner: 10 });
+      row.root.width = '100%';
+      row.root.height = px(80);
+      list.addControl(row.root);
+      const box = new Container('shopRow');
+      box.width = px(contentWidth);
+      box.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+      row.root.addControl(box);
+      const title = mkLabel(t(item.title), {
+        fontSize: fs(16), color: current ? SKIN.gold : '#ffffff', width: contentWidth - 130, height: 24,
+        align: 'left', hAlign: 'left', noWrap: true,
+      });
+      title.left = px(10);
+      title.top = px(8);
+      box.addControl(title);
+      const desc = mkLabel(t(item.desc), {
+        fontSize: fs(12), color: '#ffffff9C', width: contentWidth - 130, height: 20,
+        align: 'left', hAlign: 'left', noWrap: true,
+      });
+      desc.left = px(10);
+      desc.top = px(32);
+      box.addControl(desc);
+
+      let label = '';
+      let enabled = true;
+      if (owned) {
+        if (item.kind === 'bundle') {
+          label = t('Куплено');
+          enabled = false;
+        } else {
+          label = current ? t('Выбрано') : t('Выбрать');
+        }
+      } else if (item.kind === 'remove_ads' || item.kind === 'bundle') {
+        label = platform.supportsPayments ? t('Купить') : t('Недоступно');
+        enabled = platform.supportsPayments;
+      } else {
+        label = t('%d монет', item.price);
+        enabled = coins() >= item.price;
+      }
+      const btnW = 112;
+      const btn = mkButton(label, {
+        height: 40, width: btnW, fontSize: fs(13), corner: 9,
+        theme: !enabled
+          ? { bg: '#3A414A', hover: '#3A414A', press: '#3A414A', border: '#ffffff18' }
+          : current
+            ? { bg: '#2E7D32', hover: '#388E3C', press: '#1B5E20' }
+            : BUTTON_STYLE.green,
+      });
+      btn.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
+      btn.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+      btn.left = px(-8);
+      btn.isEnabled = enabled && !(owned && current);
+      btn.onPointerUpObservable.clear();
+      btn.onPointerUpObservable.add(() => {
+        if (owned) {
+          applyItem(item.id);
+          onChanged();
+          return;
+        }
+        if (item.kind === 'remove_ads' || item.kind === 'bundle') {
+          btn.isEnabled = false;
+          void platform.purchase(item.iapProduct ?? item.id).then((ok) => {
+            if (!ok) {
+              btn.isEnabled = true;
+              btn.textBlock!.text = t('Ошибка оплаты');
+              return;
+            }
+            if (item.kind === 'bundle') {
+              for (const id of ['royal', 'burgundy', 'amber', 'marble']) {
+                addOwned(id);
+                applyItem(id);
+              }
+            } else {
+              addOwned('remove_ads');
+              applyItem('remove_ads');
+            }
+            onChanged();
+          });
+          return;
+        }
+        if (!spendCoins(item.price)) return;
+        addOwned(item.id);
+        applyItem(item.id);
+        onChanged();
+      });
+      box.addControl(btn);
+    }
+  };
+  rebuild();
+
+  const closeBtn = mkButton(t('Закрыть'), {
+    fontSize: fs(16), height: closeH, width: Math.min(180, contentWidth), theme: BUTTON_STYLE.green,
+  });
+  closeBtn.onPointerUpObservable.add(close);
+  pcol.addControl(closeBtn);
+}
+
+// ===== достижения =====
+export function openAchievementsOverlay(parent: Host): void {
+  const vw = viewWidth();
+  const vh = viewHeight();
+  const panelWidth = Math.min(vw - 24, 460);
+  const panelHeight = Math.min(vh - 24, 640);
+  const contentWidth = Math.max(140, panelWidth - 56);
+  const host = parent as import('@babylonjs/gui').Container;
+  const { overlay, close } = modalOverlay(host, 'achOverlay', { zIndex: 820 });
+  const panel = softPanel({
+    bg: SKIN.panelDark, border: '#ffffff40', thickness: 2, corner: 14,
+    width: panelWidth, height: panelHeight,
+  });
+  overlay.addControl(panel.root);
+  const pcol = new StackPanel('achCol');
+  pcol.isVertical = true;
+  pcol.spacing = 8;
+  pcol.width = '100%';
+  pcol.height = '100%';
+  pcol.paddingLeft = px(14);
+  pcol.paddingRight = px(14);
+  pcol.paddingTop = px(10);
+  pcol.paddingBottom = px(10);
+  panel.root.addControl(pcol);
+
+  const unlocked = ACHIEVEMENTS.filter((a) => isUnlocked(a.id)).length;
+  const head = hrow(8);
+  head.width = '100%';
+  head.height = px(34);
+  head.addControl(mkLabel(t('Достижения'), { color: SKIN.gold, fontSize: fs(21), width: Math.max(80, contentWidth - 110), align: 'left', hAlign: 'left' }));
+  head.addControl(mkLabel(t('%d из %d', unlocked, ACHIEVEMENTS.length), {
+    color: '#FFE9B0', fontSize: fs(15), width: 100, align: 'right', hAlign: 'right',
+  }));
+  pcol.addControl(head);
+
+  const closeH = Math.max(46, Math.ceil(fs(16) * 1.35) + 14);
+  const scroll = new ScrollViewer('achScroll');
+  scroll.thickness = 0;
+  scroll.barSize = 4;
+  scroll.width = '100%';
+  scroll.height = px(Math.max(120, panelHeight - 34 - closeH - 40));
+  pcol.addControl(scroll);
+  enableSmoothScroll(scroll);
+  const list = new StackPanel('achList');
+  list.isVertical = true;
+  list.spacing = 6;
+  list.width = '100%';
+  scroll.addControl(list);
+
+  for (const a of ACHIEVEMENTS) {
+    const got = isUnlocked(a.id);
+    const row = softPanel({ bg: got ? '#43A04722' : '#FFFFFF08', border: got ? '#58C36A99' : '#ffffff14', thickness: 1, corner: 10 });
+    row.root.width = '100%';
+    row.root.height = px(88);
+    list.addControl(row.root);
+    const icon = mkLabel(a.icon, {
+      fontSize: fs(22), color: got ? '#9BE7A5' : '#ffffff55', width: 40, height: 40,
+      align: 'center', hAlign: 'left', vAlign: 'center',
+    });
+    icon.left = px(8);
+    row.root.addControl(icon);
+    const title = mkLabel(t(a.title), {
+      fontSize: fs(15), color: got ? '#DDFFE2' : '#ffffffC0', width: contentWidth - 90, height: 24,
+      align: 'left', hAlign: 'left',
+    });
+    title.left = px(48);
+    title.top = px(8);
+    row.root.addControl(title);
+    const desc = mkLabel(t(a.desc), {
+      fontSize: fs(11), color: '#ffffff9C', width: contentWidth - 90, height: 44,
+      align: 'left', hAlign: 'left',
+    });
+    desc.left = px(48);
+    desc.top = px(32);
+    row.root.addControl(desc);
+    const reward = mkLabel(got ? t('Получено') : `+${a.reward}`, {
+      fontSize: fs(12), color: got ? '#9BE7A5' : '#FFD54F', width: 80, height: 22,
+      align: 'right', hAlign: 'right',
+    });
+    reward.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
+    reward.left = px(-8);
+    reward.top = px(8);
+    row.root.addControl(reward);
+  }
+
+  const closeBtn = mkButton(t('Закрыть'), {
+    fontSize: fs(16), height: closeH, width: Math.min(180, contentWidth), theme: BUTTON_STYLE.green,
+  });
+  closeBtn.onPointerUpObservable.add(close);
+  pcol.addControl(closeBtn);
 }

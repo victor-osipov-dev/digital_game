@@ -15,6 +15,7 @@ import { YouTubePlatform } from './youtube';
 import { GameDistributionPlatform } from './gamedistribution';
 import { setAdMuted } from '../core/audio';
 import { PlaygamaPlatform } from './playgama';
+import { MirraPlatform } from './mirra';
 import {
   installFullscreenBridge,
   reportedFullscreenState,
@@ -116,7 +117,7 @@ function buildPlatformTarget(): PlatformId | null {
   try {
     const v = __DG_PLATFORM_TARGET__;
     if (v === 'yandex' || v === 'gamepush' || v === 'crazygames'
-      || v === 'youtube' || v === 'gamedistribution' || v === 'playgama' || v === 'standalone') {
+      || v === 'youtube' || v === 'gamedistribution' || v === 'playgama' || v === 'mirra' || v === 'standalone') {
 
       return v;
     }
@@ -146,6 +147,8 @@ function createProvider(id: PlatformId): PlatformAPI {
       return new GameDistributionPlatform();
     case 'playgama':
       return new PlaygamaPlatform();
+    case 'mirra':
+      return new MirraPlatform();
     default:
       return new StandalonePlatform();
   }
@@ -190,6 +193,14 @@ class PlatformFacade implements PlatformAPI {
     }
   }
 
+  get menuAutoConnect(): boolean {
+    try {
+      return this.current.menuAutoConnect;
+    } catch {
+      return true;
+    }
+  }
+
   get supportsAudio(): boolean {
     try {
       return this.current.supportsAudio;
@@ -217,6 +228,14 @@ class PlatformFacade implements PlatformAPI {
   get supportsShortcut(): boolean {
     try {
       return this.current.supportsShortcut;
+    } catch {
+      return false;
+    }
+  }
+
+  get supportsPayments(): boolean {
+    try {
+      return this.current.supportsPayments;
     } catch {
       return false;
     }
@@ -506,6 +525,46 @@ class PlatformFacade implements PlatformAPI {
   setPlayerName(name: string): void {
     try {
       this.current.setPlayerName?.(name);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  unlockAchievement(id: string): void {
+    try {
+      this.current.unlockAchievement?.(id);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async getProducts(): Promise<import('./types').PlatformProduct[]> {
+    try {
+      return await this.current.getProducts();
+    } catch {
+      return [];
+    }
+  }
+
+  async getPurchases(): Promise<string[]> {
+    try {
+      return await this.current.getPurchases();
+    } catch {
+      return [];
+    }
+  }
+
+  async purchase(id: string): Promise<boolean> {
+    try {
+      return await this.current.purchase(id);
+    } catch {
+      return false;
+    }
+  }
+
+  async consumePurchase(id: string): Promise<void> {
+    try {
+      await this.current.consumePurchase(id);
     } catch {
       /* ignore */
     }

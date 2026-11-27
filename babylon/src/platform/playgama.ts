@@ -83,6 +83,7 @@ export class PlaygamaPlatform extends BasePlatform {
   override supportsRewarded = false;
   override supportsReview = false;
   override supportsShortcut = false;
+  supportsPayments = false;
   readonly supportsOnline = true;
   readonly supportsAudio = true;
 
@@ -97,6 +98,11 @@ export class PlaygamaPlatform extends BasePlatform {
       this.supportsShortcut = bridge.social.isAddToHomeScreenSupported;
     } catch {
       /* ignore */
+    }
+    try {
+      this.supportsPayments = bridge.payments.isSupported;
+    } catch {
+      this.supportsPayments = false;
     }
   }
 
@@ -428,6 +434,57 @@ export class PlaygamaPlatform extends BasePlatform {
       await bridge.storage.delete(keys);
     } catch {
       /* ignore */
+    }
+  }
+
+  // ===== покупки (Playgama Bridge payments) =====
+  async getProducts(): Promise<import('./types').PlatformProduct[]> {
+    await this.ensureInit();
+    if (!this.initialized) return [];
+    try {
+      if (!bridge.payments.isSupported) return [];
+      const list = await bridge.payments.getCatalog();
+      return (Array.isArray(list) ? list : []).map((p) => ({
+        id: String(p.id ?? ''),
+        price: p.price,
+        currency: p.priceCurrencyCode,
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  async getPurchases(): Promise<string[]> {
+    await this.ensureInit();
+    if (!this.initialized) return [];
+    try {
+      if (!bridge.payments.isSupported) return [];
+      const list = await bridge.payments.getPurchases();
+      return (Array.isArray(list) ? list : []).map((p) => String(p.id ?? ''));
+    } catch {
+      return [];
+    }
+  }
+
+  async purchase(id: string): Promise<boolean> {
+    await this.ensureInit();
+    if (!this.initialized || !bridge.payments.isSupported) return false;
+    try {
+      const res = await bridge.payments.purchase(id);
+      return !!res;
+    } catch {
+      return false;
+    }
+  }
+
+  async consumePurchase(id: string): Promise<void> {
+    await this.ensureInit();
+    if (!this.initialized) return;
+    try {
+      if (!bridge.payments.isSupported) return;
+      await bridge.payments.consumePurchase(id);
+    } catch {
+      /* товары игры постоянные — потребление не критично */
     }
   }
 

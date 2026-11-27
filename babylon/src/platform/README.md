@@ -13,6 +13,8 @@
 | CrazyGames | `crazygames.ts` | `https://sdk.crazygames.com/crazygames-sdk-v3.js` (тег в `index.html`, `--mode crazygames`) | SDK v3: init, loading, gameplay, ads, data, muteAudio |
 | YouTube Playables | `youtube.ts` | `https://www.youtube.com/game_api/v1` (тег в `index.html`, `--mode youtube`) | firstFrameReady/gameReady, язык, звук, saveData, реклама; онлайн скрыт |
 | GameDistribution | `gamedistribution.ts` | `https://html5.api.gamedistribution.com/main.min.js` (грузится сам) | Интеграция, нужен `gameId`; онлайн скрыт, прелоадер один раз |
+| Playgama | `playgama.ts` | `@playgama/bridge` (локально в бандле, `--mode playgama`) | Bridge 2.4: ads, storage, payments, player, leaderboards |
+| Mirra Games | `mirra.ts` | MirraWeb SDK (`sdk/mirra/mirra-sdk.js`, `--mode mirra`) | Автодетект площадки, ads, IAP, data, достижения; см. `MIRRA_BUILD.md` |
 | Свой сайт / прочие | `noop.ts` | — | Игра работает без рекламы |
 
 ## Варианты сборки
@@ -28,6 +30,8 @@
 | `npm run build:gamepush` | `gamepush` | `dist-gamepush/` | Публикация через GamePush |
 | `npm run build:crazygames` | `crazygames` | `dist-crazygames/` | CrazyGames SDK v3 (тег в `<head>`) |
 | `npm run build:youtube` | `youtube` | `dist-youtube/` | YouTube Playables SDK (тег в `<head>`) |
+| `npm run build:playgama` | `playgama` | `dist-playgama/` | Playgama Bridge (локально, без CDN) |
+| `npm run build:mirra` | `mirra` | `dist-mirra/` | MirraWeb SDK: площадки Mirra и партнёров |
 
 В режимах `crazygames` и `youtube` SDK-скрипт площадки вставляется в `<head>`
 до кода игры (для YouTube это обязательное требование). В `dist/` и

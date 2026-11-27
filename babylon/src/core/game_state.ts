@@ -7,6 +7,8 @@ import type { GameView } from '../net/protocol';
 export const DEAL_SIZE = 14;
 export const MAX_CHECKPOINTS = 3;
 
+export type MatchMode = 'classic' | 'quick' | 'timed' | 'daily';
+
 export class GsPlayer {
   name = '';
   hand: TileFace[] = [];
@@ -24,16 +26,29 @@ export class GsRow {
   }
 }
 
-function shuffle<T>(arr: T[]): void {
+function shuffle<T>(arr: T[], rnd: () => number = Math.random): void {
   for (let i = arr.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
+    const j = Math.floor(rnd() * (i + 1));
     [arr[i], arr[j]] = [arr[j], arr[i]];
   }
 }
 
+// Детерминированный ГПСЧ для ежедневного расклада (mulberry32).
+export function seededRandom(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 export class Deck {
   tiles: TileFace[] = [];
-  constructor() {
+  private seed: number | null = null;
+  constructor(seed?: number) {
+    this.seed = typeof seed === 'number' ? seed >>> 0 : null;
     this.rebuild();
   }
   rebuild(): void {
@@ -51,8 +66,9 @@ export class Deck {
     nextId += 1;
     catalog.push({ id: nextId, color: 5 /* PURPLE */, value: 1, is_joker: true });
     nextId += 1;
-    shuffle(catalog);
+    shuffle(catalog, this.seed === null ? Math.random : seededRandom(this.seed));
     this.tiles = catalog;
+    this.seed = null;
   }
   draw(): TileFace | null {
     return this.tiles.pop() ?? null;
@@ -95,6 +111,10 @@ export class GameState {
   winner = -1;
   turn_placed: TileFace[] = [];
   turn_dirty = false;
+  // Режим партии и накопленные очки (быстрая партия до 50 / на время).
+  mode: MatchMode = 'classic';
+  target = 50;
+  scores: number[] = [];
   last_turn_tile_ids: number[] = [];
   checkpoints: { table: TableSnapshotEntry[]; hand: TileFace[]; turn_placed: TileFace[] }[] = [];
   private _snap_table: TableSnapshotEntry[] = [];
@@ -107,8 +127,9 @@ export class GameState {
   deck_count_override = -1;
   connected: boolean[] = [];
 
-  static create(numPlayers: number, names: string[], require30: boolean): GameState {
+  static create(numPlayers: number, names: string[], require30: boolean, seed?: number): GameState {
     const state = new GameState();
+    if (typeof seed === 'number') state.deck = new Deck(seed);
     state.require_30 = require30;
     for (let i = 0; i < numPlayers; i += 1) {
       const langName = t('Игрок %d', i + 1);
@@ -123,6 +144,7 @@ export class GameState {
       }
       sortTiles(p.hand);
     }
+    state.scores = new Array(numPlayers).fill(0);
     state.takeTurnSnapshot();
     return state;
   }
@@ -164,6 +186,7 @@ export class GameState {
     let maxId = 0;
     for (const r of s.table) maxId = Math.max(maxId, r.id);
     s.reserveRowIds(maxId);
+    s.scores = new Array(view.players.length).fill(0);
     s.takeTurnSnapshot();
     return s;
   }
@@ -370,6 +393,11 @@ export class GameState {
     if (!check.ok) return check;
     this.first_turn = false;
     this.removeEmptyRows();
+    // Очки за выложенные в этот ход фишки: джокер считается по месту в ряду.
+    const gained = this.turnPoints();
+    if (this.current >= 0 && this.current < this.scores.length) {
+      this.scores[this.current] += gained;
+    }
     if (this.hand().length === 0) {
       // Победный ход не вызывает advance(), поэтому сохраняем его отдельно
       // для последней подсветки стола (last_turn_tile_ids).
@@ -379,8 +407,49 @@ export class GameState {
       this.finished = true;
       return { ok: true, reason: '', errors: [], win: true };
     }
+    // Быстрая партия: первый, кто набрал целевые очки, побеждает.
+    if (this.mode === 'quick' && this.scores[this.current] >= this.target) {
+      this.last_turn_tile_ids = this.turn_placed.map((tile) => tile.id);
+      this.turn_placed = [];
+      this.winner = this.current;
+      this.finished = true;
+      return { ok: true, reason: '', errors: [], win: true };
+    }
     this.advance();
     return { ...OK };
+  }
+
+  /** Партия на время закончилась: побеждает игрок с наибольшими очками. */
+  finishByTime(): number {
+    if (this.finished) return this.winner;
+    this.finished = true;
+    this.removeEmptyRows();
+    let best = 0;
+    for (let i = 1; i < this.scores.length; i += 1) {
+      const betterPoints = this.scores[i] > this.scores[best];
+      const tie = this.scores[i] === this.scores[best];
+      // При равенстве очков выше тот, у кого меньше фишек в руке.
+      const fewerTiles = tie && this.handSize(i) < this.handSize(best);
+      if (betterPoints || fewerTiles) best = i;
+    }
+    this.winner = best;
+    return best;
+  }
+
+  /** Очки за текущий ход (для подсказки и итогов). */
+  turnPoints(): number {
+    let total = 0;
+    for (const tile of this.turn_placed) {
+      for (const row of this.table) {
+        const idx = row.tiles.findIndex((t2) => t2.id === tile.id);
+        if (idx < 0) continue;
+        const result = validateRow(row.tiles);
+        if (tile.is_joker && result.ok) total += result.joker_values[tile.id] ?? 0;
+        else total += tile.value;
+        break;
+      }
+    }
+    return total;
   }
   setTableRows(): { id: number; tiles: number[] }[] {
     const rows: { id: number; tiles: number[] }[] = [];

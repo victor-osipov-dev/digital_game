@@ -1,4 +1,6 @@
 import playgamaBridge from '@playgama/bridge/vite';
+import fs from 'node:fs';
+import path from 'node:path';
 import { defineConfig } from 'vite';
 
 // GamePush: projectId и publicToken из панели проекта. Это публичные
@@ -47,6 +49,33 @@ function sdkScriptPlugin(src: string): { name: string; transformIndexHtml: (html
 const CRAZYGAMES_SDK = 'https://sdk.crazygames.com/crazygames-sdk-v3.js';
 const YOUTUBE_SDK = 'https://www.youtube.com/game_api/v1';
 
+// MirraWeb SDK: скрипт Mirra определяет площадку и даёт рекламу, платежи,
+// данные и достижения. window.Module нужен, потому что SDK написан для
+// Unity WebGL и в конце вешает API на Module.
+function mirraSdkPlugin(outDir: string): { name: string; transformIndexHtml: (html: string) => string; closeBundle: () => void } {
+  const tags = [
+    '<script>window.Module = window.Module || {};</script>',
+    '<script src="./mirra-config.js"></script>',
+    '<script src="./mirra-sdk.js"></script>',
+  ].join('\n  ');
+  return {
+    name: 'dg-mirra-sdk',
+    transformIndexHtml(html: string): string {
+      return html.replace('</head>', `  ${tags}\n</head>`);
+    },
+    // SDK лежит вне public: иначе он попадал бы во все сборки. Копируем
+    // только в Mirra-сборку, после записи бандла.
+    closeBundle(): void {
+      const src = path.resolve(process.cwd(), 'sdk', 'mirra');
+      const dst = path.resolve(process.cwd(), outDir);
+      for (const file of ['mirra-sdk.js', 'mirra-config.js']) {
+        const from = path.join(src, file);
+        if (fs.existsSync(from)) fs.copyFileSync(from, path.join(dst, file));
+      }
+    },
+  };
+}
+
 // Варианты сборки (переключаются режимом Vite):
 //   vite build                   — auto: площадка определяется в рантайме.
 //                                  Это архив для Яндекс Игр (dist/).
@@ -58,6 +87,8 @@ const YOUTUBE_SDK = 'https://www.youtube.com/game_api/v1';
 //   vite build --mode playgama   — Playgama с Bridge SDK (dist-playgama/):
 //                                  SDK копируется локально в бандл (mode: local,
 //                                  требование 1.2.5 — без CDN), target 'playgama'.
+//   vite build --mode mirra      — MirraWeb SDK (dist-mirra/): автоопределение
+//                                  площадки Mirra, реклама/IAP/данные/достижения.
 export default defineConfig(({ mode }) => {
   const target = mode === 'site'
     ? 'standalone'
@@ -71,7 +102,9 @@ export default defineConfig(({ mode }) => {
             ? 'youtube'
             : mode === 'playgama'
               ? 'playgama'
-              : 'auto';
+              : mode === 'mirra'
+                ? 'mirra'
+                : 'auto';
   const outDir = mode === 'site'
     ? 'dist-site'
     : mode === 'gamepush'
@@ -82,7 +115,9 @@ export default defineConfig(({ mode }) => {
           ? 'dist-youtube'
           : mode === 'playgama'
             ? 'dist-playgama'
-            : 'dist';
+            : mode === 'mirra'
+              ? 'dist-mirra'
+              : 'dist';
   const plugins = mode === 'playgama'
     ? [playgamaBridge({ mode: 'local' })]
     : mode === 'gamepush'
@@ -91,7 +126,9 @@ export default defineConfig(({ mode }) => {
         ? [sdkScriptPlugin(CRAZYGAMES_SDK)]
         : mode === 'youtube'
           ? [sdkScriptPlugin(YOUTUBE_SDK)]
-          : [];
+          : mode === 'mirra'
+            ? [mirraSdkPlugin(outDir)]
+            : [];
   return {
     base: './',
     server: { port: 5173, host: true },

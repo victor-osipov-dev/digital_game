@@ -14,6 +14,7 @@ export type PlatformId =
   | 'youtube'
   | 'gamedistribution'
   | 'playgama'
+  | 'mirra'
   | 'standalone';
 
 export type DeviceKind = 'desktop' | 'mobile' | 'tablet' | 'tv' | 'unknown';
@@ -41,6 +42,12 @@ export interface PlatformProgress {
   savedAt: number;
 }
 
+export interface PlatformProduct {
+  id: string;
+  price?: number | string;
+  currency?: string;
+}
+
 export interface PlatformAPI {
   readonly id: PlatformId;
   /** Игра запущена внутри iframe площадки (а не отдельной страницей). */
@@ -49,12 +56,16 @@ export interface PlatformAPI {
   readonly supportsRewarded: boolean;
   /** Онлайн-партии и серверный рейтинг доступны на площадке. */
   readonly supportsOnline: boolean;
+  /** Автоподключение к игровому серверу из главного меню. */
+  readonly menuAutoConnect: boolean;
   /** У площадки есть API управления звуком (mute/audio state). */
   readonly supportsAudio: boolean;
   /** Площадка умеет управлять полноэкранным режимом. */
   readonly supportsFullscreen: boolean;
   /** Площадка умеет запрашивать оценку игры. */
   readonly supportsReview: boolean;
+  /** Площадка умеет внутриигровые покупки (IAP). */
+  readonly supportsPayments: boolean;
   /** Площадка умеет предлагать ярлык на рабочий стол. */
   readonly supportsShortcut: boolean;
   /** Подключение SDK. Никогда не бросает исключение. */
@@ -153,4 +164,14 @@ export interface PlatformAPI {
   onResume(cb: () => void): void;
   /** Ник из игры для площадок, чья витрина лидерборда берёт имя из профиля. */
   setPlayerName?(name: string): void;
+  /** Каталог товаров площадки (цены в реальной валюте, если доступны). */
+  getProducts(): Promise<PlatformProduct[]>;
+  /** Купленные постоянные товары (id). */
+  getPurchases(): Promise<string[]>;
+  /** Покупка товара; true — оплата прошла и товар можно выдавать. */
+  purchase(id: string): Promise<boolean>;
+  /** Потребление расходуемого товара (если площадка этого требует). */
+  consumePurchase(id: string): Promise<void>;
+  /** Площадочное достижение (если площадка их поддерживает). */
+  unlockAchievement?(id: string): void;
 }

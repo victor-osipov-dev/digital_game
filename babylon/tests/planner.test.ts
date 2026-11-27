@@ -5,8 +5,8 @@ import { BOT_LEVEL_NAMES } from '../src/core/settings';
 import { LEVEL_IMPOSSIBLE, TurnPlanner } from '../src/core/turn_planner';
 
 describe('bot difficulty and large hands', () => {
-  it('offers only the impossible difficulty', () => {
-    expect(BOT_LEVEL_NAMES).toEqual(['Невозможный']);
+  it('offers four difficulty levels', () => {
+    expect(BOT_LEVEL_NAMES).toEqual(['Новичок', 'Любитель', 'Сложный', 'Невозможный']);
   });
 
   it('finds a valid new row from a hand larger than 16 tiles', () => {

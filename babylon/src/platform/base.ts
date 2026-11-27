@@ -56,11 +56,13 @@ export abstract class BasePlatform implements PlatformAPI {
   abstract get isEmbedded(): boolean;
 
   readonly supportsRewarded: boolean = false;
-  readonly supportsOnline: boolean = true;
+  supportsOnline = true;
+  menuAutoConnect = true;
   readonly supportsAudio: boolean = false;
   readonly supportsFullscreen: boolean = browserFullscreenAvailable();
   readonly supportsReview: boolean = false;
   readonly supportsShortcut: boolean = false;
+  supportsPayments = false;
 
   abstract init(): Promise<void>;
 
@@ -184,6 +186,22 @@ export abstract class BasePlatform implements PlatformAPI {
 
   async writeClipboard(text: string): Promise<boolean> {
     return browserWriteClipboard(text);
+  }
+
+  async getProducts(): Promise<import('./types').PlatformProduct[]> {
+    return [];
+  }
+
+  async getPurchases(): Promise<string[]> {
+    return [];
+  }
+
+  async purchase(_id: string): Promise<boolean> {
+    return false;
+  }
+
+  async consumePurchase(_id: string): Promise<void> {
+    // no-op
   }
 
   onPause(_cb: () => void): void {

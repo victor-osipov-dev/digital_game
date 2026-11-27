@@ -6,9 +6,11 @@ export interface OnlineStats {
   rank?: number;
 }
 
+export type StartMode = 'classic' | 'quick' | 'timed' | 'daily';
+
 export interface MenuHost {
   rebuild(): void;
-  onStart(): void;
+  onStart(mode?: StartMode): void;
   onOnline(): void;
   // pending_room: место в комнате сохранилось (баннер в главном меню)
   pendingRoom(): import('../net/protocol').RoomLobbyView | null;
@@ -23,7 +25,7 @@ export interface MenuHost {
 export interface OfflineHost {
   toMenu(): void;
   toLobby(): void;
-  replay(): void;
+  replay(mode?: StartMode): void;
   getScene(): import('@babylonjs/core').Scene;
   screenRoot(): import('@babylonjs/gui').Container;
   rebuildScreen(): void;

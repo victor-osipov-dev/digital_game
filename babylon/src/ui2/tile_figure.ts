@@ -1,8 +1,9 @@
-import { Container, Control, Image as GuiImage, Rectangle, ScrollViewer, StackPanel, TextBlock } from '@babylonjs/gui';
-import { colorHex, TileFace } from '../core/tile';
+import { Container, Control, Image as GuiImage, Rectangle, ScrollViewer, StackPanel } from '@babylonjs/gui';
+import { TileFace } from '../core/tile';
 import { t } from '../core/lang';
-import { fs, tileSize } from '../core/settings';
+import { loadSettings, tileSize } from '../core/settings';
 import { dataURL } from './art';
+import { tileTexture, TilePalette } from './skin_art';
 import { px } from './uiskin';
 
 export interface TileMarks {
@@ -10,16 +11,18 @@ export interface TileMarks {
   draft?: boolean;
   last?: boolean;
   drawn?: boolean;
+  /** Ряд невалиден: все фишки в нём получают красную рамку. */
+  invalid?: boolean;
 }
 
 const GREEN = '#43A047';
+const HINT = '#FFCF4A';
 
-// Визуал одной фишки: цветная панель, число с тёмной обводкой, джокер —
-// канвасная звезда (полигон в Babylon GUI не нарисовать), рамки меток.
+// Визуал одной фишки: объёмная «слоновая кость» с фаской и цветным
+// числом, мягкая тень снизу, рамка меток поверх. Рубашка — синяя с ромбом.
 export class TileFigure {
   readonly root: Container = new Container('tileFig');
   readonly bg: Rectangle;
-  private starImages: GuiImage[] = [];
   readonly face: TileFace;
   readonly faceDown: boolean;
   readonly ts: { x: number; y: number };
@@ -54,51 +57,48 @@ export class TileFigure {
     root.clipChildren = false;
 
     const bw = clampInt(Math.round(ts.x * 0.05), 1, 3);
-    const corner = clampInt(Math.round(ts.x * 0.14), 3, 12);
+    const corner = clampInt(Math.round(ts.x * 0.16), 4, 14);
 
+    // Тень под фишкой: отдельный слой, чтобы не размывать саму текстуру.
+    const shadow = new Rectangle('tileShadow');
+    shadow.width = '100%';
+    shadow.height = '100%';
+    shadow.cornerRadius = corner;
+    shadow.thickness = 0;
+    shadow.background = '#000000';
+    shadow.alpha = 0.30;
+    shadow.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+    shadow.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+    shadow.top = px(Math.max(2, Math.round(ts.y * 0.045)));
+    shadow.left = px(Math.max(1, Math.round(ts.x * 0.02)));
+    shadow.isHitTestVisible = false;
+    shadow.isPointerBlocker = false;
+    root.addControl(shadow);
+
+    const palette = tilePalette();
+    const img = new GuiImage('tileFace', tileTexture(face, faceDown, palette));
+    img.width = '100%';
+    img.height = '100%';
+    img.stretch = GuiImage.STRETCH_FILL;
+    img.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+    img.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+    img.isHitTestVisible = false;
+    img.isPointerBlocker = false;
+    root.addControl(img);
+
+    // Рамка меток: прозрачная заливка, цвет и толщина зависят от метки.
     this.bg = new Rectangle('bg');
     this.bg.cornerRadius = corner;
-    this.bg.thickness = faceDown ? Math.max(bw, 2) : bw;
-    if (faceDown) {
-      this.bg.background = '#2B3140';
-      this.bg.color = '#ffffff4d';
-      this.bg.alpha = 1;
-    } else {
-      this.bg.background = colorHex(face.color);
-      this.applyMarkBorder(marks, bw);
-    }
+    this.bg.thickness = bw;
+    this.bg.background = '#00000000';
     this.bg.width = '100%';
     this.bg.height = '100%';
     this.bg.horizontalAlignment = Container.HORIZONTAL_ALIGNMENT_CENTER;
     this.bg.verticalAlignment = Container.VERTICAL_ALIGNMENT_CENTER;
+    this.bg.isHitTestVisible = false;
+    this.bg.isPointerBlocker = false;
     root.addControl(this.bg);
-
-    if (!faceDown) {
-      if (face.is_joker) {
-        const img = new GuiImage('star', dataURL('star'));
-        const s = Math.round(Math.min(ts.x, ts.y) * 0.84);
-        img.width = px(s);
-        img.height = px(s);
-        img.horizontalAlignment = Container.HORIZONTAL_ALIGNMENT_CENTER;
-        img.verticalAlignment = Container.VERTICAL_ALIGNMENT_CENTER;
-        root.addControl(img);
-        this.starImages.push(img);
-      } else {
-        const fPrefix = fs(Math.round(ts.y * 0.4));
-        const fsize = Math.max(8, Math.min(fPrefix, Math.round((ts.x - 6) * 0.82)));
-        const label = new TextBlock('num', String(face.value));
-        label.color = '#ffffff';
-        label.fontSize = fsize;
-        label.fontFamily = 'Arial, sans-serif';
-    label.outlineColor = 'rgba(0,0,0,0.5)';
-    label.outlineWidth = Math.max(2, Math.floor(fsize / 6));
-        label.textHorizontalAlignment = Container.HORIZONTAL_ALIGNMENT_CENTER;
-        label.textVerticalAlignment = Container.VERTICAL_ALIGNMENT_CENTER;
-        label.width = '100%';
-        label.height = '100%';
-        root.addControl(label);
-      }
-    }
+    this.applyMarkBorder(marks, bw);
 
     // Галочка с кружочком в правом верхнем углу: взятая из колоды фишка
     // и своя живая выкладка (в Godot badge = mark_drawn OR mark_draft,
@@ -127,20 +127,22 @@ export class TileFigure {
 
   private applyMarkBorder(m: TileMarks, bw: number): void {
     if (m.hint) {
-      this.bg.color = '#FFFFFF';
-      this.bg.thickness = Math.max(bw + 2, 5);
+      this.bg.color = HINT;
+      this.bg.thickness = Math.max(bw + 2, 4);
+    } else if (m.invalid) {
+      this.bg.color = '#FF5252';
+      this.bg.thickness = Math.max(bw + 3, 5);
     } else if (m.draft) {
       this.bg.color = GREEN;
-      this.bg.thickness = Math.max(bw + 3, 5);
-      this.rgbaAlpha = 0.72;
-      this.root.alpha = 0.72;
+      this.bg.thickness = Math.max(bw + 3, 4);
+      this.rgbaAlpha = 0.82;
+      this.root.alpha = 0.82;
     } else if (m.last) {
       this.bg.color = GREEN;
-      this.bg.thickness = Math.max(bw + 3, 5);
+      this.bg.thickness = Math.max(bw + 2, 3);
     } else {
-      const border = this.face.is_joker ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.18)';
-      this.bg.color = border;
-      this.bg.thickness = this.face.is_joker ? Math.max(bw, 2) : bw;
+      this.bg.color = 'rgba(20, 12, 4, 0.28)';
+      this.bg.thickness = Math.max(1, bw - 1);
     }
   }
 
@@ -317,6 +319,11 @@ export class TileFigure {
     if (this.face.is_joker) return t('Джокер — заменяет любое число любого цвета');
     return `${this.face.value}`;
   }
+}
+
+function tilePalette(): TilePalette {
+  const p = loadSettings().tile_palette;
+  return p === 'amber' || p === 'marble' ? p : 'ivory';
 }
 
 function clampInt(v: number, lo: number, hi: number): number {

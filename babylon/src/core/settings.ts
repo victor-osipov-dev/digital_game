@@ -6,9 +6,12 @@ import { persistGet, persistSet } from './persist';
 const KEY = 'dg.settings';
 // Версия схемы настроек. v2: локальный дефолт — один человек против ботов,
 // а статистика разделена на локальную и сетевую (серверную).
-const SETTINGS_VERSION = 3;
+const SETTINGS_VERSION = 4;
 
 export type { LangCode };
+
+export type HandSort = 'color' | 'value';
+export type GameMode = 'classic' | 'quick' | 'timed';
 
 export const MIN_PLAYERS = 2;
 export const MAX_PLAYERS = 5;
@@ -19,7 +22,7 @@ export const MAX_NAME_LEN = 24;
 export const TEXT_SCALES = [1.0, 1.3, 2.0];
 export const FS_MIN = 12;
 export const TILE_WIDTHS = [32, 40, 48, 60, 66, 72];
-export const BOT_LEVEL_NAMES = ['Невозможный'];
+export const BOT_LEVEL_NAMES = ['Новичок', 'Любитель', 'Сложный', 'Невозможный'];
 
 export const TEXT_SCALE_NAMES = ['Маленький', 'Средний', 'Большой'];
 export const TILE_SIZE_NAMES = ['Крошечный', 'Маленький', 'Средний', 'Крупный', 'Большой', 'Максимум'];
@@ -37,6 +40,22 @@ export interface Settings {
   tile_step: number;
   bot_level: number;
   bot_anim: boolean;
+  /** Оформление стола и фишек (магазин тем). */
+  table_theme: string;
+  tile_palette: string;
+  /** Порядок фишек в руке: по цвету или по значению. */
+  hand_sort: HandSort;
+  /** Мета: монеты, звания, достижения, покупки, ежедневная серия. */
+  coins: number;
+  xp: number;
+  owned_items: string[];
+  ads_removed: boolean;
+  daily_last: string;
+  daily_streak: number;
+  achievements: string[];
+  week_key: string;
+  week_wins: number;
+  games_since_ad: number;
   stat_games: number;
   stat_wins: number;
   stat_losses: number;
@@ -60,9 +79,22 @@ function defaults(): Settings {
     player_is_bot: [false, true],
     // Размер текста и карточек по умолчанию — «Средний».
     text_scale: 1,
-    tile_step: 2,
-    bot_level: 0,
+    tile_step: 5,
+    bot_level: 1,
     bot_anim: true,
+    table_theme: 'emerald',
+    tile_palette: 'ivory',
+    hand_sort: 'color',
+    coins: 0,
+    xp: 0,
+    owned_items: ['emerald', 'ivory'],
+    ads_removed: false,
+    daily_last: '',
+    daily_streak: 0,
+    achievements: [],
+    week_key: '',
+    week_wins: 0,
+    games_since_ad: 0,
     stat_games: 0,
     stat_wins: 0,
     stat_losses: 0,
@@ -120,6 +152,21 @@ export function loadSettings(): Settings {
     tile_step: clampi(version < 3 ? d.tile_step : Number(parsed.tile_step ?? d.tile_step), 0, TILE_WIDTHS.length - 1),
     bot_level: clampi(Number(parsed.bot_level ?? d.bot_level), 0, BOT_LEVEL_NAMES.length - 1),
     bot_anim: typeof parsed.bot_anim === 'boolean' ? parsed.bot_anim : d.bot_anim,
+    table_theme: typeof parsed.table_theme === 'string' && parsed.table_theme ? parsed.table_theme : d.table_theme,
+    tile_palette: typeof parsed.tile_palette === 'string' && parsed.tile_palette ? parsed.tile_palette : d.tile_palette,
+    hand_sort: parsed.hand_sort === 'value' ? 'value' : 'color',
+    coins: Math.max(0, Number(parsed.coins ?? 0)),
+    xp: Math.max(0, Number(parsed.xp ?? 0)),
+    owned_items: Array.isArray(parsed.owned_items)
+      ? parsed.owned_items.map(String)
+      : [...d.owned_items],
+    ads_removed: parsed.ads_removed === true,
+    daily_last: typeof parsed.daily_last === 'string' ? parsed.daily_last : '',
+    daily_streak: Math.max(0, Number(parsed.daily_streak ?? 0)),
+    achievements: Array.isArray(parsed.achievements) ? parsed.achievements.map(String) : [],
+    week_key: typeof parsed.week_key === 'string' ? parsed.week_key : '',
+    week_wins: Math.max(0, Number(parsed.week_wins ?? 0)),
+    games_since_ad: Math.max(0, Number(parsed.games_since_ad ?? 0)),
     stat_games: Math.max(0, Number(parsed.stat_games ?? 0)),
     stat_wins: Math.max(0, Number(parsed.stat_wins ?? 0)),
     stat_losses: Math.max(0, Number(parsed.stat_losses ?? 0)),

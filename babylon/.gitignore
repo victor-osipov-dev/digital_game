@@ -5,6 +5,7 @@ dist-gamepush/
 dist-playgama/
 dist-youtube/
 dist-crazygames/
+dist-mirra/
 *.log
 .env
 .env.local

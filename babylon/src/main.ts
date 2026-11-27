@@ -3,6 +3,7 @@ import { setAdMuted } from './core/audio';
 import { preloadPersist } from './core/persist';
 import { loadSettings } from './core/settings';
 import { loadProgress, flushProgress } from './core/progress';
+import { restorePurchases } from './core/meta';
 import { initSound } from './core/sound';
 import { initPlatform, platform } from './platform';
 import { App } from './ui/app';
@@ -33,6 +34,8 @@ async function main(): Promise<void> {
   await preloadPersist();
   // Облачный прогресс площадки (если он свежее локального).
   await loadProgress();
+  // Постоянные покупки (темы, «без рекламы») восстанавливаем в фоне.
+  void restorePurchases();
   const settings = loadSettings();
   initSound(settings.sound);
   const app = new App(scene, canvas);

@@ -25,14 +25,27 @@ const dirty = new Map<string, boolean>();
 let flushTimer: number | null = null;
 const FLUSH_DELAY_MS = 400;
 
+function localValue(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
 /** Прочитать все ключи одним вызовом платформы (Bridge storage.get). */
 export async function preloadPersist(): Promise<void> {
   try {
     const values = await platform.storageGet(PERSIST_KEYS);
     for (const key of PERSIST_KEYS) {
       const value = values[key];
-      if (value === null || value === undefined) memory.delete(key);
-      else memory.set(key, value);
+      if (value === null || value === undefined) {
+        // Площадочное хранилище пусто (SDK не загрузился/новый ключ) —
+        // не теряем локальный прогресс.
+        const local = localValue(key);
+        if (local === null) memory.delete(key);
+        else memory.set(key, local);
+      } else memory.set(key, value);
     }
   } catch {
     // Нет данных — стартуем как новый игрок; запись всё равно сработает.
@@ -46,11 +59,21 @@ export function persistGet(key: string): string | null {
 
 export function persistSet(key: string, value: string): void {
   memory.set(key, value);
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* приватный режим/квота — платформа всё равно получит значение */
+  }
   schedule(key, true);
 }
 
 export function persistRemove(key: string): void {
   memory.delete(key);
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    /* ignore */
+  }
   schedule(key, false);
 }
 

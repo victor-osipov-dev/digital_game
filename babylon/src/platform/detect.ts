@@ -26,6 +26,7 @@ function queryPlatform(query: string | undefined): PlatformId | null {
   if (v === 'youtube' || v === 'yt' || v === 'playables') return 'youtube';
   if (v === 'gamedistribution' || v === 'gd' || v === 'gamedist') return 'gamedistribution';
   if (v === 'playgama' || v === 'pg') return 'playgama';
+  if (v === 'mirra' || v === 'mirragames') return 'mirra';
   if (v === 'standalone' || v === 'local' || v === 'none') return 'standalone';
   return null;
 }
@@ -52,5 +53,6 @@ export function detectPlatformId(input: DetectInput = {}): PlatformId {
   if (host.includes('crazygames')) return 'crazygames';
   if (host.includes('gamedistribution') || host.includes('gamedist')) return 'gamedistribution';
   if (host.includes('playgama')) return 'playgama';
+  if (host.includes('mirra')) return 'mirra';
   return 'standalone';
 }

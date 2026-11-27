@@ -12,6 +12,7 @@
     "build:crazygames": "tsc --noEmit && vite build --mode crazygames",
     "build:youtube": "tsc --noEmit && vite build --mode youtube",
     "build:playgama": "tsc --noEmit && vite build --mode playgama",
+    "build:mirra": "tsc --noEmit && vite build --mode mirra",
     "test": "vitest run",
     "preview": "vite preview"
   },
