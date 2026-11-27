@@ -3186,7 +3186,10 @@ export class OfflineGame {
   // на следующую линию, когда не помещаются по ширине. Ряд больше не
   // растягивается на весь экран — блок обнимает свои фишки.
   private rebuildRows(ts: { x: number; y: number }): void {
-    const maxW = this.tableContentW();
+    // Небольшой отступ от деревянной рамы: ряды (и поле нового ряда)
+    // не должны упираться в левый край сукна.
+    const PAD_X = 12;
+    const maxW = Math.max(140, this.tableContentW() - PAD_X * 2);
     this.rowsInner.clearControls();
     this.rowFigs = [];
     const rows: RowFig[] = [];
@@ -3201,7 +3204,7 @@ export class OfflineGame {
     }
     if (rows.length === 0) {
       const hint = mkLabel(t('Нажмите «+ Новый ряд», чтобы выложить числа'), {
-        fontSize: fs(14), color: '#FFFFFFB0', width: maxW - 24, height: 34,
+        fontSize: fs(14), color: '#FFFFFFB0', width: maxW - 12, height: 34,
         align: 'center', hAlign: 'center', vAlign: 'top', noWrap: false,
       });
       hint.isHitTestVisible = false;
@@ -3212,12 +3215,12 @@ export class OfflineGame {
     }
     const gapX = 10;
     const gapY = 10;
-    let x = 0;
+    let x = PAD_X;
     let y = 8;
     let lineH = 0;
     for (const fig of rows) {
-      if (x > 0 && x + fig.w > maxW) {
-        x = 0;
+      if (x > PAD_X && x + fig.w > PAD_X + maxW) {
+        x = PAD_X;
         y += lineH + gapY;
         lineH = 0;
       }
