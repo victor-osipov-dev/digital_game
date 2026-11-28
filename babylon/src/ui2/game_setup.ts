@@ -1,4 +1,4 @@
-import { Container, Control, Image as GuiImage, InputText, ScrollViewer, StackPanel } from '@babylonjs/gui';
+import { Container, Control, Image as GuiImage, InputText, Rectangle, ScrollViewer, StackPanel } from '@babylonjs/gui';
 import { t } from '../core/lang';
 import {
   BOT_LEVEL_NAMES,
@@ -34,6 +34,7 @@ import {
   SKIN,
 } from './uiskin';
 import { avatarTexture } from './skin_art';
+import { botCharacterFor } from '../core/meta';
 import { viewHeight, viewWidth } from './viewport';
 import { applySoundPreference } from '../core/sound';
 import { isSoundEnabled, setSoundEnabled } from '../core/audio';
@@ -53,6 +54,11 @@ const PRESETS: Preset[] = [
   { id: '2local', title: 'Двое на одном устройстве', humans: 2, bots: 0 },
   { id: '4local', title: 'Четверо на одном устройстве', humans: 4, bots: 0 },
 ];
+
+// Цветные кольца вокруг аватаров: игрок и бот визуально различаются
+// в списках и в карточках пресетов.
+const RING_PLAYER = '#5BC46B';
+const RING_BOT = '#A98BE8';
 
 function presetActive(p: Preset): boolean {
   const s = loadSettings();
@@ -146,7 +152,7 @@ export function openGameSetupOverlay(parent: Host, onDone: () => void): void {
   presetGrid.width = '100%';
   list.addControl(presetGrid);
   const avatar = Math.max(22, Math.round(fsCapped(14, 1) * 1.9));
-  const presetTextW = Math.max(90, contentWidth - (avatar * 4 + 9) - 24);
+  const presetTextW = Math.max(80, contentWidth - (avatar * 4 + 14) - 26);
   // Заголовки пресетов — короткие подписи: фиксированный базовый кегль
   // надёжнее переносится в узкой колонке, чем максимальный масштаб.
   const presetTitleFont = fsCapped(15, 0);
@@ -177,22 +183,38 @@ export function openGameSetupOverlay(parent: Host, onDone: () => void): void {
     const chips = new StackPanel('presetChips');
     chips.isVertical = false;
     chips.spacing = 3;
-    const total = preset.humans + preset.bots;
-    const botIds = ['timofey', 'klara', 'arkady', 'max', 'lena'];
-    const chipsW = avatar * 4 + 9;
+    const bothRoles = preset.humans > 0 && preset.bots > 0;
+    const dividerW = bothRoles ? 2 : 0;
+    const chipCount = preset.humans + preset.bots + (bothRoles ? 1 : 0);
+    const chipsW = avatar * 4 + dividerW + 3 * Math.max(0, chipCount - 1);
     chips.width = px(chipsW);
     chips.height = px(avatar);
     chips.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
     row.addControl(chips);
-    // Аватары: человек — гость, боты — свои персонажи.
-    for (let i = 0; i < total; i += 1) {
-      const isBot = i >= preset.humans;
-      const img = new GuiImage(`presetAvatar${i}`, avatarTexture(isBot ? botIds[i % botIds.length] : 'guest'));
+    // Аватары: игроки — гость в зелёном кольце, боты — персонажи в
+    // фиолетовом; между группами тонкая черта, чтобы не путались.
+    const addChip = (id: string, ring: string): void => {
+      const img = new GuiImage(`presetAvatar${chips.children.length}`, avatarTexture(id, ring));
       img.width = px(avatar);
       img.height = px(avatar);
       img.stretch = GuiImage.STRETCH_FILL;
       img.isHitTestVisible = false;
       chips.addControl(img);
+    };
+    for (let i = 0; i < preset.humans; i += 1) addChip('guest', RING_PLAYER);
+    if (bothRoles) {
+      const divider = new Rectangle('presetRoleDivider');
+      divider.width = px(2);
+      divider.height = px(Math.round(avatar * 0.74));
+      divider.thickness = 0;
+      divider.background = '#FFFFFF3D';
+      divider.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+      divider.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+      divider.isHitTestVisible = false;
+      chips.addControl(divider);
+    }
+    for (let i = 0; i < preset.bots; i += 1) {
+      addChip(botCharacterFor(i, S.bot_level).id, RING_BOT);
     }
 
     const textW = presetTextW;
@@ -223,12 +245,28 @@ export function openGameSetupOverlay(parent: Host, onDone: () => void): void {
   names.width = '100%';
   list.addControl(names);
   const inputH = Math.max(40, Math.ceil(font * 2));
+  const roleAvatar = Math.min(34, inputH);
+  // Ширина галочки «Бот»: чекбокс + отступ + подпись (оценка как в uiskin).
+  const botCheckW = Math.round(inputH * 0.45) + 8
+    + Math.round(font * 0.62 * 3) + Math.round(font * 0.5);
+  const nameInputW = Math.max(70, contentWidth - roleAvatar - botCheckW - 16);
   for (let i = 0; i < S.player_count; i += 1) {
+    const isBotSeat = S.player_is_bot[i] ?? false;
     const row = hrow(8);
-    row.width = '100%';
+    row.width = px(contentWidth);
     row.height = px(inputH);
+    row.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    const av = new GuiImage(
+      `setupAvatar${i}`,
+      avatarTexture(isBotSeat ? botCharacterFor(i, S.bot_level).id : 'guest', isBotSeat ? RING_BOT : RING_PLAYER),
+    );
+    av.width = px(roleAvatar);
+    av.height = px(roleAvatar);
+    av.stretch = GuiImage.STRETCH_FILL;
+    av.isHitTestVisible = false;
+    row.addControl(av);
     const input = new InputText(undefined, S.player_names[i] ?? '');
-    input.width = px(Math.max(100, contentWidth - 120));
+    input.width = px(nameInputW);
     input.height = px(inputH);
     input.color = SKIN.text;
     input.background = SKIN.deck;
@@ -239,7 +277,7 @@ export function openGameSetupOverlay(parent: Host, onDone: () => void): void {
     setInputMaxLength(input, MAX_NAME_LEN);
     onInputBlur(input, () => setPlayerName(i, input.text));
     row.addControl(input);
-    const bot = checkboxRow(t('Бот'), S.player_is_bot[i] ?? false, {
+    const bot = checkboxRow(t('Бот'), isBotSeat, {
       height: inputH,
       fontSize: font,
       onChange: (v: boolean) => {
@@ -250,17 +288,6 @@ export function openGameSetupOverlay(parent: Host, onDone: () => void): void {
     row.addControl(bot.root);
     names.addControl(row);
   }
-
-  // ===== боты и правила =====
-  const diff = dropdownRow(t('Боты:'), ctx, {
-    height: Math.max(42, Math.ceil(font * 1.4)), fontSize: font,
-    btnWidth: Math.min(220, Math.max(120, contentWidth - 120)),
-  });
-  diff.setOptions(BOT_LEVEL_NAMES.map((n) => t(n)), S.bot_level, (i) => {
-    saveSettings({ bot_level: i });
-    reopen();
-  });
-  list.addControl(diff.root);
 
   const addCheck = (label: string, value: boolean, onChange: (v: boolean) => void): void => {
     const chk = checkboxRow(label, value, {
@@ -279,13 +306,24 @@ export function openGameSetupOverlay(parent: Host, onDone: () => void): void {
     applySoundPreference(v);
   });
 
+  // ===== сложность, текст, карточки, язык: одинаковые ряды =====
+  // Кнопки у всех четырёх настроек одного размера, подписи — слева.
+  const optH = Math.max(42, Math.ceil(font * 1.4));
+  const optBtnW = Math.min(196, Math.max(108, Math.round(contentWidth * 0.55)));
+  const optLblW = Math.max(64, contentWidth - optBtnW - 10);
   const optionRow = (label: string, values: string[], current: number, pick: (i: number) => void): void => {
     const dd = dropdownRow(label, ctx, {
-      height: Math.max(42, Math.ceil(font * 1.4)), fontSize: font, btnWidth: contentWidth,
+      height: optH, fontSize: font, btnWidth: optBtnW, lblWidth: optLblW,
     });
+    dd.root.width = px(contentWidth);
+    dd.root.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
     dd.setOptions(values, current, pick);
     list.addControl(dd.root);
   };
+  optionRow(t('Сложность:'), BOT_LEVEL_NAMES.map((n) => t(n)), S.bot_level, (i) => {
+    saveSettings({ bot_level: i });
+    reopen();
+  });
   optionRow(t('Текст:'), TEXT_SCALE_NAMES.map((n) => t(n)), S.text_scale, (i) => {
     saveSettings({ text_scale: i });
     reopen();

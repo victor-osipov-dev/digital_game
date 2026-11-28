@@ -589,8 +589,8 @@ export const BOT_AVATARS: Record<string, AvatarSpec> = {
   guest: { bg: '#4A5468', skin: '#E8B98F', hair: '#3A2E28', shirt: '#556070', hairStyle: 'short', glasses: false, beard: false, smile: 0.7 },
 };
 
-export function avatarTexture(id: string): string {
-  const key = `avatar:${id}`;
+export function avatarTexture(id: string, ring?: string): string {
+  const key = `avatar:${id}:${ring ?? ''}`;
   const hit = cache.get(key);
   if (hit) return hit;
   const spec = BOT_AVATARS[id] ?? BOT_AVATARS.guest;
@@ -717,12 +717,20 @@ export function avatarTexture(id: string): string {
     ctx.fill();
   }
   ctx.restore();
-  // Ободок.
+  // Ободок: у аватаров с ролью (игрок/бот) — цветное кольцо, иначе
+  // обычная тёмная кромка.
   ctx.beginPath();
-  ctx.arc(S / 2, S / 2, S / 2 - 2, 0, Math.PI * 2);
-  ctx.strokeStyle = 'rgba(0,0,0,0.35)';
-  ctx.lineWidth = 3;
+  ctx.arc(S / 2, S / 2, S / 2 - 4, 0, Math.PI * 2);
+  ctx.strokeStyle = ring ?? 'rgba(0,0,0,0.35)';
+  ctx.lineWidth = ring ? 7 : 3;
   ctx.stroke();
+  if (ring) {
+    ctx.beginPath();
+    ctx.arc(S / 2, S / 2, S / 2 - 2, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+  }
   const url = c.toDataURL('image/png');
   cache.set(key, url);
   return url;

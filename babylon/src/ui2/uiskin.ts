@@ -1205,9 +1205,12 @@ export function checkboxRow(label: string, checked: boolean, opts: CheckRowOpts)
   // Checkbox Babylon переключается внутри _onPointerDown, поэтому
   // блокируем штатный toggle и выполняем его вручную при pointerup.
   cb.isReadOnly = true;
-  deferTapActivation(cb, () => {
+  // Один переключатель на чекбокс и на его подпись: тап по тексту тоже
+  // меняет состояние — иначе по маленькой галочке на телефоне не попасть.
+  const toggle = (): void => {
     cb.isChecked = !cb.isChecked;
-  });
+  };
+  deferTapActivation(cb, toggle);
   cb.onIsCheckedChangedObservable.add((v: boolean) => {
     opts.onChange?.(v);
   });
@@ -1217,6 +1220,10 @@ export function checkboxRow(label: string, checked: boolean, opts: CheckRowOpts)
   const lblW = opts.maxLabelWidth === undefined ? naturalLabelWidth : Math.min(naturalLabelWidth, opts.maxLabelWidth);
   const lbl = mkLabel(label, { fontSize: opts.fontSize, width: lblW, height: opts.height, hAlign: 'left' });
   lbl.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+  lbl.isHitTestVisible = true;
+  // Подпись — часть переключателя: тап по тексту срабатывает как тап
+  // по самому чекбоксу (со свайп-защитой, как у галочки).
+  deferTapActivation(lbl, toggle);
   row.addControl(cb);
   row.addControl(lbl);
   return { root: row, setChecked: (v: boolean) => { cb.isChecked = v; } };

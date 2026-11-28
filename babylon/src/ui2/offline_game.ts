@@ -1075,7 +1075,7 @@ export class OfflineGame {
       // Без подсказки кажется, что фишки просто «не влезают».
       window.setTimeout(() => {
         if (this.running && this.matchMode === 'puzzle') {
-          this.toast(t('В руке дубли: разберите ряды, чтобы собрать новые'));
+          this.toast(t('Ряды перемешаны: разберите их на серии и наборы'));
         }
       }, 700);
     }

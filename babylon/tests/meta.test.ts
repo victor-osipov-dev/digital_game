@@ -1,9 +1,16 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { hintTilesText, setLang } from '../src/core/lang';
 import {
-  checkinState, claimCheckin, isUnlocked, rankFor, syncAchievements, yesterdayKey,
+  applyItem,
+  checkinState,
+  claimCheckin,
+  clearItem,
+  isUnlocked,
+  rankFor,
+  syncAchievements,
+  yesterdayKey,
 } from '../src/core/meta';
-import { saveSettings } from '../src/core/settings';
+import { loadSettings, saveSettings } from '../src/core/settings';
 
 // В node-окружении нет window, а сохранение настроек планирует отложенную
 // запись через window.setTimeout. Даём минимальную заглушку для тестов.
@@ -69,6 +76,28 @@ describe('achievement backfill', () => {
     const first = syncAchievements();
     expect(first.map((a) => a.id)).toContain('wins_5');
     expect(syncAchievements()).toEqual([]);
+  });
+});
+
+describe('shop equip toggling', () => {
+  afterEach(() => {
+    saveSettings({
+      table_theme: 'emerald', tile_palette: 'ivory', owned_items: ['emerald', 'ivory'],
+    });
+  });
+
+  it('can unequip a purchased style and equip it again', () => {
+    saveSettings({ owned_items: ['emerald', 'ivory', 'amber'] });
+    applyItem('amber');
+    expect(loadSettings().tile_palette).toBe('amber');
+    clearItem('amber');
+    expect(loadSettings().tile_palette).toBe('ivory');
+    // Покупка осталась: включаем снова.
+    applyItem('amber');
+    expect(loadSettings().tile_palette).toBe('amber');
+    // Снятие другого товара не сбрасывает текущий выбор.
+    clearItem('marble');
+    expect(loadSettings().tile_palette).toBe('amber');
   });
 });
 

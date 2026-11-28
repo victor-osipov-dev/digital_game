@@ -1,7 +1,7 @@
 import { OPENING_POINTS, validateRow } from './rules';
 import { t } from './lang';
 import { tileById, tryTileById } from './deck';
-import { sortTiles, TileFace } from './tile';
+import { sortTiles, TileFace, RED, BLUE, BLACK, ORANGE } from './tile';
 import type { GameView } from '../net/protocol';
 
 export const DEAL_SIZE = 14;
@@ -192,12 +192,17 @@ export class GameState {
   }
 
   /**
-   * Соло-раскладка: на столе три готовых серии 1–8 (по цвету), а в руке —
-   * вторые экземпляры двух соседних чисел в каждом цвете. Дописать их в ряд
-   * нельзя (такие числа уже есть), поэтому приходится разбирать готовые
-   * ряды, переносить кусок в новый ряд и собирать две серии заново.
-   * Колода пуста; решение существует: для пары 3–4 берём начало ряда,
-   * для 5–6 — хвост, для 4–5 подходит любой вариант.
+   * Соло-раскладка: на столе четыре перемешанных ряда. Это куски двух серий,
+   * набор девяток и хвосты двух других серий; в руке пять фишек, которые
+   * дополняют сразу несколько групп.
+   *
+   * Собрать нужно пять рядов:
+   *   красная серия 3–7, синяя 10–13, набор девяток (красная/синяя/чёрная),
+   *   чёрная серия 1–4 и оранжевая серия 5–7.
+   *
+   * Ни один ряд на столе не валиден, ни одна фишка из руки не вставляется
+   * в готовый ряд, а из руки нельзя собрать отдельный ряд — стол приходится
+   * разбирать целиком по цветам, числам и наборам.
    */
   static createPuzzle(): GameState {
     const s = new GameState();
@@ -207,30 +212,39 @@ export class GameState {
     s.players.push(new GsPlayer(t('Вы')));
     s.deck.tiles = [];
     const source = new Deck();
-    const take = (color: number, value: number): TileFace => {
-      const index = source.tiles.findIndex((tile) => tile.color === color && tile.value === value);
-      return source.tiles.splice(index, 1)[0];
+    // Одна и та же фишка не должна попасть на стол и в руку одновременно.
+    const stock = new Map<string, TileFace>();
+    const need = (color: number, value: number): TileFace => {
+      const key = `${color}:${value}`;
+      const existing = stock.get(key);
+      if (existing) return existing;
+      const index = source.tiles.findIndex(
+        (tile) => tile.color === color && tile.value === value && !tile.is_joker,
+      );
+      const tile = source.tiles.splice(index, 1)[0];
+      stock.set(key, tile);
+      return tile;
     };
-    const colors = [0, 1, 2];
-    const pairStarts = [3, 4, 5];
-    const rows: GsRow[] = [];
-    const hand: TileFace[] = [];
-    for (let ci = 0; ci < colors.length; ci += 1) {
-      const color = colors[ci];
-      const start = pairStarts[ci];
+    const layout: [number, number][][] = [
+      // красная серия + оранжевая серия
+      [[RED, 3], [RED, 4], [ORANGE, 5], [ORANGE, 6]],
+      // хвост красной серии + две девятки набора
+      [[RED, 5], [RED, 6], [BLACK, 9], [BLUE, 9]],
+      // синяя серия + начало чёрной
+      [[BLUE, 10], [BLUE, 11], [BLACK, 1]],
+      // продолжение синей + чёрная серия
+      [[BLUE, 12], [BLACK, 2], [BLACK, 3]],
+    ];
+    const handPairs: [number, number][] = [
+      [RED, 7], [BLUE, 13], [BLACK, 4], [RED, 9], [ORANGE, 7],
+    ];
+    s.table = layout.map((pairs) => {
       const row = new GsRow(s._next_row_id);
       s._next_row_id += 1;
-      for (let value = 1; value <= 8; value += 1) {
-        row.tiles.push(take(color, value));
-        if (value === start || value === start + 1) {
-          // Второй экземпляр этого числа уходит в руку.
-          hand.push(take(color, value));
-        }
-      }
-      rows.push(row);
-    }
-    s.table = rows;
-    s.players[0].hand = hand;
+      row.tiles = pairs.map(([color, value]) => need(color, value));
+      return row;
+    });
+    s.players[0].hand = handPairs.map(([color, value]) => need(color, value));
     sortTiles(s.players[0].hand);
     s.scores = [0];
     s.takeTurnSnapshot();

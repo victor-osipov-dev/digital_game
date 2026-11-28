@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { GameState } from '../src/core/game_state';
 import { tileById } from '../src/core/deck';
 import { validateRow } from '../src/core/rules';
+import { BLACK, BLUE, ORANGE, RED } from '../src/core/tile';
 
 describe('GameState', () => {
   it('сохраняет фишки победного хода для последней подсветки', () => {
@@ -20,19 +21,21 @@ describe('GameState', () => {
     expect(state.turn_placed).toHaveLength(0);
   });
 
-  it('создаёт соло-раскладку, которую нельзя решить без перестройки', () => {
+  it('создаёт сложную соло-раскладку с сериями и набором', () => {
     const state = GameState.createPuzzle();
     expect(state.mode).toBe('puzzle');
     expect(state.playerCount()).toBe(1);
     expect(state.tilesLeftInDeck()).toBe(0);
-    expect(state.table).toHaveLength(3);
-    for (const row of state.table) {
-      expect(row.tiles.length).toBe(8);
-      expect(validateRow(row.tiles).ok).toBe(true);
-    }
-    expect(state.hand()).toHaveLength(6);
+    expect(state.table).toHaveLength(4);
+    expect(state.table.map((row) => row.tiles.length)).toEqual([4, 4, 3, 3]);
+    expect(state.hand()).toHaveLength(5);
 
-    // Ни одну фишку из руки нельзя просто дописать в готовые ряды.
+    // Все ряды перемешаны: на столе нет ни готовой серии, ни готового набора.
+    for (const row of state.table) {
+      expect(validateRow(row.tiles).ok).toBe(false);
+    }
+
+    // Ни одну фишку из руки нельзя просто дописать в готовый ряд.
     for (const tile of state.hand()) {
       for (const row of state.table) {
         for (let index = 0; index <= row.tiles.length; index += 1) {
@@ -52,37 +55,40 @@ describe('GameState', () => {
       }
     }
 
-    // Решение: разобрать каждый ряд и собрать две серии на цвет.
-    for (const row of [...state.table]) {
-      const color = row.tiles[0].color;
-      const pair = state.hand().filter((tile) => tile.color === color)
-        .map((tile) => tile.value)
-        .sort((a, b) => a - b);
-      expect(pair).toHaveLength(2);
-      const start = pair[0];
+    // Решение: собрать пять эталонных рядов — две серии, набор и ещё две серии.
+    const solution: [number, number][][] = [
+      [[RED, 3], [RED, 4], [RED, 5], [RED, 6], [RED, 7]],
+      [[BLUE, 10], [BLUE, 11], [BLUE, 12], [BLUE, 13]],
+      [[RED, 9], [BLUE, 9], [BLACK, 9]],
+      [[BLACK, 1], [BLACK, 2], [BLACK, 3], [BLACK, 4]],
+      [[ORANGE, 5], [ORANGE, 6], [ORANGE, 7]],
+    ];
+    let usedSet = false;
+    for (const pairs of solution) {
       const target = state.addRow();
-      if (start <= 4) {
-        // Берём начало ряда: 1..start-1 + пара из руки.
-        for (const tile of row.tiles.filter((t) => t.value < start)) {
+      for (const [color, value] of pairs) {
+        const fromHand = state.hand().find((tile) => tile.color === color && tile.value === value);
+        if (fromHand) {
+          expect(state.placeFromHand(fromHand.id, target.id, target.tiles.length)).toBe(true);
+          continue;
+        }
+        let moved = false;
+        for (const row of [...state.table]) {
+          if (row === target) continue;
+          const tile = row.tiles.find((item) => item.color === color && item.value === value);
+          if (!tile) continue;
           expect(state.moveTile(row.id, tile.id, target.id, target.tiles.length)).toBe(true);
+          moved = true;
+          break;
         }
-        const tiles = state.hand().filter((t) => t.color === color).sort((a, b) => a.value - b.value);
-        for (const tile of tiles) {
-          expect(state.placeFromHand(tile.id, target.id, target.tiles.length)).toBe(true);
-        }
-      } else {
-        // Берём хвост ряда: пара из руки + оставшиеся старшие числа.
-        for (const tile of row.tiles.filter((t) => t.value > start + 1)) {
-          expect(state.moveTile(row.id, tile.id, target.id, target.tiles.length)).toBe(true);
-        }
-        const tiles = state.hand().filter((t) => t.color === color).sort((a, b) => b.value - a.value);
-        for (const tile of tiles) {
-          expect(state.placeFromHand(tile.id, target.id, 0)).toBe(true);
-        }
+        expect(moved).toBe(true);
       }
-      expect(validateRow(target.tiles).ok).toBe(true);
-      expect(validateRow(row.tiles).ok).toBe(true);
+      const result = validateRow(target.tiles);
+      expect(result.ok).toBe(true);
+      if (result.kind === 'set') usedSet = true;
     }
+    // В раскладке действительно есть набор, а не только серии.
+    expect(usedSet).toBe(true);
     expect(state.hand()).toHaveLength(0);
     expect(state.endTurn().win).toBe(true);
   });

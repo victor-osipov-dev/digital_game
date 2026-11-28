@@ -324,6 +324,18 @@ export function applyItem(id: string): void {
   }
 }
 
+/**
+ * Снять выбранное оформление и вернуть базовое. Покупка при этом остаётся:
+ * товар можно включить снова в любой момент.
+ */
+export function clearItem(id: string): void {
+  if (id === 'royal' || id === 'burgundy') {
+    if (loadSettings().table_theme === id) saveSettings({ table_theme: 'emerald' });
+  } else if (id === 'amber' || id === 'marble' || id === 'color') {
+    if (loadSettings().tile_palette === id) saveSettings({ tile_palette: 'ivory' });
+  }
+}
+
 /** Восстановить постоянные покупки после перезапуска/смены устройства. */
 export async function restorePurchases(): Promise<void> {
   try {

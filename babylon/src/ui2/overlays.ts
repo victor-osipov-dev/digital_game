@@ -29,6 +29,7 @@ import {
   achievementProgress,
   addOwned,
   applyItem,
+  clearItem,
   coins,
   isUnlocked,
   ownsItem,
@@ -670,7 +671,8 @@ export function openShopOverlay(parent: Host, onChanged: () => void): void {
   head.width = '100%';
   head.height = px(34);
   head.addControl(mkLabel(t('Магазин'), { color: SKIN.gold, fontSize: fs(21), width: Math.max(80, contentWidth - 120), align: 'left', hAlign: 'left' }));
-  head.addControl(mkLabel(`● ${coins()}`, { color: '#FFE9B0', fontSize: fs(17), width: 110, align: 'right', hAlign: 'right' }));
+  const coinsLabel = mkLabel(`● ${coins()}`, { color: '#FFE9B0', fontSize: fs(17), width: 110, align: 'right', hAlign: 'right' });
+  head.addControl(coinsLabel);
   pcol.addControl(head);
 
   const closeH = Math.max(46, Math.ceil(fs(16) * 1.35) + 14);
@@ -832,8 +834,13 @@ export function openShopOverlay(parent: Host, onChanged: () => void): void {
         if (item.kind === 'bundle') {
           label = t('Куплено');
           enabled = false;
+        } else if (item.kind === 'remove_ads') {
+          // Постоянная покупка: снять её нельзя.
+          label = t('Включено');
+          enabled = false;
         } else {
-          label = current ? t('Выбрано') : t('Выбрать');
+          // Выбранное можно снять и включить снова, покупка остаётся.
+          label = current ? t('Снять') : t('Выбрать');
         }
       } else if (item.kind === 'remove_ads' || item.kind === 'bundle') {
         label = platform.supportsPayments ? t('Купить') : t('Недоступно');
@@ -854,12 +861,20 @@ export function openShopOverlay(parent: Host, onChanged: () => void): void {
       btn.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
       btn.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
       btn.left = px(-8);
-      btn.isEnabled = enabled && !(owned && current);
+      btn.isEnabled = enabled;
       btn.onPointerUpObservable.clear();
       btn.onPointerUpObservable.add(() => {
         if (owned) {
-          applyItem(item.id);
-          onChanged();
+          if (item.kind === 'theme' || item.kind === 'palette') {
+            if (current) clearItem(item.id);
+            else applyItem(item.id);
+            applyPreview(
+              loadSettings().table_theme,
+              loadSettings().tile_palette,
+              t('Текущее оформление'),
+            );
+            refresh();
+          }
           return;
         }
         if (item.kind === 'remove_ads' || item.kind === 'bundle') {
@@ -879,24 +894,39 @@ export function openShopOverlay(parent: Host, onChanged: () => void): void {
               addOwned('remove_ads');
               applyItem('remove_ads');
             }
-            onChanged();
+            refresh();
           });
           return;
         }
         if (!spendCoins(item.price)) return;
         addOwned(item.id);
         applyItem(item.id);
-        onChanged();
+        applyPreview(
+          loadSettings().table_theme,
+          loadSettings().tile_palette,
+          t('Текущее оформление'),
+        );
+        refresh();
       });
       box.addControl(btn);
     }
   };
   rebuild();
 
+  // Магазин обновляется на месте: купленное/снятое видно сразу, без
+  // закрытия окна. Меню за оверлеем пересоберётся при закрытии.
+  const refresh = (): void => {
+    rebuild();
+    coinsLabel.text = `● ${coins()}`;
+  };
+
   const closeBtn = mkButton(t('Закрыть'), {
     fontSize: fs(16), height: closeH, width: Math.min(180, contentWidth), theme: BUTTON_STYLE.green,
   });
-  closeBtn.onPointerUpObservable.add(close);
+  closeBtn.onPointerUpObservable.add(() => {
+    close();
+    onChanged();
+  });
   pcol.addControl(closeBtn);
 }
 
@@ -1142,12 +1172,16 @@ function modeArt(mode: PlayMode, size: number): Container {
     stack.height = px(rowsN * tileH + (rowsN - 1) * rowGap);
     stack.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
     stack.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
-    const palette = [RED, BLUE, BLACK];
-    for (let r = 0; r < rowsN; r += 1) {
+    const previewRows: { text: string; color: number }[][] = [
+      [{ text: '3', color: RED }, { text: '4', color: RED }, { text: '5', color: ORANGE }],
+      [{ text: '7', color: BLUE }, { text: '7', color: BLACK }, { text: '7', color: RED }],
+      [{ text: '8', color: BLUE }, { text: '1', color: BLACK }, { text: '2', color: ORANGE }],
+    ];
+    for (const rowDef of previewRows) {
       const line = hrow(2);
       line.height = px(tileH);
-      for (let k = 0; k < 3; k += 1) {
-        line.addControl(ruleTile({ text: String(k + 1 + r), color: colorHex(palette[r]) }, tileH));
+      for (const cell of rowDef) {
+        line.addControl(ruleTile({ text: cell.text, color: colorHex(cell.color) }, tileH));
       }
       stack.addControl(line);
     }
@@ -1241,7 +1275,7 @@ export function openModesOverlay(
     },
     {
       mode: 'puzzle', title: 'Соло-раскладка',
-      desc: 'Выложите все фишки: стол придётся перестроить',
+      desc: 'Разберите перемешанные ряды на серии и наборы',
       accent: '#C69CFF', badge: null,
     },
   ];
