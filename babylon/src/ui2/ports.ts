@@ -6,7 +6,7 @@ export interface OnlineStats {
   rank?: number;
 }
 
-export type StartMode = 'classic' | 'quick' | 'timed' | 'daily';
+export type StartMode = 'classic' | 'quick' | 'timed' | 'daily' | 'puzzle';
 
 export interface MenuHost {
   rebuild(): void;

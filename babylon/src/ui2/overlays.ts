@@ -1,6 +1,6 @@
-import { Container, Control, Rectangle, ScrollViewer, StackPanel, TextBlock } from '@babylonjs/gui';
+import { Container, Control, Ellipse, Image as GuiImage, Rectangle, ScrollViewer, StackPanel, TextBlock } from '@babylonjs/gui';
 import { t } from '../core/lang';
-import { fs, loadSettings, saveSettings } from '../core/settings';
+import { fs, fsCapped, loadSettings, saveSettings } from '../core/settings';
 import { applySoundPreference } from '../core/sound';
 import { TEXT_SCALE_NAMES, TILE_SIZE_NAMES } from '../core/settings';
 import { BLACK, BLUE, ORANGE, RED, YELLOW, colorHex } from '../core/tile';
@@ -26,6 +26,7 @@ import { isSoundEnabled, setSoundEnabled } from '../core/audio';
 import {
   ACHIEVEMENTS,
   SHOP_ITEMS,
+  achievementProgress,
   addOwned,
   applyItem,
   coins,
@@ -36,6 +37,7 @@ import {
   spendCoins,
 } from '../core/meta';
 import { platform } from '../platform';
+import { tableMatTexture, themeById, tileTexture, TilePalette } from './skin_art';
 
 // Полноэкранные модалки, общие для меню и игры: правила и настройки.
 
@@ -672,11 +674,47 @@ export function openShopOverlay(parent: Host, onChanged: () => void): void {
   pcol.addControl(head);
 
   const closeH = Math.max(46, Math.ceil(fs(16) * 1.35) + 14);
+  // Витрина примерки: сукно и фишки выбранного товара, даже если он не куплен.
+  const previewH = 104;
+
+  // ===== витрина =====
+  const preview = softPanel({ bg: '#FFFFFF08', border: '#ffffff22', thickness: 1, corner: 10 });
+  preview.root.width = '100%';
+  preview.root.height = px(previewH);
+  pcol.addControl(preview.root);
+  const previewFelt = new GuiImage('shopPreviewFelt', tableMatTexture(themeById(loadSettings().table_theme), contentWidth, previewH - 30, 8));
+  previewFelt.width = px(contentWidth);
+  previewFelt.height = px(previewH - 30);
+  previewFelt.stretch = GuiImage.STRETCH_FILL;
+  previewFelt.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+  previewFelt.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+  previewFelt.top = px(4);
+  previewFelt.isHitTestVisible = false;
+  preview.root.addControl(previewFelt);
+  const previewTiles = new StackPanel('shopPreviewTiles');
+  previewTiles.isVertical = false;
+  previewTiles.spacing = 5;
+  previewTiles.width = px(3 * 26 + 10);
+  previewTiles.height = px(26);
+  previewTiles.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+  previewTiles.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+  previewTiles.top = px(Math.round((previewH - 30 - 26) / 2) + 4);
+  previewTiles.isHitTestVisible = false;
+  preview.root.addControl(previewTiles);
+  const previewCap = mkLabel(t('Нажмите «Пример», чтобы увидеть оформление'), {
+    color: '#ffffffA8', fontSize: fs(11), width: contentWidth, height: Math.ceil(fs(11) * 1.5),
+    align: 'center', hAlign: 'center', vAlign: 'bottom', noWrap: true,
+  });
+  previewCap.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
+  previewCap.top = px(-4);
+  previewCap.isHitTestVisible = false;
+  preview.root.addControl(previewCap);
+
   const scroll = new ScrollViewer('shopScroll');
   scroll.thickness = 0;
   scroll.barSize = 4;
   scroll.width = '100%';
-  scroll.height = px(Math.max(120, panelHeight - 34 - closeH - 40));
+  scroll.height = px(Math.max(100, panelHeight - 34 - previewH - 12 - closeH - 40));
   pcol.addControl(scroll);
   enableSmoothScroll(scroll);
   const list = new StackPanel('shopList');
@@ -684,6 +722,47 @@ export function openShopOverlay(parent: Host, onChanged: () => void): void {
   list.spacing = 8;
   list.width = '100%';
   scroll.addControl(list);
+
+  const applyPreview = (theme: string, palette: string, caption: string): void => {
+    previewFelt.source = tableMatTexture(themeById(theme), contentWidth, previewH - 30, 8);
+    previewTiles.clearControls();
+    for (const value of [5, 6, 7]) {
+      const img = new GuiImage(`previewTile${value}`, tileTexture(
+        { id: value, color: 0, value, is_joker: false }, false, palette as TilePalette,
+      ));
+      img.width = px(26);
+      img.height = px(26 * 1.4);
+      img.stretch = GuiImage.STRETCH_FILL;
+      img.isHitTestVisible = false;
+      previewTiles.addControl(img);
+    }
+    previewTiles.height = px(Math.round(26 * 1.4));
+    previewTiles.top = px(4 + Math.round((previewH - 30 - 26 * 1.4) / 2));
+    previewCap.text = caption;
+  };
+
+  const previewFor = (item: (typeof SHOP_ITEMS)[number]): void => {
+    const settings = loadSettings();
+    let theme = settings.table_theme;
+    let palette = settings.tile_palette;
+    if (item.kind === 'theme') theme = item.id;
+    else if (item.kind === 'palette') palette = item.id;
+    else if (item.kind === 'bundle') {
+      theme = 'royal';
+      palette = 'amber';
+    }
+    if (item.kind === 'remove_ads') {
+      previewCap.text = t('Без рекламы: баннеры и вставки не появятся');
+      return;
+    }
+    applyPreview(theme, palette, t('%s · примерка', t(item.title)));
+  };
+  const currentSettings = loadSettings();
+  applyPreview(
+    currentSettings.table_theme,
+    currentSettings.tile_palette,
+    t('Текущее оформление'),
+  );
 
   const rebuild = (): void => {
     list.clearControls();
@@ -699,26 +778,53 @@ export function openShopOverlay(parent: Host, onChanged: () => void): void {
         || (item.kind === 'palette' && S.tile_palette === item.id);
       const row = softPanel({ bg: '#FFFFFF0D', border: current ? '#FFD54F88' : '#ffffff1A', thickness: 1, corner: 10 });
       row.root.width = '100%';
-      row.root.height = px(80);
+      // Высота строки и положение текста считаются от кегля: при крупном
+      // тексте блок остаётся по центру, а не прижимается к низу карточки.
+      const titleFont = fsCapped(16, 1);
+      const descFont = fsCapped(12, 1);
+      const titleText = t(item.title);
+      const descText = t(item.desc);
+      const canPreview = item.kind !== 'remove_ads';
+      const textW = contentWidth - (canPreview ? 200 : 130);
+      const titleH = Math.max(20, Math.ceil(titleFont * 1.3));
+      const descH = Math.max(18, Math.ceil(estimateWrappedTextHeight(descText, textW, descFont)));
+      const rowH = Math.max(80, titleH + descH + 18);
+      row.root.height = px(rowH);
       list.addControl(row.root);
       const box = new Container('shopRow');
       box.width = px(contentWidth);
       box.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
       row.root.addControl(box);
-      const title = mkLabel(t(item.title), {
-        fontSize: fs(16), color: current ? SKIN.gold : '#ffffff', width: contentWidth - 130, height: 24,
-        align: 'left', hAlign: 'left', noWrap: true,
+      const textTop = Math.round((rowH - (titleH + 3 + descH)) / 2);
+      const title = mkLabel(titleText, {
+        fontSize: titleFont, color: current ? SKIN.gold : '#ffffff', width: textW, height: titleH,
+        align: 'left', hAlign: 'left', vAlign: 'top', noWrap: true,
       });
       title.left = px(10);
-      title.top = px(8);
+      title.top = px(textTop);
+      title.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
       box.addControl(title);
-      const desc = mkLabel(t(item.desc), {
-        fontSize: fs(12), color: '#ffffff9C', width: contentWidth - 130, height: 20,
-        align: 'left', hAlign: 'left', noWrap: true,
+      const desc = mkLabel(descText, {
+        fontSize: descFont, color: '#ffffff9C', width: textW, height: descH,
+        align: 'left', hAlign: 'left', vAlign: 'top', noWrap: false,
       });
       desc.left = px(10);
-      desc.top = px(32);
+      desc.top = px(textTop + titleH + 3);
+      desc.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
       box.addControl(desc);
+      if (canPreview) {
+        // Примерка: оформление показывается на витрине даже без покупки.
+        const pv = mkButton(t('Пример'), {
+          height: 36, width: 64, fontSize: fs(12), corner: 8,
+          theme: { bg: '#26303FCC', hover: '#46566D', press: '#1E2733', border: '#ffffff22' },
+        });
+        pv.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
+        pv.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+        pv.left = px(-128);
+        pv.onPointerUpObservable.clear();
+        pv.onPointerUpObservable.add(() => previewFor(item));
+        box.addControl(pv);
+      }
 
       let label = '';
       let enabled = true;
@@ -847,35 +953,89 @@ export function openAchievementsOverlay(parent: Host): void {
     const got = isUnlocked(a.id);
     const row = softPanel({ bg: got ? '#43A04722' : '#FFFFFF08', border: got ? '#58C36A99' : '#ffffff14', thickness: 1, corner: 10 });
     row.root.width = '100%';
-    row.root.height = px(88);
+    // Блок текста центрируем по вертикали: при крупном шрифте описание
+    // переносится, и фиксированные отступы прижимали его к нижнему краю.
+    const titleFont = fsCapped(15, 1);
+    const descFont = fsCapped(11, 1);
+    const titleText = t(a.title);
+    const descText = t(a.desc);
+    const textW = contentWidth - 90;
+    const titleH = Math.max(20, Math.ceil(titleFont * 1.3));
+    const descH = Math.max(18, Math.ceil(estimateWrappedTextHeight(descText, textW, descFont)));
+    const prog = got ? null : achievementProgress(a.id);
+    const barH = prog ? 7 : 0;
+    const rowH = Math.max(88, titleH + descH + (prog ? 6 + barH + 6 : 0) + 20);
+    row.root.height = px(rowH);
     list.addControl(row.root);
+    const textTop = Math.round((rowH - (titleH + 3 + descH + (prog ? 6 + barH : 0))) / 2);
     const icon = mkLabel(a.icon, {
-      fontSize: fs(22), color: got ? '#9BE7A5' : '#ffffff55', width: 40, height: 40,
+      fontSize: fsCapped(22, 1), color: got ? '#9BE7A5' : '#ffffff55', width: 40, height: 40,
       align: 'center', hAlign: 'left', vAlign: 'center',
     });
     icon.left = px(8);
     row.root.addControl(icon);
-    const title = mkLabel(t(a.title), {
-      fontSize: fs(15), color: got ? '#DDFFE2' : '#ffffffC0', width: contentWidth - 90, height: 24,
-      align: 'left', hAlign: 'left',
+    const title = mkLabel(titleText, {
+      fontSize: titleFont, color: got ? '#DDFFE2' : '#ffffffC0', width: textW, height: titleH,
+      align: 'left', hAlign: 'left', vAlign: 'top', noWrap: true,
     });
     title.left = px(48);
-    title.top = px(8);
+    title.top = px(textTop);
+    title.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
     row.root.addControl(title);
-    const desc = mkLabel(t(a.desc), {
-      fontSize: fs(11), color: '#ffffff9C', width: contentWidth - 90, height: 44,
-      align: 'left', hAlign: 'left',
+    const desc = mkLabel(descText, {
+      fontSize: descFont, color: '#ffffff9C', width: textW, height: descH,
+      align: 'left', hAlign: 'left', vAlign: 'top', noWrap: false,
     });
     desc.left = px(48);
-    desc.top = px(32);
+    desc.top = px(textTop + titleH + 3);
+    desc.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
     row.root.addControl(desc);
+    if (prog) {
+      // Полоска прогресса: видно, сколько осталось до достижения.
+      const trackW = Math.max(60, textW - 62);
+      const barTop = textTop + titleH + 3 + descH + 6;
+      const track = new Rectangle('achProgressBg');
+      track.width = px(trackW);
+      track.height = px(barH);
+      track.cornerRadius = 3;
+      track.thickness = 0;
+      track.background = '#FFFFFF1F';
+      track.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+      track.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+      track.left = px(48);
+      track.top = px(barTop);
+      track.isHitTestVisible = false;
+      row.root.addControl(track);
+      const fill = new Rectangle('achProgressFill');
+      fill.width = px(Math.max(3, Math.round(trackW * Math.min(1, prog.have / Math.max(1, prog.need)))));
+      fill.height = px(barH);
+      fill.cornerRadius = 3;
+      fill.thickness = 0;
+      fill.background = got ? '#58C36A' : SKIN.gold;
+      fill.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+      fill.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+      fill.left = px(48);
+      fill.top = px(barTop);
+      fill.isHitTestVisible = false;
+      row.root.addControl(fill);
+      const count = mkLabel(`${Math.min(prog.have, prog.need)}/${prog.need}`, {
+        fontSize: fs(10), color: '#ffffff80', width: 56, height: barH + 6,
+        align: 'right', hAlign: 'right', vAlign: 'center',
+      });
+      count.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
+      count.left = px(-8);
+      count.top = px(barTop - 3);
+      count.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+      count.isHitTestVisible = false;
+      row.root.addControl(count);
+    }
     const reward = mkLabel(got ? t('Получено') : `+${a.reward}`, {
-      fontSize: fs(12), color: got ? '#9BE7A5' : '#FFD54F', width: 80, height: 22,
-      align: 'right', hAlign: 'right',
+      fontSize: fsCapped(12, 1), color: got ? '#9BE7A5' : '#FFD54F', width: 80, height: 22,
+      align: 'right', hAlign: 'right', vAlign: 'center',
     });
     reward.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
+    reward.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
     reward.left = px(-8);
-    reward.top = px(8);
     row.root.addControl(reward);
   }
 
@@ -884,4 +1044,306 @@ export function openAchievementsOverlay(parent: Host): void {
   });
   closeBtn.onPointerUpObservable.add(close);
   pcol.addControl(closeBtn);
+}
+
+// ===== выбор режима: большие карточки с наглядным примером =====
+type PlayMode = 'classic' | 'quick' | 'timed' | 'puzzle';
+
+function modeArt(mode: PlayMode, size: number): Container {
+  const root = new Container('modeArt');
+  root.width = px(size);
+  root.height = px(size);
+  root.clipChildren = false;
+  if (mode === 'classic') {
+    // Настоящее сукно и ряд фишек — как на игровом столе.
+    const felt = new GuiImage('modeFelt', tableMatTexture(themeById(loadSettings().table_theme), size, size, 6));
+    felt.width = '100%';
+    felt.height = '100%';
+    felt.stretch = GuiImage.STRETCH_FILL;
+    felt.isHitTestVisible = false;
+    felt.isPointerBlocker = false;
+    root.addControl(felt);
+    const tileH = Math.max(18, Math.round(size * 0.3));
+    const row = hrow(Math.max(2, Math.round(tileH * 0.12)));
+    row.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+    row.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+    row.addControl(ruleTile({ text: '5', color: colorHex(RED) }, tileH));
+    row.addControl(ruleTile({ text: '6', color: colorHex(RED) }, tileH));
+    row.addControl(ruleTile({ text: '7', color: colorHex(RED) }, tileH));
+    root.addControl(row);
+    return root;
+  }
+  if (mode === 'quick') {
+    // Полоса до 50 очков и звезда на финише.
+    const panel = softPanel({ bg: '#101A14', border: '#FFD54F55', thickness: 1, corner: 12 });
+    panel.root.width = '100%';
+    panel.root.height = '100%';
+    root.addControl(panel.root);
+    const target = mkLabel('50', {
+      fontSize: Math.max(18, Math.round(size * 0.3)), color: SKIN.gold,
+      width: size - 16, height: Math.round(size * 0.34), align: 'center', hAlign: 'center', vAlign: 'top',
+    });
+    target.top = px(Math.round(size * 0.1));
+    target.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    target.isHitTestVisible = false;
+    root.addControl(target);
+    const barW = Math.round(size * 0.7);
+    const barY = Math.round(size * 0.58);
+    const track = new Rectangle('modeBarTrack');
+    track.width = px(barW);
+    track.height = px(9);
+    track.cornerRadius = 4;
+    track.thickness = 0;
+    track.background = '#FFFFFF22';
+    track.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+    track.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    track.top = px(barY);
+    track.isHitTestVisible = false;
+    root.addControl(track);
+    const fill = new Rectangle('modeBarFill');
+    fill.width = px(Math.round(barW * 0.72));
+    fill.height = px(9);
+    fill.cornerRadius = 4;
+    fill.thickness = 0;
+    fill.background = SKIN.gold;
+    fill.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    fill.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    fill.left = px(Math.round((size - barW) / 2));
+    fill.top = px(barY);
+    fill.isHitTestVisible = false;
+    root.addControl(fill);
+    const star = mkLabel('★', {
+      fontSize: Math.max(12, Math.round(size * 0.17)), color: '#FFE9B0',
+      width: 18, height: 18, align: 'center', hAlign: 'left', vAlign: 'center',
+    });
+    star.left = px(Math.round((size - barW) / 2 + barW - 9));
+    star.top = px(barY - 2);
+    star.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    star.isHitTestVisible = false;
+    root.addControl(star);
+    return root;
+  }
+  if (mode === 'puzzle') {
+    // Полный стол и пустая рука: нужно выложить все фишки.
+    const felt = new GuiImage('modeFelt', tableMatTexture(themeById(loadSettings().table_theme), size, size, 6));
+    felt.width = '100%';
+    felt.height = '100%';
+    felt.stretch = GuiImage.STRETCH_FILL;
+    felt.isHitTestVisible = false;
+    felt.isPointerBlocker = false;
+    root.addControl(felt);
+    const tileH = Math.max(11, Math.round(size * 0.17));
+    const stack = new StackPanel('modePuzzleRows');
+    stack.isVertical = true;
+    stack.spacing = Math.max(2, Math.round(size * 0.03));
+    stack.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+    stack.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+    const palette = [RED, BLUE, BLACK];
+    for (let r = 0; r < 3; r += 1) {
+      const line = hrow(2);
+      for (let k = 0; k < 3; k += 1) {
+        line.addControl(ruleTile({ text: String(k + 1 + r), color: colorHex(palette[r]) }, tileH));
+      }
+      stack.addControl(line);
+    }
+    root.addControl(stack);
+    const zero = mkLabel('0', {
+      fontSize: Math.max(12, Math.round(size * 0.2)), color: SKIN.gold,
+      width: size - 10, height: Math.round(size * 0.22), align: 'right', hAlign: 'right', vAlign: 'bottom',
+    });
+    zero.top = px(-2);
+    zero.isHitTestVisible = false;
+    root.addControl(zero);
+    return root;
+  }
+  // На время: циферблат и 5:00.
+  const panel = softPanel({ bg: '#101822', border: '#7FB3FF55', thickness: 1, corner: 12 });
+  panel.root.width = '100%';
+  panel.root.height = '100%';
+  root.addControl(panel.root);
+  const clockSize = Math.round(size * 0.52);
+  const clock = new Ellipse('modeClock');
+  clock.width = px(clockSize);
+  clock.height = px(clockSize);
+  clock.thickness = 3;
+  clock.color = '#8FC2FF';
+  clock.background = '#FFFFFF0F';
+  clock.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+  clock.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+  clock.top = px(Math.round(size * 0.1));
+  clock.isHitTestVisible = false;
+  root.addControl(clock);
+  const hand = new Rectangle('modeClockHand');
+  hand.width = px(3);
+  hand.height = px(Math.round(clockSize * 0.3));
+  hand.thickness = 0;
+  hand.background = '#EAF3FF';
+  hand.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+  hand.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+  hand.top = px(Math.round(size * 0.1 + clockSize / 2 - clockSize * 0.3));
+  hand.isHitTestVisible = false;
+  root.addControl(hand);
+  const time = mkLabel('5:00', {
+    fontSize: Math.max(14, Math.round(size * 0.2)), color: '#EAF3FF',
+    width: size, height: Math.round(size * 0.24), align: 'center', hAlign: 'center', vAlign: 'bottom',
+  });
+  time.top = px(-3);
+  time.isHitTestVisible = false;
+  root.addControl(time);
+  return root;
+}
+
+export function openModesOverlay(
+  parent: Host,
+  onPick: (mode: PlayMode) => void,
+): void {
+  const vw = viewWidth();
+  const vh = viewHeight();
+  const PAD = 10;
+  const GAP = 8;
+  const panelWidth = Math.min(vw - 24, 440);
+  const contentWidth = Math.max(180, panelWidth - 28);
+  const artSize = Math.max(56, Math.min(92, Math.round(contentWidth * 0.24)));
+  // Карточки режимов — навигация, а не текст правил: при максимальном
+  // масштабе шрифта подпись в узкой колонке становится нечитаемой.
+  const headFont = fsCapped(20, 1);
+  const headH = Math.max(30, Math.ceil(estimateWrappedTextHeight(t('Выберите режим'), contentWidth, headFont)));
+  const closeH = Math.max(44, Math.ceil(fsCapped(16, 1) * 1.35) + 12);
+  const titleFont = fsCapped(17, 1);
+  const descFont = fsCapped(12, 1);
+  const badgeFont = fsCapped(10, 1);
+  // Ширина текста в карточке. От неё зависит, сколько строк займёт описание
+  // при текущем размере шрифта, поэтому высоту карточки считаем заранее.
+  const textW = Math.max(80, contentWidth - artSize - 34);
+
+  const modes: { mode: PlayMode; title: string; desc: string; accent: string; badge: string | null }[] = [
+    {
+      mode: 'classic', title: 'Обычный',
+      desc: 'Первый, кто остался без фишек в руке, побеждает',
+      accent: '#FFD54F', badge: 'По умолчанию',
+    },
+    {
+      mode: 'quick', title: 'Быстрая до 50',
+      desc: 'Побеждает первый, кто набрал 50 очков',
+      accent: '#7FD1A0', badge: null,
+    },
+    {
+      mode: 'timed', title: 'На время 5:00',
+      desc: 'Побеждает тот, у кого больше очков за 5 минут',
+      accent: '#8FC2FF', badge: null,
+    },
+    {
+      mode: 'puzzle', title: 'Соло-раскладка',
+      desc: 'Выложите все фишки: стол придётся перестроить',
+      accent: '#C69CFF', badge: null,
+    },
+  ];
+  const cards = modes.map((m) => {
+    const titleH = Math.ceil(estimateWrappedTextHeight(t(m.title), textW, titleFont));
+    const descH = Math.max(
+      Math.ceil(descFont * 1.5),
+      Math.ceil(estimateWrappedTextHeight(t(m.desc), textW, descFont)),
+    );
+    const badgeH = m.badge ? Math.ceil(badgeFont * 1.6) : 0;
+    const textH = titleH + 3 + descH + (badgeH > 0 ? 3 + badgeH : 0);
+    const cardH = Math.max(artSize + 24, textH + 20);
+    return { ...m, titleH, descH, badgeH, cardH };
+  });
+  const cardsH = cards.reduce((sum, m) => sum + m.cardH, 0) + GAP * (cards.length - 1);
+  const needed = PAD * 2 + headH + GAP + cardsH + GAP + closeH;
+  // Панель подстраивается под карточки; на низком экране список скроллится.
+  const panelHeight = Math.min(vh - 20, needed);
+  const host = parent as import('@babylonjs/gui').Container;
+  const { overlay, close } = modalOverlay(host, 'modesOverlay', { zIndex: 830 });
+  const panel = softPanel({
+    bg: SKIN.panelDark, border: '#ffffff40', thickness: 2, corner: 16,
+    width: panelWidth, height: panelHeight,
+  });
+  overlay.addControl(panel.root);
+  const col = new StackPanel('modesCol');
+  col.isVertical = true;
+  col.spacing = GAP;
+  col.width = '100%';
+  col.height = '100%';
+  col.paddingLeft = px(14);
+  col.paddingRight = px(14);
+  col.paddingTop = px(PAD);
+  col.paddingBottom = px(PAD);
+  panel.root.addControl(col);
+  col.addControl(mkLabel(t('Выберите режим'), {
+    color: SKIN.gold, fontSize: headFont, width: contentWidth, height: headH,
+    align: 'left', hAlign: 'left', vAlign: 'center',
+  }));
+
+  const bodyH = Math.max(80, panelHeight - PAD * 2 - headH - GAP * 2 - closeH);
+  const scroll = new ScrollViewer('modesScroll');
+  scroll.thickness = 0;
+  scroll.barSize = 4;
+  scroll.width = '100%';
+  scroll.height = px(bodyH);
+  col.addControl(scroll);
+  enableSmoothScroll(scroll);
+  const list = new StackPanel('modesList');
+  list.isVertical = true;
+  list.spacing = GAP;
+  list.width = '100%';
+  scroll.addControl(list);
+
+  for (const m of cards) {
+    const box = softPanel({ bg: '#FFFFFF0A', border: '#ffffff22', thickness: 1, corner: 12, height: m.cardH });
+    box.root.width = '100%';
+    box.root.isPointerBlocker = true;
+    box.root.onPointerEnterObservable.add(() => {
+      box.fill.color = m.accent;
+      box.fill.thickness = 2;
+    });
+    box.root.onPointerOutObservable.add(() => {
+      box.fill.color = '#ffffff22';
+      box.fill.thickness = 1;
+    });
+    box.root.onPointerUpObservable.add(() => {
+      close();
+      onPick(m.mode);
+    });
+    list.addControl(box.root);
+
+    const art = modeArt(m.mode, artSize);
+    art.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    art.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+    art.left = px(12);
+    art.isHitTestVisible = false;
+    box.root.addControl(art);
+
+    const text = new StackPanel('modeText');
+    text.isVertical = true;
+    text.spacing = 3;
+    text.width = px(textW);
+    text.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    text.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+    text.left = px(artSize + 22);
+    text.isHitTestVisible = false;
+    box.root.addControl(text);
+
+    text.addControl(mkLabel(t(m.title), {
+      color: '#FFFFFF', fontSize: titleFont, width: textW,
+      height: m.titleH, align: 'left', hAlign: 'left', noWrap: false, vAlign: 'top',
+    }));
+    text.addControl(mkLabel(t(m.desc), {
+      color: '#ffffffA8', fontSize: descFont, width: textW, height: m.descH,
+      align: 'left', hAlign: 'left', vAlign: 'top', noWrap: false,
+    }));
+    if (m.badge) {
+      text.addControl(mkLabel(t(m.badge), {
+        color: m.accent, fontSize: badgeFont, width: textW,
+        height: m.badgeH, align: 'left', hAlign: 'left', vAlign: 'center',
+      }));
+    }
+  }
+
+  const closeBtn = mkButton(t('Отмена'), {
+    fontSize: fsCapped(15, 1), height: closeH, width: Math.min(180, contentWidth), theme: BUTTON_STYLE.deck,
+  });
+  closeBtn.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+  closeBtn.onPointerUpObservable.add(close);
+  col.addControl(closeBtn);
 }

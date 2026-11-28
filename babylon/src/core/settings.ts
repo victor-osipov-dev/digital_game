@@ -6,7 +6,8 @@ import { persistGet, persistSet } from './persist';
 const KEY = 'dg.settings';
 // Версия схемы настроек. v2: локальный дефолт — один человек против ботов,
 // а статистика разделена на локальную и сетевую (серверную).
-const SETTINGS_VERSION = 4;
+// v5: ежедневный вход и лучшая серия за ход.
+const SETTINGS_VERSION = 5;
 
 export type { LangCode };
 
@@ -59,6 +60,11 @@ export interface Settings {
   stat_games: number;
   stat_wins: number;
   stat_losses: number;
+  /** Лучшая серия фишек, выложенная игроком за один ход (для достижений). */
+  stat_best_run: number;
+  /** Ежедневный вход: дата последнего бонуса и серия дней. */
+  checkin_last: string;
+  checkin_streak: number;
   settings_version: number;
 }
 
@@ -73,7 +79,7 @@ function defaults(): Settings {
     sound: true,
     player_count: MIN_PLAYERS,
     require_30: false,
-    player_names: [t('Игрок %d', 1), t('Игрок %d', 2)],
+    player_names: [t('Вы'), t('Клара')],
     // По умолчанию один живой игрок против бота. Дополнительные места,
     // которые добавляет setPlayerCount, тоже становятся ботами.
     player_is_bot: [false, true],
@@ -98,6 +104,9 @@ function defaults(): Settings {
     stat_games: 0,
     stat_wins: 0,
     stat_losses: 0,
+    stat_best_run: 0,
+    checkin_last: '',
+    checkin_streak: 0,
     settings_version: SETTINGS_VERSION,
   };
 }
@@ -170,6 +179,9 @@ export function loadSettings(): Settings {
     stat_games: Math.max(0, Number(parsed.stat_games ?? 0)),
     stat_wins: Math.max(0, Number(parsed.stat_wins ?? 0)),
     stat_losses: Math.max(0, Number(parsed.stat_losses ?? 0)),
+    stat_best_run: Math.max(0, Number(parsed.stat_best_run ?? 0)),
+    checkin_last: typeof parsed.checkin_last === 'string' ? parsed.checkin_last : '',
+    checkin_streak: Math.max(0, Number(parsed.checkin_streak ?? 0)),
     settings_version: SETTINGS_VERSION,
   };
   cache = s;
@@ -205,10 +217,26 @@ export function saveSettings(patch: Partial<Settings>): Settings {
   return s;
 }
 
+// Имена новых мест за столом: не «Игрок 2», а живой персонаж. Порядок
+// фиксирован, поэтому при увеличении числа игроков имена не повторяются.
+const SEAT_NAMES = ['Тимофей', 'Клара', 'Аркадий', 'Макс', 'Лена'];
+
+function freshSeatName(index: number): string {
+  const s = cache!;
+  const used = new Set(s.player_names.map((name) => name.trim().toLowerCase()));
+  const pool = SEAT_NAMES.map((name) => t(name));
+  for (let i = 0; i < pool.length; i += 1) {
+    const candidate = pool[(index + i) % pool.length];
+    if (!used.has(candidate.toLowerCase())) return candidate;
+  }
+  return pool[index % pool.length];
+}
+
 function fixup(): void {
   const s = cache!;
   while (s.player_names.length < s.player_count) {
-    s.player_names.push(t('Игрок %d', s.player_names.length + 1));
+    const index = s.player_names.length;
+    s.player_names.push(index === 0 ? t('Игрок %d', 1) : freshSeatName(index));
   }
   while (s.player_names.length > s.player_count) s.player_names.pop();
   // Новые места (после увеличения числа игроков) — по умолчанию боты,

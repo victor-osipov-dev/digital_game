@@ -61,20 +61,41 @@ export interface AchievementDef {  id: string;
 }
 
 export const ACHIEVEMENTS: AchievementDef[] = [
-  { id: 'first_win', title: 'Первая победа', desc: 'Выиграйте первую партию', reward: 30, icon: '★' },
-  { id: 'wins_5', title: 'Пять побед', desc: 'Выиграйте 5 партий', reward: 60, icon: '✦' },
-  { id: 'wins_20', title: 'Двадцать побед', desc: 'Выиграйте 20 партий', reward: 150, icon: '✧' },
-  { id: 'games_10', title: 'За столом', desc: 'Сыграйте 10 партий', reward: 40, icon: '◉' },
-  { id: 'joker_use', title: 'Джокер в деле', desc: 'Выложите джокер в готовую комбинацию', reward: 25, icon: '✱' },
-  { id: 'combo_5', title: 'Комбо', desc: 'Выложите 5 фишек за один ход', reward: 40, icon: '≡' },
-  { id: 'fast_win', title: 'Скоростной', desc: 'Победите быстрее чем за 5 минут', reward: 70, icon: '➤' },
-  { id: 'four_players', title: 'Большая компания', desc: 'Сыграйте вчетвером или больше', reward: 30, icon: '❖' },
-  { id: 'daily_play', title: 'Ежедневный вызов', desc: 'Сыграйте ежедневную партию', reward: 30, icon: '☀' },
+  { id: 'first_win', title: 'Первый нейрон', desc: 'Выиграйте первую партию', reward: 30, icon: '★' },
+  { id: 'wins_5', title: 'Синапсы крепнут', desc: 'Выиграйте 5 партий', reward: 60, icon: '✦' },
+  { id: 'wins_20', title: 'Ясный ум', desc: 'Выиграйте 20 партий', reward: 150, icon: '✧' },
+  { id: 'games_10', title: 'Тренировка памяти', desc: 'Сыграйте 10 партий', reward: 40, icon: '◉' },
+  { id: 'joker_use', title: 'Гибкое мышление', desc: 'Выложите джокер в готовую комбинацию', reward: 25, icon: '✱' },
+  { id: 'combo_5', title: 'Мозговой штурм', desc: 'Выложите 5 фишек за один ход', reward: 40, icon: '≡' },
+  { id: 'fast_win', title: 'Скорость реакции', desc: 'Победите быстрее чем за 5 минут', reward: 70, icon: '➤' },
+  { id: 'four_players', title: 'Социальный интеллект', desc: 'Сыграйте вчетвером или больше', reward: 30, icon: '❖' },
+  { id: 'daily_play', title: 'Зарядка для ума', desc: 'Сыграйте ежедневную партию', reward: 30, icon: '☀' },
   { id: 'no_hint_win', title: 'Своим умом', desc: 'Победите, не используя подсказки', reward: 80, icon: '✎' },
-  { id: 'quick_win', title: 'Быстрая победа', desc: 'Выиграйте партию до 50 очков', reward: 60, icon: '⚡' },
-  { id: 'collector', title: 'Коллекционер', desc: 'Откройте четыре оформления', reward: 100, icon: '◈' },
-  { id: 'rich_1000', title: 'Богач', desc: 'Накопите 1000 монет', reward: 100, icon: '●' },
+  { id: 'quick_win', title: 'Мгновенный расчёт', desc: 'Выиграйте партию до 50 очков', reward: 60, icon: '⚡' },
+  { id: 'collector', title: 'Эстет стола', desc: 'Откройте четыре оформления', reward: 100, icon: '◈' },
+  { id: 'rich_1000', title: 'Копилка нейронов', desc: 'Накопите 1000 монет', reward: 100, icon: '●' },
+  { id: 'run_8', title: 'Длинная цепь', desc: 'Выложите серию из 8 и более фишек', reward: 70, icon: '⛓' },
+  { id: 'streak_3', title: 'Нейроразминка', desc: 'Заходите в игру 3 дня подряд', reward: 40, icon: '☼' },
+  { id: 'streak_7', title: 'Неделя для мозга', desc: '7 дней подряд — привычка тренировать память', reward: 120, icon: '✺' },
+  { id: 'puzzle_solve', title: 'Соло-разминка', desc: 'Соберите все фишки в соло-раскладке', reward: 80, icon: '◍' },
 ];
+
+/** Прогресс достижения по сохранённой статистике (для полоски в списке). */
+export function achievementProgress(id: string): { have: number; need: number } | null {
+  const s = loadSettings();
+  switch (id) {
+    case 'first_win': return { have: Math.min(1, s.stat_wins), need: 1 };
+    case 'wins_5': return { have: Math.min(5, s.stat_wins), need: 5 };
+    case 'wins_20': return { have: Math.min(20, s.stat_wins), need: 20 };
+    case 'games_10': return { have: Math.min(10, s.stat_games), need: 10 };
+    case 'rich_1000': return { have: Math.min(1000, s.coins), need: 1000 };
+    case 'collector': return { have: Math.min(4, s.owned_items.length), need: 4 };
+    case 'streak_3': return { have: Math.min(3, s.checkin_streak), need: 3 };
+    case 'streak_7': return { have: Math.min(7, s.checkin_streak), need: 7 };
+    case 'run_8': return { have: Math.min(8, s.stat_best_run), need: 8 };
+    default: return null;
+  }
+}
 
 export function achievementById(id: string): AchievementDef | null {
   return ACHIEVEMENTS.find((a) => a.id === id) ?? null;
@@ -159,6 +180,69 @@ export function claimDailyReward(): number {
   s.coins += bonus;
   saveSettings({});
   return bonus;
+}
+
+// ===== ежедневный вход (чек-ин) =====
+export const CHECKIN_DAYS = 7;
+
+/** Бонус за день цикла 1…7: 20, 30, 40, 50, 60, 70, 80. */
+export function checkinBonus(day: number): number {
+  return 20 + (Math.max(1, Math.min(CHECKIN_DAYS, day)) - 1) * 10;
+}
+
+export function checkinCycleDay(streak: number): number {
+  return ((Math.max(0, streak) - 1) % CHECKIN_DAYS) + 1;
+}
+
+export interface CheckinState {
+  available: boolean;
+  /** Всего дней подряд (включая сегодняшний, если он уже получен). */
+  streak: number;
+  /** Сколько дней текущего цикла уже закрыто (0…7). */
+  completed: number;
+  /** Номер сегодняшнего дня цикла (1…7). */
+  todayDay: number;
+  /** Сколько дадут за сегодняшний вход. */
+  bonus: number;
+}
+
+export function checkinState(): CheckinState {
+  const s = loadSettings();
+  const available = s.checkin_last !== dayKey();
+  const continued = s.checkin_last === yesterdayKey();
+  const completed = available
+    ? (continued ? s.checkin_streak % CHECKIN_DAYS : 0)
+    : checkinCycleDay(s.checkin_streak);
+  const day = available ? Math.min(CHECKIN_DAYS, completed + 1) : checkinCycleDay(s.checkin_streak);
+  return {
+    available,
+    streak: s.checkin_streak,
+    completed,
+    todayDay: day,
+    bonus: checkinBonus(day),
+  };
+}
+
+/** Забрать ежедневный бонус. Возвращает награду и новые достижения. */
+export function claimCheckin(): { coins: number; streak: number; unlocked: AchievementDef[] } | null {
+  const s = loadSettings();
+  const today = dayKey();
+  if (s.checkin_last === today) return null;
+  const streak = s.checkin_last === yesterdayKey() ? s.checkin_streak + 1 : 1;
+  const bonus = checkinBonus(checkinCycleDay(streak));
+  s.checkin_last = today;
+  s.checkin_streak = streak;
+  s.coins += bonus;
+  saveSettings({});
+  const unlocked: AchievementDef[] = [];
+  const grant = (id: string): void => {
+    const def = unlockAchievement(id);
+    if (def) unlocked.push(def);
+  };
+  if (streak >= 3) grant('streak_3');
+  if (streak >= 7) grant('streak_7');
+  if (loadSettings().coins >= 1000) grant('rich_1000');
+  return { coins: bonus, streak, unlocked };
 }
 
 /** Сид ежедневного расклада: одинаковый у всех игроков в этот день. */
@@ -259,12 +343,44 @@ export async function restorePurchases(): Promise<void> {
   }
 }
 
+/**
+ * Выдать достижения, которые можно подтвердить уже сохранённой статистикой.
+ * Нужно игрокам, накопившим партии до появления достижений: иначе награда
+ * выдавалась бы только после следующей завершённой партии.
+ * Проверяем только те условия, которые реально хранятся в настройках.
+ */
+export function syncAchievements(): AchievementDef[] {
+  const unlocked: AchievementDef[] = [];
+  const grant = (id: string): void => {
+    const def = unlockAchievement(id);
+    if (def) unlocked.push(def);
+  };
+  // Победы и число партий.
+  const wins = loadSettings().stat_wins;
+  if (wins >= 1) grant('first_win');
+  if (wins >= 5) grant('wins_5');
+  if (wins >= 20) grant('wins_20');
+  if (loadSettings().stat_games >= 10) grant('games_10');
+  // Ежедневные партии: дата последней награды сохраняется.
+  const s = loadSettings();
+  if (s.daily_last !== '' || s.daily_streak > 0) grant('daily_play');
+  // Ежедневные входы и лучшая серия.
+  if (loadSettings().checkin_streak >= 3) grant('streak_3');
+  if (loadSettings().checkin_streak >= 7) grant('streak_7');
+  if (loadSettings().stat_best_run >= 8) grant('run_8');
+  // Покупки в магазине.
+  if (loadSettings().owned_items.length >= 4) grant('collector');
+  // Богач — после остальных наград: они тоже добавляют монеты.
+  if (loadSettings().coins >= 1000) grant('rich_1000');
+  return unlocked;
+}
+
 // ===== итоги партии =====
 export interface GameEndInfo {
   won: boolean;
   players: number;
   seconds: number;
-  mode: 'classic' | 'quick' | 'timed' | 'daily';
+  mode: 'classic' | 'quick' | 'timed' | 'daily' | 'puzzle';
   usedHint: boolean;
   usedJoker: boolean;
   maxTurnTiles: number;
@@ -301,6 +417,7 @@ export function onGameEnd(info: GameEndInfo): GameEndReward {
   if (info.won && !info.usedHint) grant('no_hint_win');
   if (info.won && (info.mode === 'quick' || info.mode === 'timed')) grant('quick_win');
   if (info.mode === 'daily') grant('daily_play');
+  if (info.mode === 'puzzle' && info.won) grant('puzzle_solve');
   if (s.coins >= 1000) grant('rich_1000');
   return { coins: base + modeBonus, unlocked };
 }

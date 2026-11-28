@@ -7,7 +7,7 @@ import type { GameView } from '../net/protocol';
 export const DEAL_SIZE = 14;
 export const MAX_CHECKPOINTS = 3;
 
-export type MatchMode = 'classic' | 'quick' | 'timed' | 'daily';
+export type MatchMode = 'classic' | 'quick' | 'timed' | 'daily' | 'puzzle';
 
 export class GsPlayer {
   name = '';
@@ -187,6 +187,49 @@ export class GameState {
     for (const r of s.table) maxId = Math.max(maxId, r.id);
     s.reserveRowIds(maxId);
     s.scores = new Array(view.players.length).fill(0);
+    s.takeTurnSnapshot();
+    return s;
+  }
+
+  /**
+   * Соло-раскладка: один игрок, стол из трёх длинных серий с «дырами»,
+   * в руке ровно те 14 фишек, которых не хватает. Решение существует по
+   * построению: нужно вернуть фишки в свои места (или перестроить стол).
+   * Колода пуста — добрать нельзя, только думать.
+   */
+  static createPuzzle(): GameState {
+    const s = new GameState();
+    s.mode = 'puzzle';
+    s.require_30 = false;
+    s.first_turn = false;
+    s.players.push(new GsPlayer(t('Вы')));
+    s.deck.tiles = [];
+    const source = new Deck();
+    const pick = (color: number, value: number): TileFace => {
+      const index = source.tiles.findIndex((tile) => tile.color === color && tile.value === value);
+      return source.tiles.splice(index, 1)[0];
+    };
+    const colors = [0, 1, 2];
+    const rows: GsRow[] = [];
+    for (const color of colors) {
+      const row = new GsRow(s._next_row_id);
+      s._next_row_id += 1;
+      for (let value = 1; value <= 8; value += 1) row.tiles.push(pick(color, value));
+      rows.push(row);
+    }
+    // 5 + 5 + 4 фишки уходят в руку; в каждом ряду остаётся минимум 3.
+    const take = [5, 5, 4];
+    const hand: TileFace[] = [];
+    rows.forEach((row, index) => {
+      for (let k = 0; k < take[index]; k += 1) {
+        const pos = Math.floor(Math.random() * row.tiles.length);
+        hand.push(row.tiles.splice(pos, 1)[0]);
+      }
+    });
+    s.table = rows;
+    s.players[0].hand = hand;
+    sortTiles(s.players[0].hand);
+    s.scores = [0];
     s.takeTurnSnapshot();
     return s;
   }

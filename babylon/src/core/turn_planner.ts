@@ -10,12 +10,20 @@ export const LEVEL_IMPOSSIBLE = 3;
 const BUDGET_MEDIUM = 8000;
 const BUDGET_HARD = 40000;
 // Жёсткий лимит ограничивает задержку одного хода и в браузере, и на сервере.
-const PLANNER_TIME_MS = [16, 20, 26, 80];
+// На телефоне 16–26 мс не хватало даже на перебор кандидатов, бот «не успевал»
+// найти ход и бесконечно добирал фишки. Лимиты заметно выше, а страховочный
+// поиск (ensureMove) работает вообще без них.
+const PLANNER_TIME_MS = [60, 90, 130, 200];
 
 const CAP_EASY = 60;
 const CAP_MEDIUM = 80;
 const CAP_HARD = 400;
 const CAP_IMPOSSIBLE = 900;
+
+// Сколько фишек бот вправе выложить за один ход. Сложность влияет не только
+// на скорость перебора, но и на длину комбинаций: новичок выкладывает одну
+// короткую дорожку, «невозможный» — сколько найдёт.
+const MAX_LAY_TILES = [4, 6, 9, 13];
 
 const BONUS_STEAL = 6;
 const BONUS_BRIDGE = 12;
@@ -144,8 +152,12 @@ export class TurnPlanner {
     // Если общий перебор упёрся в лимит, не объявляем ход невозможным,
     // когда генератор уже нашёл заведомо допустимую выкладку. Это особенно
     // важно при большой руке: иначе бот мог брать фишки, хотя ход есть.
+    // Лимит фишек уровня соблюдаем и здесь: иначе «лёгкий» бот выкладывал бы
+    // всё, что успел найти до таймаута.
+    const cap = this.layTileCap();
     const fallback = this._candidates.find((c) =>
-      !this._need30 || this._base_points + c.hand_points >= OPENING_POINTS);
+      c.hand_ids.length <= cap
+      && (!this._need30 || this._base_points + c.hand_points >= OPENING_POINTS));
     if (fallback) {
       return {
         action: 'place',
@@ -154,6 +166,11 @@ export class TurnPlanner {
         tiles: [...fallback.hand_ids],
       };
     }
+    // Страховка: перебор мог не успеть (таймаут) или отбросить все варианты
+    // по очкам. Ищем хотя бы одну законную выкладку из руки без ограничений
+    // по времени — бот обязан ходить, а не копить фишки.
+    const safeMove = this.ensureMove();
+    if (safeMove) return safeMove;
     if (state.canDraw()) return { action: 'draw', ops: [], points: 0, tiles: [] };
     if (state.canSkip()) return { action: 'skip', ops: [], points: 0, tiles: [] };
     return { ...END_PLAN };
@@ -198,15 +215,107 @@ export class TurnPlanner {
   }
 
   randomSingle(): PlanResult | null {
+    const cap = this.layTileCap();
     const pool: Candidate[] = [];
     for (const c of this._candidates) {
       if (c.score <= 0) continue;
+      if (c.hand_ids.length > cap) continue;
       if (this._need30 && this._base_points + c.hand_points < OPENING_POINTS) continue;
       pool.push(c);
     }
     if (pool.length === 0) return null;
     const c = pool[Math.floor(Math.random() * pool.length)];
     return { action: 'place', ops: [...c.ops], points: c.points, tiles: [...c.hand_ids] };
+  }
+
+  /** Предел фишек за ход для текущего уровня сложности. */
+  layTileCap(): number {
+    return MAX_LAY_TILES[this._level] ?? MAX_VALUE;
+  }
+
+  /**
+   * Гарантированный законный ход: ищем лучший ряд, который можно собрать
+   * целиком из руки (серия одного цвета или набор разных цветов, с джокерами).
+   * Не зависит от таймера и от очковых эвристик, поэтому бот всегда сможет
+   * выложить хотя бы одну комбинацию, если она у него есть.
+   */
+  ensureMove(): PlanResult | null {
+    if (this._state.finished) return null;
+    const hand = this._state.hand();
+    if (hand.length < MIN_TILES) return null;
+    const row = this.bestRowFromHand(hand, this._need30 ? OPENING_POINTS - this._base_points : 0);
+    if (row === null) return null;
+    const ref = this.nextNRef();
+    const ops = row.map((tile) => ({ op: 'place', tile: tile.id, to: ref, index: 99 }));
+    return { action: 'place', ops, points: rowPoints(row), tiles: idsOf(row) };
+  }
+
+  /**
+   * Лучший по очкам ряд из руки в пределах лимита уровня. Перебираем
+   * структурно (окна серий по цветам и наборы по значениям), а не все
+   * подмножества: это быстро даже при большой руке и всегда находит ход,
+   * если он есть.
+   */
+  bestRowFromHand(hand: TileFace[], minPoints: number): TileFace[] | null {
+    const cap = Math.max(MIN_TILES, this.layTileCap());
+    const jokers = hand.filter((t) => t.is_joker);
+    const normal = hand.filter((t) => !t.is_joker);
+    let best: TileFace[] | null = null;
+    let bestPoints = -1;
+    const consider = (row: TileFace[]): void => {
+      if (row.length < MIN_TILES || row.length > cap) return;
+      if (!validateRow(row).ok) return;
+      const pts = rowPoints(row);
+      if (pts < minPoints || pts <= bestPoints) return;
+      bestPoints = pts;
+      best = row;
+    };
+    const colors = [...new Set(normal.map((t) => t.color))];
+    // Серии: окно подряд идущих чисел одного цвета; пропуски закрываем джокерами.
+    for (const color of colors) {
+      const byValue = new Map<number, TileFace>();
+      for (const tile of normal) {
+        if (tile.color === color && !byValue.has(tile.value)) byValue.set(tile.value, tile);
+      }
+      for (let start = MIN_VALUE; start <= MAX_VALUE; start += 1) {
+        const row: TileFace[] = [];
+        let usedJokers = 0;
+        for (let value = start; value <= MAX_VALUE; value += 1) {
+          const tile = byValue.get(value);
+          if (tile) {
+            row.push(tile);
+          } else {
+            const joker = jokers[usedJokers];
+            if (!joker) break;
+            usedJokers += 1;
+            row.push(joker);
+          }
+          if (row.length >= MIN_TILES) consider([...row]);
+          if (row.length >= cap) break;
+        }
+      }
+    }
+    // Наборы: одно значение, разные цвета; недостающие цвета — джокерами.
+    for (let value = MIN_VALUE; value <= MAX_VALUE; value += 1) {
+      const picks: TileFace[] = [];
+      const usedColors = new Set<number>();
+      for (const tile of normal) {
+        if (tile.value !== value || usedColors.has(tile.color)) continue;
+        usedColors.add(tile.color);
+        picks.push(tile);
+        if (picks.length >= MAX_SET) break;
+      }
+      let jokerIdx = 0;
+      while (picks.length < MAX_SET && jokerIdx < jokers.length) {
+        picks.push(jokers[jokerIdx]);
+        jokerIdx += 1;
+      }
+      // Все подмножества цветов: набор из 3 может быть выгоднее 4 при лимите.
+      for (let size = MIN_TILES; size <= picks.length; size += 1) {
+        consider(picks.slice(0, size));
+      }
+    }
+    return best;
   }
 
   buildCandidates(): void {
@@ -976,6 +1085,11 @@ export class TurnPlanner {
     if (chosen.length === 0) return;
     const wins = usedHand.size === this._hand_ids.size;
     if (this._need30 && this._base_points + handPoints < OPENING_POINTS) return;
+    // Сложность ограничивает, сколько фишек бот выкладывает за ход.
+    // Победный ход не ограничиваем: иначе бот не смог бы закончить партию.
+    let tilesLaid = 0;
+    for (const c of chosen) tilesLaid += c.hand_ids.length;
+    if (!wins && tilesLaid > this.layTileCap()) return;
     if (!wins && curScore <= 0) return;
     const bestScore = this._best && this._best.score !== undefined ? this._best.score : null;
     if (bestScore !== null && curScore <= bestScore && !wins) return;

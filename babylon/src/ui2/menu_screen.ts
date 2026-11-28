@@ -1,43 +1,26 @@
-import { Container, Control, Image as GuiImage, InputText, Rectangle, ScrollViewer, StackPanel } from '@babylonjs/gui';
+﻿import { Container, Control, Image as GuiImage, Rectangle, ScrollViewer, StackPanel } from '@babylonjs/gui';
 import { appName, t } from '../core/lang';
-import {
-  BOT_LEVEL_NAMES,
-  fs,
-  loadSettings,
-  MAX_PLAYERS,
-  MAX_NAME_LEN,
-  MIN_PLAYERS,
-  saveSettings,
-  setPlayerCount,
-  setPlayerName,
-  setBot,
-  TEXT_SCALE_NAMES,
-  TILE_SIZE_NAMES,
-} from '../core/settings';
+import { fs, fsCapped, loadSettings } from '../core/settings';
 import {
   BUTTON_STYLE,
-  checkboxRow,
-  dropdownRow,
   enableSmoothScroll,
   estimateWrappedTextHeight,
-  focusInputOnTap,
-  gapControl,
   hrow,
   mkButton,
   mkLabel,
-  onInputBlur,
-  popupList,
-  setInputMaxLength,
   SKIN,
   softPanel,
   wrapTextToWidth,
-  DropdownCtx,
   px,
 } from './uiskin';
-import { openAchievementsOverlay, openRulesOverlay, openShopOverlay, openStatsOverlay } from './overlays';
+import { openAchievementsOverlay, openModesOverlay, openRulesOverlay, openShopOverlay, openStatsOverlay } from './overlays';
+import { openGameSetupOverlay } from './game_setup';
 import { platform } from '../platform';
-import { applySoundPreference } from '../core/sound';
+import { play } from '../core/audio';
 import {
+  CHECKIN_DAYS,
+  checkinState,
+  claimCheckin,
   coins,
   dailyRewardedToday,
   rankFor,
@@ -55,9 +38,6 @@ function px1(n: number): string {
 
 export class MenuScreen {
   private popups!: Container;
-  private ctx!: DropdownCtx;
-  private settingsOpen = false;
-  private menuScroll: ScrollViewer | null = null;
 
   constructor(private host: MenuHost) {}
 
@@ -65,9 +45,9 @@ export class MenuScreen {
     const vw = viewWidth();
     const vh = viewHeight();
     const avail = Math.max(200, Math.min(vw - 28, 470));
-    // Колонка на 16px уже окна скролла: вертикальный скроллбар съедает
-    // ширину клиентской области, и иначе включался горизонтальный.
-    const colW = Math.max(184, avail - 16);
+    // Тонкая полоса прокрутки занимает 4 px вместо 20: освободившееся место
+    // отдаём колонке, чтобы элементы не выглядели сдвинутыми влево.
+    const colW = Math.max(184, avail - 8);
     const S = loadSettings();
 
     const bg = new GuiImage('bg', roomTexture(vw, vh));
@@ -89,13 +69,15 @@ export class MenuScreen {
     scroll.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
     scroll.width = px(avail + 12);
     scroll.height = px1(Math.floor(vh));
+    // Тонкий скроллбар: толстая полоса по умолчанию занимала заметную часть
+    // ширины и оставляла пустую полосу справа.
+    scroll.barSize = 4;
     // Горизонтального скролла здесь не должно быть: колонка жёстко
     // ограничена avail, а хвост скроллбара прячем.
     (scroll as unknown as { _horizontalBar: Control })._horizontalBar.isVisible = false;
     (scroll as unknown as { _forceHorizontalBar: boolean })._forceHorizontalBar = false;
     center.addControl(scroll);
     enableSmoothScroll(scroll);
-    this.menuScroll = scroll;
 
     const col = new StackPanel('menuBox');
     col.isVertical = true;
@@ -111,9 +93,6 @@ export class MenuScreen {
     this.popups.isPointerBlocker = false;
     this.popups.isHitTestVisible = false;
     root.addControl(this.popups);
-    this.ctx = {
-      openFor: (a, items, cur, cb, w) => popupList(this.popups, a, items, cur, cb, fs(12), w),
-    };
 
     // pending_room: «вы всё ещё в комнате» с возвратом/отказом
     const pending = this.host.pendingRoom();
@@ -124,42 +103,33 @@ export class MenuScreen {
 
     this.addHero(col, colW);
     this.addProfileCard(col, colW);
+    this.addCheckinCard(col, colW);
 
     // ===== главные действия =====
-    const startBtn = mkButton(t('Играть'), { fontSize: fs(22), height: 60, theme: BUTTON_STYLE.green });
+    const startBtn = mkButton(t('Играть'), { fontSize: fsCapped(22, 1), height: 60, theme: BUTTON_STYLE.green });
     startBtn.width = '100%';
     startBtn.onPointerUpObservable.clear();
-    startBtn.onPointerUpObservable.add(() => this.host.onStart('classic'));
+    // Режим выбирается большой карточкой с наглядным примером партии.
+    startBtn.onPointerUpObservable.add(() => {
+      play('click');
+      openModesOverlay(this.popups, (mode) => this.host.onStart(mode));
+    });
     col.addControl(startBtn);
 
     if (platform.supportsOnline) {
-      const onlineBtn = mkButton(t('Играть с другими'), { fontSize: fs(18), height: 52, theme: BUTTON_STYLE.blueOnline });
+      const onlineBtn = mkButton(t('Играть с другими'), { fontSize: fsCapped(18, 1), height: 52, theme: BUTTON_STYLE.blueOnline });
       onlineBtn.width = '100%';
       onlineBtn.onPointerUpObservable.clear();
       onlineBtn.onPointerUpObservable.add(() => this.host.onOnline());
       col.addControl(onlineBtn);
     }
 
-    // ===== режимы =====
-    const modes = hrow(8);
-    modes.width = '100%';
-    modes.height = px(48);
-    const modeW = Math.floor((colW - 8) / 2);
-    const quick = mkButton(t('Быстрая до 50'), { fontSize: fs(14), height: 48, width: modeW, theme: BUTTON_STYLE.deck });
-    quick.onPointerUpObservable.clear();
-    quick.onPointerUpObservable.add(() => this.host.onStart('quick'));
-    const timed = mkButton(t('На время 5:00'), { fontSize: fs(14), height: 48, width: modeW, theme: BUTTON_STYLE.deck });
-    timed.onPointerUpObservable.clear();
-    timed.onPointerUpObservable.add(() => this.host.onStart('timed'));
-    modes.addControl(quick);
-    modes.addControl(timed);
-    col.addControl(modes);
-
     // ===== мета =====
+    const modeW = Math.floor((colW - 8) / 2);
     const meta1 = hrow(8);
     meta1.width = '100%';
     meta1.height = px(52);
-    const daily = mkButton(t('Ежедневная'), { fontSize: fs(14), height: 52, width: modeW, theme: BUTTON_STYLE.deck });
+    const daily = mkButton(t('Ежедневная'), { fontSize: fsCapped(14, 1), height: 52, width: modeW, theme: BUTTON_STYLE.deck });
     daily.onPointerUpObservable.clear();
     daily.onPointerUpObservable.add(() => this.host.onStart('daily'));
     if (!dailyRewardedToday()) {
@@ -178,7 +148,7 @@ export class MenuScreen {
       dot.isPointerBlocker = false;
       daily.addControl(dot);
     }
-    const shop = mkButton(t('Магазин'), { fontSize: fs(14), height: 52, width: modeW, theme: BUTTON_STYLE.deck });
+    const shop = mkButton(t('Магазин'), { fontSize: fsCapped(14, 1), height: 52, width: modeW, theme: BUTTON_STYLE.deck });
     shop.onPointerUpObservable.clear();
     shop.onPointerUpObservable.add(() => this.openShop());
     meta1.addControl(daily);
@@ -189,12 +159,13 @@ export class MenuScreen {
     meta2.width = '100%';
     meta2.height = px(52);
     const unlocked = ACHIEVEMENTS.filter((a) => S.achievements.includes(a.id)).length;
-    const ach = mkButton(t('Достижения %d/%d', unlocked, ACHIEVEMENTS.length), {
-      fontSize: fs(14), height: 52, width: modeW, theme: BUTTON_STYLE.deck,
+    const ach = mkButton(t('Достижения'), {
+      fontSize: fsCapped(14, 1), height: 52, width: modeW, theme: BUTTON_STYLE.deck,
     });
+    void unlocked;
     ach.onPointerUpObservable.clear();
     ach.onPointerUpObservable.add(() => this.openAchievements());
-    const stats = mkButton(t('Статистика'), { fontSize: fs(14), height: 52, width: modeW, theme: BUTTON_STYLE.deck });
+    const stats = mkButton(t('Статистика'), { fontSize: fsCapped(14, 1), height: 52, width: modeW, theme: BUTTON_STYLE.deck });
     stats.onPointerUpObservable.clear();
     stats.onPointerUpObservable.add(() => this.openStats());
     meta2.addControl(ach);
@@ -205,36 +176,23 @@ export class MenuScreen {
     bottom.width = '100%';
     bottom.height = px(50);
     const rulesBtn = mkButton(t('Как играть'), {
-      fontSize: fs(14), height: 50, width: modeW,
+      fontSize: fsCapped(14, 1), height: 50, width: modeW,
       theme: { bg: '#31363F', hover: '#3A404A', press: '#262B33' },
     });
     rulesBtn.onPointerUpObservable.clear();
     rulesBtn.onPointerUpObservable.add(() => this.openHelp());
-    const settings = mkButton(t(this.settingsOpen ? 'Скрыть настройки' : 'Настройки партии'), {
-      fontSize: fs(14), height: 50, width: modeW,
-      theme: this.settingsOpen
-        ? { bg: '#5A4A1E', hover: '#6E5A25', press: '#463A17', border: '#FFD54F66' }
-        : { bg: '#31363F', hover: '#3A404A', press: '#262B33' },
+    const settings = mkButton(t('Настройки'), {
+      fontSize: fsCapped(14, 1), height: 50, width: modeW,
+      theme: { bg: '#31363F', hover: '#3A404A', press: '#262B33' },
     });
     settings.onPointerUpObservable.clear();
     settings.onPointerUpObservable.add(() => {
-      this.settingsOpen = !this.settingsOpen;
-      this.host.rebuild();
-      if (this.settingsOpen) {
-        window.setTimeout(() => {
-          try {
-            if (this.menuScroll) this.menuScroll.verticalBar.value = 1;
-          } catch {
-            /* скролл ещё не готов */
-          }
-        }, 60);
-      }
+      play('click');
+      openGameSetupOverlay(this.popups, () => this.host.rebuild());
     });
     bottom.addControl(rulesBtn);
     bottom.addControl(settings);
     col.addControl(bottom);
-
-    if (this.settingsOpen) this.buildSettings(col, colW, S);
   }
 
   // ===== шапка: три фишки веером, название =====
@@ -293,7 +251,19 @@ export class MenuScreen {
   private addProfileCard(col: StackPanel, colW: number): void {
     const S = loadSettings();
     const rank = rankFor(S.stat_wins);
-    const cardH = 104;
+    // Размеры считаем от кегля: при крупном тексте прежние фиксированные
+    // 104 px обрезали звание и монеты.
+    const nameFont = fsCapped(16, 0);
+    const winsFont = fsCapped(12, 0);
+    const nextFont = fsCapped(10, 0);
+    const coinFont = fsCapped(18, 0);
+    const nameH = Math.ceil(nameFont * 1.45);
+    const winsH = Math.ceil(winsFont * 1.45);
+    const nextH = Math.ceil(nextFont * 1.45);
+    const barH = 8;
+    const contentH = nameH + 3 + winsH + 6 + barH + 5 + nextH;
+    const cardH = Math.max(104, contentH + 16);
+    const top0 = Math.round((cardH - contentH) / 2);
     const box = softPanel({ bg: '#FFFFFF0D', border: '#FFD54F55', thickness: 1, corner: 12, height: cardH });
     box.root.width = '100%';
     col.addControl(box.root);
@@ -311,157 +281,226 @@ export class MenuScreen {
     av.isHitTestVisible = false;
     inner.addControl(av);
 
+    const textW = Math.max(90, colW - 64 - 92);
     const nameLab = mkLabel(t('Звание: %s', rank.name), {
-      fontSize: fs(16), color: '#FFE9B0', width: colW - 160, height: 24,
+      fontSize: nameFont, color: '#FFE9B0', width: textW, height: nameH,
       align: 'left', hAlign: 'left', vAlign: 'top', noWrap: true,
     });
-    nameLab.left = px(68);
-    nameLab.top = px(6);
+    nameLab.left = px(64);
+    nameLab.top = px(top0);
     nameLab.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
     inner.addControl(nameLab);
 
     const winsLab = mkLabel(t('Побед: %d · за неделю: %d', S.stat_wins, weekWins()), {
-      fontSize: fs(12), color: '#ffffff9C', width: colW - 160, height: 20,
+      fontSize: winsFont, color: '#ffffff9C', width: Math.max(90, colW - 76), height: winsH,
       align: 'left', hAlign: 'left', vAlign: 'top', noWrap: true,
     });
-    winsLab.left = px(68);
-    winsLab.top = px(32);
+    winsLab.left = px(64);
+    winsLab.top = px(top0 + nameH + 3);
     winsLab.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
     inner.addControl(winsLab);
 
     // Полоса прогресса до следующего звания.
-    const barW = Math.max(80, colW - 194);
+    const barTop = top0 + nameH + 3 + winsH + 6;
+    const barW = Math.max(80, colW - 64 - 24);
     const barBg = new Rectangle('rankBarBg');
     barBg.width = px(barW);
-    barBg.height = px(8);
+    barBg.height = px(barH);
     barBg.cornerRadius = 4;
     barBg.thickness = 0;
     barBg.background = '#FFFFFF1F';
     barBg.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
     barBg.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
     barBg.left = px(68);
-    barBg.top = px(58);
+    barBg.top = px(barTop);
     inner.addControl(barBg);
     const barFill = new Rectangle('rankBarFill');
     barFill.width = px(Math.max(4, Math.round(barW * rank.progress)));
-    barFill.height = px(8);
+    barFill.height = px(barH);
     barFill.cornerRadius = 4;
     barFill.thickness = 0;
     barFill.background = rank.isMax ? '#9BE7A5' : '#FFD54F';
     barFill.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
     barFill.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
     barFill.left = px(68);
-    barFill.top = px(58);
+    barFill.top = px(barTop);
     inner.addControl(barFill);
 
     const nextText = rank.isMax
       ? t('Максимальное звание')
       : t('До «%s»: %d', rankFor(rank.nextAt).name, Math.max(0, rank.nextAt - S.stat_wins));
     const nextLab = mkLabel(nextText, {
-      fontSize: fs(10), color: '#ffffff70', width: barW, height: 16,
+      fontSize: nextFont, color: '#ffffff70', width: barW, height: nextH,
       align: 'left', hAlign: 'left', vAlign: 'top', noWrap: true,
     });
     nextLab.left = px(68);
-    nextLab.top = px(70);
+    nextLab.top = px(barTop + barH + 5);
     nextLab.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
     inner.addControl(nextLab);
 
-    const coinIcon = mkLabel('●', { fontSize: fs(18), color: '#FFD54F', width: 16, height: 26 });
+    const coinH = Math.ceil(coinFont * 1.45);
+    const coinIcon = mkLabel('●', { fontSize: coinFont, color: '#FFD54F', width: 18, height: coinH });
     coinIcon.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
     coinIcon.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
-    coinIcon.left = px(-50);
-    coinIcon.top = px(8);
+    coinIcon.left = px(-52);
+    coinIcon.top = px(top0);
     inner.addControl(coinIcon);
     const coinLab = mkLabel(String(coins()), {
-      fontSize: fs(18), color: '#FFE9B0', width: 46, height: 26,
+      fontSize: coinFont, color: '#FFE9B0', width: 48, height: coinH,
       align: 'right', hAlign: 'right', noWrap: true,
     });
     coinLab.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
     coinLab.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
-    coinLab.top = px(8);
+    coinLab.top = px(top0);
     inner.addControl(coinLab);
   }
 
-  // ===== блок настроек партии (скрыт по умолчанию) =====
-  private buildSettings(col: StackPanel, colW: number, S: ReturnType<typeof loadSettings>): void {
-    col.addControl(gapControl(4));
-    const head = mkLabel(t('Настройки партии'), {
-      fontSize: fs(16), color: SKIN.gold, height: 28, align: 'left', hAlign: 'left',
+  // ===== ежедневный вход: 7 дней, бонус и анимация монет =====
+  private addCheckinCard(col: StackPanel, colW: number): void {
+    const state = checkinState();
+    const titleFont = fsCapped(14, 1);
+    const smallFont = fsCapped(11, 1);
+    const titleH = Math.ceil(titleFont * 1.5);
+    const dot = Math.min(30, Math.floor((colW - 40 - 6 * 5) / CHECKIN_DAYS));
+    const dotS = Math.max(18, dot);
+    const stripH = dotS;
+    const cardH = titleH + 6 + stripH + 6 + Math.ceil(smallFont * 1.5) + 20;
+    const card = softPanel({
+      bg: '#FFFFFF0A',
+      border: state.available ? '#FFD54F88' : '#ffffff1A',
+      thickness: state.available ? 2 : 1,
+      corner: 12,
+      height: cardH,
     });
-    col.addControl(head);
-
-    this.addCountRow(col, S.player_count, colW);
-
-    col.addControl(mkLabel(t('Имена игроков:'), {
-      fontSize: fs(16), color: '#ffffffE6', height: Math.max(28, Math.ceil(fs(16) * 1.45)),
-    }));
-
-    const names = new StackPanel('namesBox');
-    names.isVertical = true;
-    names.spacing = 8;
-    names.width = '100%';
-    names.height = px((S.player_count * 46) + Math.max(0, S.player_count - 1) * 8);
-    for (let i = 0; i < S.player_count; i += 1) {
-      names.addControl(this.nameRow(i, S.player_names[i] ?? '', colW));
+    card.root.width = '100%';
+    card.root.isPointerBlocker = true;
+    if (state.available) {
+      card.root.onPointerUpObservable.add(() => {
+        const res = claimCheckin();
+        if (!res) return;
+        play('click');
+        const r = card.root._currentMeasure;
+        this.animateCoins(r.left + r.width / 2, r.top + r.height / 2, res.coins);
+        window.setTimeout(() => this.host.rebuild(), 1100);
+      });
     }
-    col.addControl(names);
+    col.addControl(card.root);
 
-    // Сложность ботов: характер и аватар зависят от уровня.
-    const diff = dropdownRow(t('Боты:'), this.ctx, {
-      height: 44, fontSize: fs(15), btnWidth: Math.min(220, Math.max(130, colW - 120)),
+    const title = mkLabel(t('Ежедневный вход'), {
+      color: state.available ? SKIN.gold : '#ffffffC0',
+      fontSize: titleFont, width: colW - 24, height: titleH,
+      align: 'left', hAlign: 'left', vAlign: 'top', noWrap: true,
     });
-    diff.setOptions(BOT_LEVEL_NAMES.map((n) => t(n)), S.bot_level, (i) => {
-      saveSettings({ bot_level: i });
-      this.host.rebuild();
-    });
-    col.addControl(diff.root);
+    title.left = px(12);
+    title.top = px(8);
+    title.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    card.root.addControl(title);
 
-    const req30 = checkboxRow(t('Первый ход: от 30'), S.require_30, {
-      height: 34,
-      fontSize: fs(15),
-      onChange: (v) => saveSettings({ require_30: v }),
-    });
-    req30.root.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-    col.addControl(req30.root);
+    const strip = new StackPanel('checkinStrip');
+    strip.isVertical = false;
+    strip.spacing = 5;
+    strip.width = px(colW - 24);
+    strip.height = px(stripH);
+    strip.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+    strip.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    strip.top = px(8 + titleH + 6);
+    card.root.addControl(strip);
+    for (let day = 1; day <= CHECKIN_DAYS; day += 1) {
+      const done = day <= state.completed;
+      const today = state.available && day === state.todayDay;
+      const circle = new Rectangle(`checkinDay${day}`);
+      circle.width = px(dotS);
+      circle.height = px(dotS);
+      circle.cornerRadius = dotS / 2;
+      circle.thickness = today ? 2 : 1;
+      circle.color = today ? SKIN.gold : done ? '#58C36A' : '#ffffff33';
+      circle.background = done ? '#43A04766' : today ? '#FFD54F22' : '#FFFFFF0A';
+      circle.isHitTestVisible = false;
+      const num = mkLabel(done ? '✓' : String(day), {
+        fontSize: Math.max(9, Math.round(dotS * 0.48)),
+        color: done ? '#C8FFD3' : today ? SKIN.gold : '#ffffff66',
+        width: px(dotS), height: px(dotS), align: 'center', hAlign: 'center', vAlign: 'center',
+      });
+      num.isHitTestVisible = false;
+      circle.addControl(num);
+      strip.addControl(circle);
+      if (today) this.pulseToday(circle);
+    }
 
-    const botAnim = checkboxRow(t('Анимация бота'), S.bot_anim, {
-      height: 34,
-      fontSize: fs(15),
-      onChange: (v) => saveSettings({ bot_anim: v }),
+    const hint = state.available
+      ? t('Забрать +%d монет', state.bonus)
+      : t('Серия: %d дн. · заходите завтра', Math.max(1, state.streak));
+    const hintLab = mkLabel(hint, {
+      color: state.available ? '#FFE9B0' : '#ffffff70',
+      fontSize: smallFont, width: colW - 24,
+      height: Math.ceil(smallFont * 1.5),
+      align: 'left', hAlign: 'left', vAlign: 'top', noWrap: true,
     });
-    botAnim.root.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-    col.addControl(botAnim.root);
+    hintLab.left = px(12);
+    hintLab.top = px(8 + titleH + 6 + stripH + 6);
+    hintLab.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    card.root.addControl(hintLab);
+  }
 
-    const sound = checkboxRow(t('Звук'), S.sound, {
-      height: 34,
-      fontSize: fs(15),
-      onChange: (v) => {
-        saveSettings({ sound: v });
-        applySoundPreference(v);
-      },
+  // Мягкое «дыхание» сегодняшнего дня: рамка чуть светлеет и гаснет.
+  private pulseToday(circle: Rectangle): void {
+    let frame = 0;
+    const tick = (): void => {
+      if (!circle.parent) return;
+      frame += 1;
+      const k = (Math.sin(frame / 14) + 1) / 2;
+      circle.alpha = 0.65 + 0.35 * k;
+      if (frame < 240) window.requestAnimationFrame(tick);
+    };
+    window.requestAnimationFrame(tick);
+  }
+
+  // Монеты разлетаются вверх от карточки — короткая награда за вход.
+  private animateCoins(x: number, y: number, amount: number): void {
+    const host = this.popups;
+    const parts = 8;
+    for (let i = 0; i < parts; i += 1) {
+      const label = mkLabel(`+${Math.max(1, Math.round(amount / parts))}`, {
+        color: '#FFD54F', fontSize: fsCapped(14, 1), width: 60, height: 20,
+        align: 'center', hAlign: 'left', vAlign: 'top', noWrap: true,
+      });
+      label.left = px(x - 30 + (Math.random() * 80 - 40));
+      label.top = px(y);
+      label.zIndex = 900;
+      label.isHitTestVisible = false;
+      label.isPointerBlocker = false;
+      host.addControl(label);
+      const start = performance.now() + i * 45;
+      const drift = (Math.random() * 50 - 25);
+      const tick = (now: number): void => {
+        const k = Math.min(1, Math.max(0, (now - start) / 800));
+        label.top = px(y - 70 * k);
+        label.left = px(x - 30 + drift * k);
+        label.alpha = 1 - k;
+        if (k < 1) window.requestAnimationFrame(tick);
+        else host.removeControl(label);
+      };
+      window.requestAnimationFrame(tick);
+    }
+    const total = mkLabel(`+${amount} ●`, {
+      color: '#FFE9B0', fontSize: fsCapped(20, 1), width: 140, height: 30,
+      align: 'center', hAlign: 'left', vAlign: 'top', noWrap: true,
     });
-    sound.root.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-    col.addControl(sound.root);
-
-    col.addControl(gapControl(4));
-    const LANG_LABEL = t('Язык');
-    const optLblW = Math.max(
-      measureTextWidth(t('Текст:'), fs(15)),
-      measureTextWidth(t('Карточки:'), fs(15)),
-      measureTextWidth(LANG_LABEL, fs(15)),
-    ) + 6;
-    this.optionRowStr(col, t('Текст:'), textScaleNamesLocalized(), S.text_scale, (i) => {
-      saveSettings({ text_scale: i });
-      this.host.rebuild();
-    }, colW, optLblW);
-    this.optionRowStr(col, t('Карточки:'), tileSizeNamesLocalized(), S.tile_step, (i) => {
-      saveSettings({ tile_step: i });
-      this.host.rebuild();
-    }, colW, optLblW);
-    this.optionRowStr(col, LANG_LABEL, ['Русский', 'English'], S.lang === 'en' ? 1 : 0, (i) => {
-      saveSettings({ lang: i === 1 ? 'en' : 'ru' });
-      this.host.rebuild();
-    }, colW, optLblW);
+    total.left = px(x - 70);
+    total.top = px(y - 10);
+    total.zIndex = 901;
+    total.isHitTestVisible = false;
+    total.isPointerBlocker = false;
+    host.addControl(total);
+    const start = performance.now();
+    const tick = (now: number): void => {
+      const k = Math.min(1, (now - start) / 900);
+      total.top = px(y - 10 - 60 * k);
+      total.alpha = 1 - k;
+      if (k < 1) window.requestAnimationFrame(tick);
+      else host.removeControl(total);
+    };
+    window.requestAnimationFrame(tick);
   }
 
   private addPendingBanner(col: StackPanel, colW: number, pending: NonNullable<ReturnType<MenuHost['pendingRoom']>>): void {
@@ -542,81 +581,6 @@ export class MenuScreen {
     col.addControl(onlinePanel.root);
   }
 
-  private addCountRow(col: StackPanel, playerCount: number, avail: number): void {
-    const items: string[] = [];
-    for (let n = MIN_PLAYERS; n <= MAX_PLAYERS; n += 1) items.push(String(n));
-    const btnW = 110;
-    const labelW = measureTextWidth(t('Игроков:'), fs(17)) + 6;
-    const stacked = labelW + 10 + btnW > avail;
-    const dd = dropdownRow(t('Игроков:'), this.ctx, {
-      height: 48,
-      fontSize: fs(16),
-      btnWidth: btnW,
-      stacked,
-    });
-    if (!stacked) dd.root.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
-    dd.setOptions(items, playerCount - MIN_PLAYERS, (i) => {
-      setPlayerCount(Number(items[i]));
-      saveSettings({});
-      this.host.rebuild();
-    });
-    col.addControl(dd.root);
-  }
-
-  private optionRowStr(
-    col: StackPanel,
-    label: string,
-    names: string[],
-    current: number,
-    onPick: (i: number) => void,
-    avail: number,
-    lblW: number,
-  ): void {
-    // Все ряды настроек получают одинаковую ширину метки (по самой
-    // длинной), чтобы кнопки стояли ровной колонкой у левого края.
-    const btnW = Math.min(Math.max(avail - lblW - 34, 130), 240);
-    // На узком экране (320) подпись и кнопка не помещаются в строку —
-    // кладём кнопку под подпись; в остальных случаях оставляем как было.
-    const stacked = avail < 300 || lblW + 10 + btnW > avail;
-    const dd = dropdownRow(label, this.ctx, {
-      height: 42,
-      fontSize: fs(15),
-      lblWidth: stacked ? avail : lblW,
-      // В перенесённом виде кнопка занимает всю доступную ширину — текст
-      // опций (например «Максимум») помещается целиком.
-      btnWidth: stacked ? avail : Math.min(btnW, avail),
-      stacked,
-    });
-    dd.setOptions(names, current, onPick);
-    col.addControl(dd.root);
-  }
-
-  private nameRow(i: number, value: string, avail: number): StackPanel {
-    const sp = hrow(8);
-    sp.width = '100%';
-    sp.height = px(46);
-    const input = new InputText(undefined, value);
-    input.width = px1(Math.max(100, Math.floor(avail - 118)));
-    input.height = 46;
-    input.color = SKIN.text;
-    input.background = SKIN.deck;
-    input.fontSize = fs(16);
-    input.fontFamily = 'Arial, sans-serif';
-    input.placeholderText = t('Игрок %d', i + 1);
-    focusInputOnTap(input);
-    setInputMaxLength(input, MAX_NAME_LEN);
-    onInputBlur(input, () => setPlayerName(i, input.text));
-    sp.addControl(input);
-    const bot = checkboxRow(t('Бот'), loadSettings().player_is_bot[i] ?? false, {
-      height: 46,
-      fontSize: fs(16),
-      onChange: (v) => setBot(i, v),
-    });
-    void bot.setChecked;
-    sp.addControl(bot.root);
-    return sp;
-  }
-
   private openHelp(): void {
     openRulesOverlay(this.popups, () => {});
   }
@@ -637,16 +601,6 @@ export class MenuScreen {
 }
 
 export type { MenuHost } from './ports';
-
-// Локализованные самоназвания элементов управления: значения массивов
-// тоже переводим (только не «Русский»/«English»).
-function textScaleNamesLocalized(): string[] {
-  return TEXT_SCALE_NAMES.map((s) => t(s));
-}
-
-function tileSizeNamesLocalized(): string[] {
-  return TILE_SIZE_NAMES.map((s) => t(s));
-}
 
 function fitFontSize(text: string, avail: number, base: number): number {
   let size = base;

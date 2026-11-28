@@ -3,7 +3,7 @@ import { setAdMuted } from './core/audio';
 import { preloadPersist } from './core/persist';
 import { loadSettings } from './core/settings';
 import { loadProgress, flushProgress } from './core/progress';
-import { restorePurchases } from './core/meta';
+import { restorePurchases, syncAchievements } from './core/meta';
 import { initSound } from './core/sound';
 import { initPlatform, platform } from './platform';
 import { App } from './ui/app';
@@ -35,8 +35,11 @@ async function main(): Promise<void> {
   // Облачный прогресс площадки (если он свежее локального).
   await loadProgress();
   // Постоянные покупки (темы, «без рекламы») восстанавливаем в фоне.
-  void restorePurchases();
+  void restorePurchases().then(() => syncAchievements());
   const settings = loadSettings();
+  // Достижения за уже сыгранные партии: у старых сохранений статистика есть,
+  // а наград ещё нет. Начисляем то, что можно проверить по сохранённым данным.
+  syncAchievements();
   initSound(settings.sound);
   const app = new App(scene, canvas);
   (window as unknown as Record<string, unknown>).__app = app;

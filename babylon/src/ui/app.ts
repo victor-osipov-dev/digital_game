@@ -444,6 +444,13 @@ export class App implements MenuHost, OfflineHost {
 
   replay(mode: StartMode = 'classic'): void {
     const S = loadSettings();
+    if (mode === 'puzzle') {
+      const st = GameState.createPuzzle();
+      this.offline = new OfflineGame(this);
+      this.offline.build(this.root);
+      this.offline.startGame(st);
+      return;
+    }
     // Ежедневная партия — всегда один человек против бота: одинаковый
     // расклад по сиду дня у всех игроков.
     const count = mode === 'daily' ? 2 : S.player_count;
