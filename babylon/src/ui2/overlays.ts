@@ -997,10 +997,16 @@ export function openAchievementsOverlay(parent: Host): void {
     const descH = Math.max(18, Math.ceil(estimateWrappedTextHeight(descText, textW, descFont)));
     const prog = got ? null : achievementProgress(a.id);
     const barH = prog ? 7 : 0;
-    const rowH = Math.max(88, titleH + descH + (prog ? 6 + barH + 6 : 0) + 20);
+    // Подпись «X/Y» растёт вместе с текстом: раньше её высота была
+    // привязана к полоске (13 px), и при крупном шрифте цифры резались
+    // сверху и снизу.
+    const countFont = fs(10);
+    const countH = prog ? Math.max(barH + 6, Math.ceil(countFont * 1.4)) : 0;
+    const progH = Math.max(barH, countH);
+    const rowH = Math.max(88, titleH + descH + (prog ? 6 + progH + 6 : 0) + 20);
     row.root.height = px(rowH);
     list.addControl(row.root);
-    const textTop = Math.round((rowH - (titleH + 3 + descH + (prog ? 6 + barH : 0))) / 2);
+    const textTop = Math.round((rowH - (titleH + 3 + descH + (prog ? 6 + progH : 0))) / 2);
     const icon = mkLabel(a.icon, {
       fontSize: fsCapped(22, 1), color: got ? '#9BE7A5' : '#ffffff55', width: 40, height: 40,
       align: 'center', hAlign: 'left', vAlign: 'center',
@@ -1026,7 +1032,7 @@ export function openAchievementsOverlay(parent: Host): void {
     if (prog) {
       // Полоска прогресса: видно, сколько осталось до достижения.
       const trackW = Math.max(60, textW - 62);
-      const barTop = textTop + titleH + 3 + descH + 6;
+      const barTop = textTop + titleH + 3 + descH + 6 + Math.round((progH - barH) / 2);
       const track = new Rectangle('achProgressBg');
       track.width = px(trackW);
       track.height = px(barH);
@@ -1052,12 +1058,12 @@ export function openAchievementsOverlay(parent: Host): void {
       fill.isHitTestVisible = false;
       row.root.addControl(fill);
       const count = mkLabel(`${Math.min(prog.have, prog.need)}/${prog.need}`, {
-        fontSize: fs(10), color: '#ffffff80', width: 56, height: barH + 6,
+        fontSize: countFont, color: '#ffffff80', width: 56, height: countH,
         align: 'right', hAlign: 'right', vAlign: 'center',
       });
       count.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
       count.left = px(-8);
-      count.top = px(barTop - 3);
+      count.top = px(textTop + titleH + 3 + descH + 6 + Math.round((progH - countH) / 2));
       count.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
       count.isHitTestVisible = false;
       row.root.addControl(count);
@@ -1150,7 +1156,9 @@ function modeArt(mode: PlayMode, size: number): Container {
       width: 18, height: 18, align: 'center', hAlign: 'left', vAlign: 'center',
     });
     star.left = px(Math.round((size - barW) / 2 + barW - 9));
-    star.top = px(barY - 2);
+    // Чуть выше центра полосы: звёздочка должна стоять на шкале, а не
+    // «свисать» под ней (оптический центр глифа ниже геометрического).
+    star.top = px(barY - 8);
     star.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
     star.isHitTestVisible = false;
     root.addControl(star);
@@ -1260,6 +1268,13 @@ function modeArt(mode: PlayMode, size: number): Container {
   panel.root.height = '100%';
   root.addControl(panel.root);
   const clockSize = Math.round(size * 0.46);
+  const timeFont = Math.max(13, Math.round(size * 0.19));
+  const timeH = Math.max(14, Math.ceil(timeFont * 1.3));
+  // Часы и подпись держим одной группой: между ними 2–3 px, но текст
+  // не наезжает на циферблат. Группа центрируется по иконке.
+  const groupGap = Math.max(2, Math.round(size * 0.025));
+  const groupH = clockSize + groupGap + timeH;
+  const groupTop = Math.max(2, Math.round((size - groupH) / 2));
   const clock = new Ellipse('modeClock');
   clock.width = px(clockSize);
   clock.height = px(clockSize);
@@ -1268,7 +1283,7 @@ function modeArt(mode: PlayMode, size: number): Container {
   clock.background = '#FFFFFF0F';
   clock.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
   clock.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
-  clock.top = px(4);
+  clock.top = px(groupTop);
   clock.isHitTestVisible = false;
   root.addControl(clock);
   const hand = new Rectangle('modeClockHand');
@@ -1278,15 +1293,15 @@ function modeArt(mode: PlayMode, size: number): Container {
   hand.background = '#EAF3FF';
   hand.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
   hand.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
-  hand.top = px(4 + Math.round(clockSize / 2 - clockSize * 0.3));
+  hand.top = px(groupTop + Math.round(clockSize / 2 - clockSize * 0.3));
   hand.isHitTestVisible = false;
   root.addControl(hand);
   const time = mkLabel('5:00', {
-    fontSize: Math.max(13, Math.round(size * 0.19)), color: '#EAF3FF',
-    width: size, height: Math.round(size * 0.24), align: 'center', hAlign: 'center', vAlign: 'center',
+    fontSize: timeFont, color: '#EAF3FF',
+    width: size, height: timeH, align: 'center', hAlign: 'center', vAlign: 'center',
   });
-  time.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
-  time.top = px(-2);
+  time.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+  time.top = px(groupTop + clockSize + groupGap);
   time.isHitTestVisible = false;
   root.addControl(time);
   return root;

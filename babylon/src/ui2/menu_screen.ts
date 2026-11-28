@@ -238,7 +238,7 @@ export class MenuScreen {
     col.addControl(title);
 
     const subtitleFont = fs(15);
-    const subtitleText = t('Руммикуб · числа и цвета');
+    const subtitleText = t('Для тренировки мозга');
     const subtitle = mkLabel(subtitleText, {
       color: '#ffffffA8', fontSize: subtitleFont, width: colW,
       height: estimateWrappedTextHeight(subtitleText, colW, subtitleFont),

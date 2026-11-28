@@ -388,7 +388,7 @@ function tileBody(ctx: CanvasRenderingContext2D, face: TileFace, palette: TilePa
     : palette === 'amber'
       ? { top: '#FFF2CF', bottom: '#E8C98C', edge: '#C9A25B', ink: '#4A2E10' }
       : palette === 'marble'
-        ? { top: '#FAFBFF', bottom: '#D9DEE8', edge: '#B9C1CF', ink: '#2B3038' }
+        ? { top: '#F8FAFF', bottom: '#C7D0DF', edge: '#9FAABC', ink: '#2C3444' }
         : { top: '#FFFDF4', bottom: '#EADDBE', edge: '#CDBC94', ink: '#3A2C1A' };
 
   // Толщина фишки: нижняя и правая тёмные грани.
@@ -407,6 +407,10 @@ function tileBody(ctx: CanvasRenderingContext2D, face: TileFace, palette: TilePa
   roundRect(ctx, 4, 3, W - 11, H - 14, r);
   ctx.fillStyle = g;
   ctx.fill();
+
+  // Мрамор: прожилки поверх светлого камня, иначе палитра почти не
+  // отличалась от «слоновой кости».
+  if (palette === 'marble') drawMarbleVeins(ctx);
 
   // Верхняя светлая кромка и нижняя тень — объём.
   ctx.save();
@@ -438,6 +442,34 @@ function tileBody(ctx: CanvasRenderingContext2D, face: TileFace, palette: TilePa
 
   const ink = palette === 'color' ? '#FFFFFF' : (face.color === 2 ? '#23262B' : colorHex(face.color));
   drawNumber(ctx, String(face.value), W / 2 - 2, H / 2 - 8, ink, palette === 'color');
+}
+
+function drawMarbleVeins(ctx: CanvasRenderingContext2D): void {
+  const W = TILE_W;
+  const H = TILE_H;
+  ctx.save();
+  roundRect(ctx, 4, 3, W - 11, H - 14, 18);
+  ctx.clip();
+  ctx.lineCap = 'round';
+  const veins: { color: string; width: number; p: number[] }[] = [
+    // Основные прожилки — по диагонали через всю фишку.
+    { color: 'rgba(104,118,142,0.26)', width: 3, p: [-12, 64, 36, 20, 88, 120, 172, 58] },
+    { color: 'rgba(104,118,142,0.20)', width: 2.4, p: [-12, 196, 48, 166, 112, 224, 172, 150] },
+    // Светлая жилка — блик камня.
+    { color: 'rgba(255,255,255,0.75)', width: 1.6, p: [-8, 118, 40, 92, 96, 148, 168, 104] },
+    // Короткие ответвления.
+    { color: 'rgba(104,118,142,0.18)', width: 1.5, p: [46, 44, 60, 76, 42, 100, 62, 132] },
+    { color: 'rgba(104,118,142,0.15)', width: 1.3, p: [104, 94, 122, 112, 108, 140, 132, 164] },
+  ];
+  for (const v of veins) {
+    ctx.beginPath();
+    ctx.moveTo(v.p[0], v.p[1]);
+    ctx.bezierCurveTo(v.p[2], v.p[3], v.p[4], v.p[5], v.p[6], v.p[7]);
+    ctx.strokeStyle = v.color;
+    ctx.lineWidth = v.width;
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 function drawNumber(

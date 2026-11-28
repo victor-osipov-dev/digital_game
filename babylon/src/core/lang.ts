@@ -606,6 +606,7 @@ const EN: Record<string, string> = {
   'Настройки партии': 'Game settings',
   'Скрыть настройки': 'Hide settings',
   'Руммикуб · числа и цвета': 'Rummikub · numbers and colors',
+  'Для тренировки мозга': 'For brain training',
   'Звание: %s': 'Rank: %s',
   'Побед: %d · за неделю: %d': 'Wins: %d · this week: %d',
   'Максимальное звание': 'Highest rank',
