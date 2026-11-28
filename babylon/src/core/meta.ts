@@ -182,6 +182,16 @@ export function claimDailyReward(): number {
   return bonus;
 }
 
+/** Сложность соперника в ежедневной партии: одинаковая для всех игроков. */
+export const DAILY_BOT_LEVEL = 1;
+
+/** Сколько монет дадут за сегодняшнюю ежедневную партию (без изменения). */
+export function dailyRewardPreview(): number {
+  const s = loadSettings();
+  const streak = s.daily_last === yesterdayKey() ? s.daily_streak + 1 : 1;
+  return 60 + Math.min(5, streak - 1) * 20;
+}
+
 // ===== ежедневный вход (чек-ин) =====
 export const CHECKIN_DAYS = 7;
 

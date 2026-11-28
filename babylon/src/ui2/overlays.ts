@@ -31,6 +31,9 @@ import {
   applyItem,
   clearItem,
   coins,
+  dailyRewardPreview,
+  dailyRewardedToday,
+  dailyStreak,
   isUnlocked,
   ownsItem,
   rankFor,
@@ -1077,7 +1080,7 @@ export function openAchievementsOverlay(parent: Host): void {
 }
 
 // ===== выбор режима: большие карточки с наглядным примером =====
-type PlayMode = 'classic' | 'quick' | 'timed' | 'puzzle';
+type PlayMode = 'classic' | 'quick' | 'timed' | 'puzzle' | 'daily';
 
 function modeArt(mode: PlayMode, size: number): Container {
   const root = new Container('modeArt');
@@ -1196,6 +1199,61 @@ function modeArt(mode: PlayMode, size: number): Container {
     root.addControl(zero);
     return root;
   }
+  if (mode === 'daily') {
+    // Календарный листок с сегодняшним числом и звездой: челлендж дня.
+    const felt = new GuiImage('modeFelt', tableMatTexture(themeById(loadSettings().table_theme), size, size, 6));
+    felt.width = '100%';
+    felt.height = '100%';
+    felt.stretch = GuiImage.STRETCH_FILL;
+    felt.isHitTestVisible = false;
+    felt.isPointerBlocker = false;
+    root.addControl(felt);
+    const cardW = Math.round(size * 0.64);
+    const cardH = Math.round(size * 0.72);
+    const sheet = new Rectangle('modeDailySheet');
+    sheet.width = px(cardW);
+    sheet.height = px(cardH);
+    sheet.cornerRadius = Math.max(4, Math.round(size * 0.06));
+    sheet.thickness = 2;
+    sheet.color = '#FFD54F';
+    sheet.background = '#1C2B24';
+    sheet.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+    sheet.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+    sheet.isHitTestVisible = false;
+    root.addControl(sheet);
+    const bandH = Math.max(12, Math.round(cardH * 0.26));
+    const band = new Rectangle('modeDailyBand');
+    band.width = '100%';
+    band.height = px(bandH);
+    band.cornerRadius = Math.max(3, Math.round(size * 0.05));
+    band.thickness = 0;
+    band.background = '#FFD54F';
+    band.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    band.isHitTestVisible = false;
+    sheet.addControl(band);
+    const star = mkLabel('★', {
+      fontSize: Math.max(9, Math.round(bandH * 0.7)), color: '#3A2C1A',
+      width: cardW, height: bandH, align: 'center', hAlign: 'center', vAlign: 'center',
+    });
+    star.isHitTestVisible = false;
+    band.addControl(star);
+    const dayNum = mkLabel(String(new Date().getDate()), {
+      fontSize: Math.max(14, Math.round(cardH * 0.34)), color: '#FFE9B0',
+      width: cardW, height: Math.round(cardH * 0.44), align: 'center', hAlign: 'center', vAlign: 'center',
+    });
+    dayNum.top = px(Math.round(bandH * 0.35));
+    dayNum.isHitTestVisible = false;
+    sheet.addControl(dayNum);
+    const coin = mkLabel('●', {
+      fontSize: Math.max(10, Math.round(cardH * 0.15)), color: SKIN.gold,
+      width: cardW, height: Math.round(cardH * 0.2), align: 'center', hAlign: 'center', vAlign: 'bottom',
+    });
+    coin.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
+    coin.top = px(-2);
+    coin.isHitTestVisible = false;
+    sheet.addControl(coin);
+    return root;
+  }
   // На время: циферблат и 5:00.
   const panel = softPanel({ bg: '#101822', border: '#7FB3FF55', thickness: 1, corner: 12 });
   panel.root.width = '100%';
@@ -1257,6 +1315,8 @@ export function openModesOverlay(
   // при текущем размере шрифта, поэтому высоту карточки считаем заранее.
   const textW = Math.max(80, contentWidth - artSize - 34);
 
+  const dailyDoneToday = dailyRewardedToday();
+  const dailyDays = dailyStreak();
   const modes: { mode: PlayMode; title: string; desc: string; accent: string; badge: string | null }[] = [
     {
       mode: 'classic', title: 'Обычный',
@@ -1277,6 +1337,17 @@ export function openModesOverlay(
       mode: 'puzzle', title: 'Соло-раскладка',
       desc: 'Разберите перемешанные ряды на серии и наборы',
       accent: '#C69CFF', badge: null,
+    },
+    {
+      mode: 'daily',
+      title: 'Челлендж дня',
+      desc: dailyDoneToday
+        ? t('Один расклад для всех · серия: %d дн.', Math.max(1, dailyDays))
+        : t('Один расклад для всех, соперник — «Любитель». Награда раз в день.'),
+      accent: '#FFB74D',
+      badge: dailyDoneToday
+        ? t('Сегодня пройдено')
+        : t('Награда +%d ●', dailyRewardPreview()),
     },
   ];
   const cards = modes.map((m) => {

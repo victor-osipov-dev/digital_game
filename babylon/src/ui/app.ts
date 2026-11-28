@@ -7,7 +7,7 @@ import { OfflineGame } from '../ui2/offline_game';
 import { OnlineLobby } from '../ui2/online_lobby';
 import { loadSettings } from '../core/settings';
 import { GameState } from '../core/game_state';
-import { dailySeed, botCharacterFor } from '../core/meta';
+import { dailySeed, botCharacterFor, DAILY_BOT_LEVEL } from '../core/meta';
 import type { MenuHost, OfflineHost, OnlineStats, ScreenName, StartMode } from '../ui2/ports';
 import { GameEnvelope, RoomLobbyView } from '../net/protocol';
 import { endInputSession, installGlobalTouchGuard, isInputSessionActive, onInputSessionEnd } from '../ui2/uiskin';
@@ -452,20 +452,21 @@ export class App implements MenuHost, OfflineHost {
       return;
     }
     // Ежедневная партия — всегда один человек против бота: одинаковый
-    // расклад по сиду дня у всех игроков.
-    const count = mode === 'daily' ? 2 : S.player_count;
+    // расклад и правила для всех игроков, соперник фиксированной сложности.
+    const daily = mode === 'daily';
+    const count = daily ? 2 : S.player_count;
     const names: string[] = [];
     for (let i = 0; i < count; i += 1) names.push(S.player_names[i] ?? '');
-    const st = GameState.create(count, names, S.require_30, mode === 'daily' ? dailySeed() : undefined);
+    const st = GameState.create(count, names, daily ? false : S.require_30, daily ? dailySeed() : undefined);
     st.local_seat = -1;
-    st.mode = mode === 'daily' ? 'daily' : mode;
+    st.mode = daily ? 'daily' : mode;
     st.target = 50;
     for (let i = 0; i < count; i += 1) {
-      const isBot = mode === 'daily' ? i > 0 : (S.player_is_bot[i] ?? false);
+      const isBot = daily ? i > 0 : (S.player_is_bot[i] ?? false);
       st.players[i].is_bot = isBot;
       // Безымянного бота называем персонажем: у соперника есть характер.
       if (isBot && (!names[i] || names[i] === t('Игрок %d', i + 1))) {
-        st.players[i].name = botCharacterFor(i, S.bot_level).name;
+        st.players[i].name = botCharacterFor(i, daily ? DAILY_BOT_LEVEL : S.bot_level).name;
       }
     }
     this.offline = new OfflineGame(this);

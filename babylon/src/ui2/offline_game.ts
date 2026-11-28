@@ -22,7 +22,7 @@ import {
 } from '../core/settings';
 import { GameState, GsRow, MatchMode } from '../core/game_state';
 import { LEVEL_IMPOSSIBLE, TurnPlanner } from '../core/turn_planner';
-import { AchievementDef, botCharacterFor, claimDailyReward, onGameEnd, addCoins, unlockAchievement } from '../core/meta';
+import { AchievementDef, DAILY_BOT_LEVEL, botCharacterFor, claimDailyReward, onGameEnd, addCoins, unlockAchievement } from '../core/meta';
 import { TileFace } from '../core/tile';
 import { validateRow } from '../core/rules';
 import { tileById } from '../core/deck';
@@ -1127,7 +1127,7 @@ export class OfflineGame {
       this.modeLab.text = t('Соло-раскладка');
       this.modePill.isVisible = true;
     } else if (this.dailyGame) {
-      this.modeLab.text = t('Ежедневная партия');
+      this.modeLab.text = t('Челлендж дня');
       this.modePill.isVisible = true;
     } else {
       this.modePill.isVisible = false;
@@ -3193,7 +3193,8 @@ export class OfflineGame {
       fill.isHitTestVisible = false;
       chip.addControl(fill);
       // Аватар игрока/бота: у ботов — свой персонаж по уровню сложности.
-      const avatarId = isBot ? botAvatarId(i, loadSettings().bot_level) : 'guest';
+      const avatarLevel = this.dailyGame ? DAILY_BOT_LEVEL : loadSettings().bot_level;
+      const avatarId = isBot ? botAvatarId(i, avatarLevel) : 'guest';
       const av = new GuiImage('chipAvatar', avatarTexture(avatarId));
       av.width = px(30);
       av.height = px(30);
@@ -4774,7 +4775,10 @@ export class OfflineGame {
       // во время паузы «бот думает» должно примениться к этому ходу.
       const settings = loadSettings();
       const anim = settings.bot_anim;
-      const plan = this.planner.plan(this.state, settings.bot_level);
+      // В ежедневной партии сложность фиксирована: расклад и правила
+      // одинаковые у всех, поэтому соперник не зависит от личных настроек.
+      const level = this.dailyGame ? DAILY_BOT_LEVEL : settings.bot_level;
+      const plan = this.planner.plan(this.state, level);
       this.playPlan(plan.ops, plan.action, plan.tiles, anim);
     }, BOT_THINK_MS);
   }

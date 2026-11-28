@@ -57,7 +57,10 @@ export class TileFigure {
     root.clipChildren = false;
 
     const bw = clampInt(Math.round(ts.x * 0.05), 1, 3);
-    const corner = clampInt(Math.round(ts.x * 0.16), 4, 14);
+    // Радиус углов берём из текстуры фишки: там скругление 18 px при
+    // ширине 160 px. Раньше тень и рамка были круглее самой фишки, и у
+    // тени появлялся острый «клин» в углу.
+    const corner = clampInt(Math.round((ts.x * 18) / 160), 3, 16);
 
     // Тень под фишкой: отдельный слой, чтобы не размывать саму текстуру.
     const shadow = new Rectangle('tileShadow');

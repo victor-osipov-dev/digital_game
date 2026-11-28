@@ -129,7 +129,7 @@ export class MenuScreen {
     const meta1 = hrow(8);
     meta1.width = '100%';
     meta1.height = px(52);
-    const daily = mkButton(t('Ежедневная'), { fontSize: fsCapped(14, 1), height: 52, width: modeW, theme: BUTTON_STYLE.deck });
+    const daily = mkButton(t('Челлендж дня'), { fontSize: fsCapped(14, 1), height: 52, width: modeW, theme: BUTTON_STYLE.deck });
     daily.onPointerUpObservable.clear();
     daily.onPointerUpObservable.add(() => this.host.onStart('daily'));
     if (!dailyRewardedToday()) {

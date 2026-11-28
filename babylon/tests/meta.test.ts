@@ -5,6 +5,7 @@ import {
   checkinState,
   claimCheckin,
   clearItem,
+  dailyRewardPreview,
   isUnlocked,
   rankFor,
   syncAchievements,
@@ -98,6 +99,16 @@ describe('shop equip toggling', () => {
     // Снятие другого товара не сбрасывает текущий выбор.
     clearItem('marble');
     expect(loadSettings().tile_palette).toBe('amber');
+  });
+});
+
+describe('daily challenge reward', () => {
+  afterEach(() => saveSettings({ daily_last: '', daily_streak: 0 }));
+
+  it('previews the next reward and grows with the streak', () => {
+    expect(dailyRewardPreview()).toBe(60);
+    saveSettings({ daily_last: yesterdayKey(), daily_streak: 2 });
+    expect(dailyRewardPreview()).toBe(100);
   });
 });
 

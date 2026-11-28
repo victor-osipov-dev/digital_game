@@ -20,6 +20,7 @@ import {
   checkboxRow,
   dropdownRow,
   enableSmoothScroll,
+  endInputSession,
   estimateWrappedTextHeight,
   focusInputOnTap,
   hrow,
@@ -117,6 +118,9 @@ export function openGameSetupOverlay(parent: Host, onDone: () => void): void {
   };
 
   const closeAll = (): void => {
+    // Завершаем ввод до уничтожения полей: пустые имена успевают замениться
+    // на имя по умолчанию, а набранное — сохраниться.
+    endInputSession();
     close();
     onDone();
   };
@@ -275,7 +279,14 @@ export function openGameSetupOverlay(parent: Host, onDone: () => void): void {
     input.placeholderText = t('Игрок %d', i + 1);
     focusInputOnTap(input);
     setInputMaxLength(input, MAX_NAME_LEN);
-    onInputBlur(input, () => setPlayerName(i, input.text));
+    // Пустое имя не оставляем «серым»: подставляем имя по умолчанию
+    // на текущем языке прямо в поле, чтобы было видно, кого сохранили.
+    onInputBlur(input, () => {
+      const typed = input.text.trim();
+      const finalName = typed === '' ? t('Игрок %d', i + 1) : typed;
+      if (input.text !== finalName) input.text = finalName;
+      setPlayerName(i, finalName);
+    });
     row.addControl(input);
     const bot = checkboxRow(t('Бот'), isBotSeat, {
       height: inputH,
@@ -346,6 +357,9 @@ export function openGameSetupOverlay(parent: Host, onDone: () => void): void {
 
   // Пересобрать окно после изменения количества игроков/ботов/языка.
   function reopen(): void {
+    // Смена настроек пересоздаёт поля — сохраняем имя из активного ввода
+    // и корректно закрываем клавиатурную сессию.
+    endInputSession();
     close();
     openGameSetupOverlay(parent, onDone);
   }
