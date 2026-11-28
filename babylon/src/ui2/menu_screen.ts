@@ -381,7 +381,11 @@ export class MenuScreen {
         play('click');
         const r = card.root._currentMeasure;
         this.animateCoins(r.left + r.width / 2, r.top + r.height / 2, res.coins);
-        window.setTimeout(() => this.host.rebuild(), 1100);
+        // Пересобираем меню после анимации, но только если игрок ещё в нём:
+        // иначе пересборка задела бы уже открытую партию.
+        window.setTimeout(() => {
+          if (this.popups.parent) this.host.rebuild();
+        }, 1100);
       });
     }
     col.addControl(card.root);
