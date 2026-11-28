@@ -375,18 +375,21 @@ export function roomTexture(w: number, h: number): string {
 
 // ===== фишки =====
 
-export type TilePalette = 'ivory' | 'amber' | 'marble';
+export type TilePalette = 'ivory' | 'amber' | 'marble' | 'color';
 
 // Тело фишки: слоновая кость с фаской, цветным числом и небольшим углублением.
 function tileBody(ctx: CanvasRenderingContext2D, face: TileFace, palette: TilePalette): void {
   const W = TILE_W;
   const H = TILE_H;
   const r = 18;
-  const pal = palette === 'amber'
-    ? { top: '#FFF2CF', bottom: '#E8C98C', edge: '#C9A25B', ink: '#4A2E10' }
-    : palette === 'marble'
-      ? { top: '#FAFBFF', bottom: '#D9DEE8', edge: '#B9C1CF', ink: '#2B3038' }
-      : { top: '#FFFDF4', bottom: '#EADDBE', edge: '#CDBC94', ink: '#3A2C1A' };
+  const base = face.color === 2 ? '#2B2F36' : colorHex(face.color);
+  const pal = palette === 'color'
+    ? { top: shade(base, 0.16), bottom: shade(base, -0.12), edge: shade(base, -0.34), ink: '#FFFFFF' }
+    : palette === 'amber'
+      ? { top: '#FFF2CF', bottom: '#E8C98C', edge: '#C9A25B', ink: '#4A2E10' }
+      : palette === 'marble'
+        ? { top: '#FAFBFF', bottom: '#D9DEE8', edge: '#B9C1CF', ink: '#2B3038' }
+        : { top: '#FFFDF4', bottom: '#EADDBE', edge: '#CDBC94', ink: '#3A2C1A' };
 
   // Толщина фишки: нижняя и правая тёмные грани.
   roundRect(ctx, 5, 9, W - 10, H - 12, r);
@@ -433,30 +436,40 @@ function tileBody(ctx: CanvasRenderingContext2D, face: TileFace, palette: TilePa
     return;
   }
 
-  const ink = face.color === 2 ? '#23262B' : colorHex(face.color);
-  drawNumber(ctx, String(face.value), W / 2 - 2, H / 2 - 8, ink);
+  const ink = palette === 'color' ? '#FFFFFF' : (face.color === 2 ? '#23262B' : colorHex(face.color));
+  drawNumber(ctx, String(face.value), W / 2 - 2, H / 2 - 8, ink, palette === 'color');
 }
 
-function drawNumber(ctx: CanvasRenderingContext2D, text: string, cx: number, cy: number, color: string): void {
-  let size = text.length > 1 ? 112 : 128;
+function drawNumber(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  cx: number,
+  cy: number,
+  color: string,
+  light = false,
+): void {
+  // Один размер для однозначных и двузначных чисел: цифра не «прыгает»
+  // при переходе 9 → 10.
+  let size = 100;
   const font = (s: number): string => `bold ${s}px Arial, Helvetica, sans-serif`;
   ctx.font = font(size);
-  while (size > 40 && ctx.measureText(text).width > TILE_W - 44) {
+  while (size > 40 && ctx.measureText(text).width > TILE_W - 34) {
     size -= 4;
     ctx.font = font(size);
   }
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   // Вдавленное число: тёмная тень сверху-слева, светлая подсветка снизу.
-  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  // На цветном фоне подсветка инвертирована, чтобы белые цифры читались.
+  ctx.fillStyle = light ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.55)';
   ctx.fillText(text, cx + 2, cy + 3);
-  ctx.fillStyle = 'rgba(0,0,0,0.18)';
+  ctx.fillStyle = light ? 'rgba(255,255,255,0.30)' : 'rgba(0,0,0,0.18)';
   ctx.fillText(text, cx - 1, cy - 2);
   ctx.fillStyle = color;
   ctx.fillText(text, cx, cy);
   // Блик на верхней трети цифры.
   const grad = ctx.createLinearGradient(0, cy - size * 0.45, 0, cy + size * 0.1);
-  grad.addColorStop(0, 'rgba(255,255,255,0.30)');
+  grad.addColorStop(0, light ? 'rgba(0,0,0,0.16)' : 'rgba(255,255,255,0.30)');
   grad.addColorStop(1, 'rgba(255,255,255,0)');
   ctx.fillStyle = grad;
   ctx.fillText(text, cx, cy);
@@ -613,8 +626,15 @@ export function avatarTexture(id: string): string {
   // Волосы.
   ctx.fillStyle = spec.hair;
   if (spec.hairStyle === 'bald') {
+    // Не «лысина», а седые волосы: шапка волос начинается от макушки.
     ctx.beginPath();
-    ctx.ellipse(S / 2, S * 0.53, S * 0.245, S * 0.05, 0, 0, Math.PI * 2);
+    ctx.ellipse(S / 2, S * 0.39, S * 0.25, S * 0.16, 0, Math.PI, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(S * 0.27, S * 0.44, S * 0.035, S * 0.09, 0.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(S * 0.73, S * 0.44, S * 0.035, S * 0.09, -0.2, 0, Math.PI * 2);
     ctx.fill();
   } else if (spec.hairStyle === 'long') {
     ctx.beginPath();
@@ -628,22 +648,22 @@ export function avatarTexture(id: string): string {
     ctx.fill();
   } else if (spec.hairStyle === 'bun') {
     ctx.beginPath();
-    ctx.ellipse(S / 2, S * 0.47, S * 0.255, S * 0.20, 0, Math.PI, Math.PI * 2);
+    ctx.ellipse(S / 2, S * 0.42, S * 0.255, S * 0.21, 0, Math.PI, Math.PI * 2);
     ctx.fill();
     ctx.beginPath();
-    ctx.arc(S / 2, S * 0.20, S * 0.10, 0, Math.PI * 2);
+    ctx.arc(S / 2, S * 0.17, S * 0.10, 0, Math.PI * 2);
     ctx.fill();
   } else if (spec.hairStyle === 'cap') {
     ctx.beginPath();
-    ctx.ellipse(S / 2, S * 0.40, S * 0.265, S * 0.16, 0, Math.PI, Math.PI * 2);
+    ctx.ellipse(S / 2, S * 0.36, S * 0.265, S * 0.17, 0, Math.PI, Math.PI * 2);
     ctx.fillStyle = '#2B2F36';
     ctx.fill();
     ctx.beginPath();
-    ctx.ellipse(S * 0.60, S * 0.40, S * 0.18, S * 0.05, 0, 0, Math.PI * 2);
+    ctx.ellipse(S * 0.60, S * 0.37, S * 0.18, S * 0.05, 0, 0, Math.PI * 2);
     ctx.fill();
   } else {
     ctx.beginPath();
-    ctx.ellipse(S / 2, S * 0.42, S * 0.25, S * 0.15, 0, Math.PI, Math.PI * 2);
+    ctx.ellipse(S / 2, S * 0.39, S * 0.25, S * 0.17, 0, Math.PI, Math.PI * 2);
     ctx.fill();
   }
 

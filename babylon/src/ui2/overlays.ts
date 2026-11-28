@@ -1167,7 +1167,7 @@ function modeArt(mode: PlayMode, size: number): Container {
   panel.root.width = '100%';
   panel.root.height = '100%';
   root.addControl(panel.root);
-  const clockSize = Math.round(size * 0.52);
+  const clockSize = Math.round(size * 0.46);
   const clock = new Ellipse('modeClock');
   clock.width = px(clockSize);
   clock.height = px(clockSize);
@@ -1176,7 +1176,7 @@ function modeArt(mode: PlayMode, size: number): Container {
   clock.background = '#FFFFFF0F';
   clock.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
   clock.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
-  clock.top = px(Math.round(size * 0.1));
+  clock.top = px(4);
   clock.isHitTestVisible = false;
   root.addControl(clock);
   const hand = new Rectangle('modeClockHand');
@@ -1186,14 +1186,15 @@ function modeArt(mode: PlayMode, size: number): Container {
   hand.background = '#EAF3FF';
   hand.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
   hand.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
-  hand.top = px(Math.round(size * 0.1 + clockSize / 2 - clockSize * 0.3));
+  hand.top = px(4 + Math.round(clockSize / 2 - clockSize * 0.3));
   hand.isHitTestVisible = false;
   root.addControl(hand);
   const time = mkLabel('5:00', {
-    fontSize: Math.max(14, Math.round(size * 0.2)), color: '#EAF3FF',
-    width: size, height: Math.round(size * 0.24), align: 'center', hAlign: 'center', vAlign: 'bottom',
+    fontSize: Math.max(13, Math.round(size * 0.19)), color: '#EAF3FF',
+    width: size, height: Math.round(size * 0.24), align: 'center', hAlign: 'center', vAlign: 'center',
   });
-  time.top = px(-3);
+  time.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
+  time.top = px(-2);
   time.isHitTestVisible = false;
   root.addControl(time);
   return root;

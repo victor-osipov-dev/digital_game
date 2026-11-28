@@ -1,4 +1,4 @@
-﻿import { Container, Control, Image as GuiImage, Rectangle, ScrollViewer, StackPanel } from '@babylonjs/gui';
+﻿import { Button, Container, Control, Image as GuiImage, Rectangle, ScrollViewer, StackPanel } from '@babylonjs/gui';
 import { appName, t } from '../core/lang';
 import { fs, fsCapped, loadSettings } from '../core/settings';
 import {
@@ -364,7 +364,9 @@ export class MenuScreen {
     const dot = Math.min(30, Math.floor((colW - 40 - 6 * 5) / CHECKIN_DAYS));
     const dotS = Math.max(18, dot);
     const stripH = dotS;
-    const cardH = titleH + 6 + stripH + 6 + Math.ceil(smallFont * 1.5) + 20;
+    const btnH = 44;
+    const lineH = Math.ceil(smallFont * 1.5);
+    const cardH = titleH + 6 + stripH + 8 + (state.available ? btnH : lineH) + 20;
     const card = softPanel({
       bg: '#FFFFFF0A',
       border: state.available ? '#FFD54F88' : '#ffffff1A',
@@ -373,21 +375,6 @@ export class MenuScreen {
       height: cardH,
     });
     card.root.width = '100%';
-    card.root.isPointerBlocker = true;
-    if (state.available) {
-      card.root.onPointerUpObservable.add(() => {
-        const res = claimCheckin();
-        if (!res) return;
-        play('click');
-        const r = card.root._currentMeasure;
-        this.animateCoins(r.left + r.width / 2, r.top + r.height / 2, res.coins);
-        // Пересобираем меню после анимации, но только если игрок ещё в нём:
-        // иначе пересборка задела бы уже открытую партию.
-        window.setTimeout(() => {
-          if (this.popups.parent) this.host.rebuild();
-        }, 1100);
-      });
-    }
     col.addControl(card.root);
 
     const title = mkLabel(t('Ежедневный вход'), {
@@ -431,19 +418,84 @@ export class MenuScreen {
       if (today) this.pulseToday(circle);
     }
 
-    const hint = state.available
-      ? t('Забрать +%d монет', state.bonus)
-      : t('Серия: %d дн. · заходите завтра', Math.max(1, state.streak));
-    const hintLab = mkLabel(hint, {
-      color: state.available ? '#FFE9B0' : '#ffffff70',
-      fontSize: smallFont, width: colW - 24,
-      height: Math.ceil(smallFont * 1.5),
-      align: 'left', hAlign: 'left', vAlign: 'top', noWrap: true,
-    });
-    hintLab.left = px(12);
-    hintLab.top = px(8 + titleH + 6 + stripH + 6);
-    hintLab.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
-    card.root.addControl(hintLab);
+    if (state.available) {
+      // Явная кнопка вместо «кликни куда-нибудь по карточке».
+      const claimBtn = mkButton(t('Получить +%d ●', state.bonus), {
+        height: btnH,
+        width: colW - 24,
+        fontSize: fsCapped(15, 1),
+        corner: 11,
+        theme: {
+          bg: '#2E7D32', hover: '#3DA34A', press: '#1B5E20',
+          border: '#FFD54F',
+        },
+      });
+      claimBtn.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+      claimBtn.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+      claimBtn.top = px(8 + titleH + 6 + stripH + 8);
+      claimBtn.onPointerUpObservable.clear();
+      claimBtn.onPointerUpObservable.add(() => {
+        const res = claimCheckin();
+        if (!res) return;
+        play('click');
+        const r = claimBtn._currentMeasure;
+        this.animateCoins(r.left + r.width / 2, r.top + r.height / 2, res.coins);
+        claimBtn.metadata = { stopPulse: true };
+        this.pressButton(claimBtn);
+        claimBtn.isEnabled = false;
+        if (claimBtn.textBlock) claimBtn.textBlock.text = t('Получено!');
+        // Пересобираем меню после анимации, но только если игрок ещё в нём.
+        window.setTimeout(() => {
+          if (this.popups.parent) this.host.rebuild();
+        }, 1200);
+      });
+      card.root.addControl(claimBtn);
+      this.pulseButton(claimBtn);
+    } else {
+      const hint = mkLabel(t('Серия: %d дн. · заходите завтра', Math.max(1, state.streak)), {
+        color: '#ffffff70',
+        fontSize: smallFont, width: colW - 24, height: lineH,
+        align: 'left', hAlign: 'left', vAlign: 'top', noWrap: true,
+      });
+      hint.left = px(12);
+      hint.top = px(8 + titleH + 6 + stripH + 8);
+      hint.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+      card.root.addControl(hint);
+    }
+  }
+
+  // Кнопка «дышит», пока бонус не забрали: хочется нажать.
+  private pulseButton(btn: Button): void {
+    const start = performance.now();
+    const tick = (now: number): void => {
+      if (!btn.parent) return;
+      const stop = (btn.metadata as { stopPulse?: boolean } | null)?.stopPulse === true;
+      if (!btn.isEnabled || stop) {
+        btn.scaleX = 1;
+        btn.scaleY = 1;
+        return;
+      }
+      const k = (now - start) / 1000;
+      const s = 1 + 0.018 * Math.sin(k * 4.2);
+      btn.scaleX = s;
+      btn.scaleY = s;
+      window.requestAnimationFrame(tick);
+    };
+    window.requestAnimationFrame(tick);
+  }
+
+  // Отклик на нажатие: короткое «вдавливание» кнопки.
+  private pressButton(btn: Button): void {
+    const start = performance.now();
+    const tick = (now: number): void => {
+      if (!btn.parent) return;
+      const k = Math.min(1, (now - start) / 190);
+      const s = 1 - 0.09 * Math.sin(k * Math.PI);
+      btn.scaleX = s;
+      btn.scaleY = s;
+      if (k < 1) window.requestAnimationFrame(tick);
+    };
+    window.requestAnimationFrame(tick);
   }
 
   // Мягкое «дыхание» сегодняшнего дня: рамка чуть светлеет и гаснет.

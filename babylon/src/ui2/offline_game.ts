@@ -1071,6 +1071,14 @@ export class OfflineGame {
     this.updateModePill();
     this.refresh();
     this.checkPassOrBot(true);
+    if (state.mode === 'puzzle') {
+      // Без подсказки кажется, что фишки просто «не влезают».
+      window.setTimeout(() => {
+        if (this.running && this.matchMode === 'puzzle') {
+          this.toast(t('В руке дубли: разберите ряды, чтобы собрать новые'));
+        }
+      }, 700);
+    }
     // Партия началась (локальная и сетевая через applyOnlineView) —
     // разметка геймплея для площадок.
     platform.gameplayStart();
@@ -3228,14 +3236,20 @@ export class OfflineGame {
       rows.push(fig);
     }
     if (rows.length === 0) {
-      const hint = mkLabel(t('Перетащите фишки из руки на стол'), {
-        fontSize: fs(14), color: '#FFFFFFB0', width: maxW - 12, height: 34,
+      // Подсказка не должна расти вместе с максимальным кеглем: на телефоне
+      // стол низкий, и три строки упирались в его нижний край.
+      const hintFont = fsCapped(14, 1);
+      const hintW = maxW - 12;
+      const hintText = t('Перетащите фишки из руки на стол');
+      const hintH = Math.max(30, Math.ceil(estimateWrappedTextHeight(hintText, hintW, hintFont)));
+      const hint = mkLabel(hintText, {
+        fontSize: hintFont, color: '#FFFFFFB0', width: hintW, height: hintH,
         align: 'center', hAlign: 'center', vAlign: 'top', noWrap: false,
       });
       hint.isHitTestVisible = false;
-      hint.top = px(14);
+      hint.top = px(10);
       this.rowsInner.addControl(hint);
-      this.rowsInner.height = px(80);
+      this.rowsInner.height = px(Math.max(70, 10 + hintH + 10));
       this.clampTableScroll();
       return;
     }

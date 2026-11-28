@@ -293,6 +293,7 @@ export const SHOP_ITEMS: ShopItem[] = [
   { id: 'burgundy', kind: 'theme', title: 'Бордо', desc: 'Винное сукно', price: 300 },
   { id: 'amber', kind: 'palette', title: 'Янтарь', desc: 'Медовые фишки', price: 250 },
   { id: 'marble', kind: 'palette', title: 'Мрамор', desc: 'Светлый камень', price: 250 },
+  { id: 'color', kind: 'palette', title: 'Цветные', desc: 'Цветной фон, белые числа', price: 350 },
   {
     id: 'theme_pack', kind: 'bundle', title: 'Набор оформлений',
     desc: 'Все темы стола и фишек', price: 0, iapProduct: 'theme_pack',
@@ -316,7 +317,7 @@ export function addOwned(id: string): void {
 export function applyItem(id: string): void {
   if (id === 'emerald' || id === 'royal' || id === 'burgundy') {
     saveSettings({ table_theme: id });
-  } else if (id === 'ivory' || id === 'amber' || id === 'marble') {
+  } else if (id === 'ivory' || id === 'amber' || id === 'marble' || id === 'color') {
     saveSettings({ tile_palette: id });
   } else if (id === 'remove_ads') {
     saveSettings({ ads_removed: true });

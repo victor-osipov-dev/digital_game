@@ -192,10 +192,12 @@ export class GameState {
   }
 
   /**
-   * Соло-раскладка: один игрок, стол из трёх длинных серий с «дырами»,
-   * в руке ровно те 14 фишек, которых не хватает. Решение существует по
-   * построению: нужно вернуть фишки в свои места (или перестроить стол).
-   * Колода пуста — добрать нельзя, только думать.
+   * Соло-раскладка: на столе три готовых серии 1–8 (по цвету), а в руке —
+   * вторые экземпляры двух соседних чисел в каждом цвете. Дописать их в ряд
+   * нельзя (такие числа уже есть), поэтому приходится разбирать готовые
+   * ряды, переносить кусок в новый ряд и собирать две серии заново.
+   * Колода пуста; решение существует: для пары 3–4 берём начало ряда,
+   * для 5–6 — хвост, для 4–5 подходит любой вариант.
    */
   static createPuzzle(): GameState {
     const s = new GameState();
@@ -205,27 +207,28 @@ export class GameState {
     s.players.push(new GsPlayer(t('Вы')));
     s.deck.tiles = [];
     const source = new Deck();
-    const pick = (color: number, value: number): TileFace => {
+    const take = (color: number, value: number): TileFace => {
       const index = source.tiles.findIndex((tile) => tile.color === color && tile.value === value);
       return source.tiles.splice(index, 1)[0];
     };
     const colors = [0, 1, 2];
+    const pairStarts = [3, 4, 5];
     const rows: GsRow[] = [];
-    for (const color of colors) {
+    const hand: TileFace[] = [];
+    for (let ci = 0; ci < colors.length; ci += 1) {
+      const color = colors[ci];
+      const start = pairStarts[ci];
       const row = new GsRow(s._next_row_id);
       s._next_row_id += 1;
-      for (let value = 1; value <= 8; value += 1) row.tiles.push(pick(color, value));
+      for (let value = 1; value <= 8; value += 1) {
+        row.tiles.push(take(color, value));
+        if (value === start || value === start + 1) {
+          // Второй экземпляр этого числа уходит в руку.
+          hand.push(take(color, value));
+        }
+      }
       rows.push(row);
     }
-    // 5 + 5 + 4 фишки уходят в руку; в каждом ряду остаётся минимум 3.
-    const take = [5, 5, 4];
-    const hand: TileFace[] = [];
-    rows.forEach((row, index) => {
-      for (let k = 0; k < take[index]; k += 1) {
-        const pos = Math.floor(Math.random() * row.tiles.length);
-        hand.push(row.tiles.splice(pos, 1)[0]);
-      }
-    });
     s.table = rows;
     s.players[0].hand = hand;
     sortTiles(s.players[0].hand);

@@ -323,7 +323,7 @@ export class TileFigure {
 
 function tilePalette(): TilePalette {
   const p = loadSettings().tile_palette;
-  return p === 'amber' || p === 'marble' ? p : 'ivory';
+  return p === 'amber' || p === 'marble' || p === 'color' ? p : 'ivory';
 }
 
 function clampInt(v: number, lo: number, hi: number): number {
