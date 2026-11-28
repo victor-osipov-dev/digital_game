@@ -1133,14 +1133,19 @@ function modeArt(mode: PlayMode, size: number): Container {
     felt.isPointerBlocker = false;
     root.addControl(felt);
     const tileH = Math.max(11, Math.round(size * 0.17));
+    const rowsN = 3;
+    const rowGap = Math.max(2, Math.round(size * 0.03));
     const stack = new StackPanel('modePuzzleRows');
     stack.isVertical = true;
-    stack.spacing = Math.max(2, Math.round(size * 0.03));
+    stack.spacing = rowGap;
+    stack.width = px(size - 8);
+    stack.height = px(rowsN * tileH + (rowsN - 1) * rowGap);
     stack.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
     stack.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
     const palette = [RED, BLUE, BLACK];
-    for (let r = 0; r < 3; r += 1) {
+    for (let r = 0; r < rowsN; r += 1) {
       const line = hrow(2);
+      line.height = px(tileH);
       for (let k = 0; k < 3; k += 1) {
         line.addControl(ruleTile({ text: String(k + 1 + r), color: colorHex(palette[r]) }, tileH));
       }
@@ -1151,6 +1156,7 @@ function modeArt(mode: PlayMode, size: number): Container {
       fontSize: Math.max(12, Math.round(size * 0.2)), color: SKIN.gold,
       width: size - 10, height: Math.round(size * 0.22), align: 'right', hAlign: 'right', vAlign: 'bottom',
     });
+    zero.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
     zero.top = px(-2);
     zero.isHitTestVisible = false;
     root.addControl(zero);
